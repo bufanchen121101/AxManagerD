@@ -1,0 +1,112 @@
+[versions]
+agp = "8.13.2"
+annotation = "1.10.0"
+bcpkixJdk18on = "1.84"
+boringssl = "20251124"
+compatibility = "2.0.0"
+coreKtxVersion = "1.4.1"
+gson = "2.14.0"
+hiddenapibypass = "6.1"
+ksp = "2.2.21-2.0.4"
+kotlin = "2.3.21"
+kotlin-compose = "2.3.21"
+coreKtx = "1.18.0"
+libcxx = "29.0.14206865"
+library = "1.2.1"
+lifecycleLivedataKtx = "2.10.0"
+material = "1.14.0"
+sdpAndroid = "1.1.1"
+toml4j = "0.7.2"
+volley = "1.2.1"
+webkit = "1.16.0"
+zip4j = "2.11.6"
+composeBom = "2026.05.01"
+parcelablelist = "2.0.1"
+colorpicker-compose = "1.1.4"
+coil-compose = "2.7.0"
+appiconloader-coil = "1.5.0"
+mmrl = "v33890"
+hidden-api = "4.4.0"
+refine = "4.4.0"
+sheets-compose-dialogs = "1.3.0"
+compose-destination = "2.3.0"
+markdown = "4.6.2"
+annotationJvm = "1.10.0"
+lifecycleLivedataCoreKtx = "2.10.0"
+uiautomator = "2.3.0"
+profileinstaller = "1.4.1"
+libsu = "6.0.0"
+appcompat = "1.7.1"
+junit = "4.13.2"
+junitVersion = "1.3.0"
+espressoCore = "3.7.0"
+
+[libraries]
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "annotation" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-livedata-ktx = { module = "androidx.lifecycle:lifecycle-livedata-ktx", version.ref = "lifecycleLivedataKtx" }
+bcpkix-jdk18on = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bcpkixJdk18on" }
+boringssl = { module = "io.github.vvb2060.ndk:boringssl", version.ref = "boringssl" }
+core-ktx = { module = "dev.rikka.rikkax.core:core-ktx", version.ref = "coreKtxVersion" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+hiddenapibypass = { module = "org.lsposed.hiddenapibypass:hiddenapibypass", version.ref = "hiddenapibypass" }
+ansi-library = { module = "com.github.Fox2Code.AndroidANSI:library", version.ref = "library" }
+ansi-library-ktx = { module = "com.github.Fox2Code.AndroidANSI:library-ktx", version.ref = "library" }
+libcxx = { module = "org.lsposed.libcxx:libcxx", version.ref = "libcxx" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
+sdp-android = { module = "com.intuit.sdp:sdp-android", version.ref = "sdpAndroid" }
+toml4j = { module = "com.moandjiezana.toml:toml4j", version.ref = "toml4j" }
+volley = { module = "com.android.volley:volley", version.ref = "volley" }
+zip4j = { module = "net.lingala.zip4j:zip4j", version.ref = "zip4j" }
+
+rikka-compatibility = { module = "dev.rikka.rikkax.compatibility:compatibility", version.ref = "compatibility" }
+rikka-parcelablelist = { module = "dev.rikka.rikkax.parcelablelist:parcelablelist", version.ref = "parcelablelist" }
+rikka-hidden-compat = { group = "dev.rikka.hidden", name = "compat", version.ref = "hidden-api" }
+rikka-hidden-stub = { group = "dev.rikka.hidden", name = "stub", version.ref = "hidden-api" }
+rikka-refine-runtime = { group = "dev.rikka.tools.refine", name = "runtime", version.ref = "refine" }
+rikka-refine-annotation = { group = "dev.rikka.tools.refine", name = "annotation", version.ref = "refine" }
+rikka-refine-annotation-processor = { group = "dev.rikka.tools.refine", name = "annotation-processor", version.ref = "refine" }
+
+topjohnwu-libsu-core = { group = "com.github.topjohnwu.libsu", name = "core", version.ref = "libsu" }
+topjohnwu-libsu-service = { group = "com.github.topjohnwu.libsu", name = "service", version.ref = "libsu" }
+topjohnwu-libsu-io = { group = "com.github.topjohnwu.libsu", name = "io", version.ref = "libsu" }
+
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+colorpicker-compose = { module = "com.github.skydoves:colorpicker-compose", version.ref = "colorpicker-compose" }
+
+compose-coil = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil-compose" }
+
+compose-destinations-core = { group = "io.github.raamcosta.compose-destinations", name = "core", version.ref = "compose-destination" }
+compose-destinations-ksp = { group = "io.github.raamcosta.compose-destinations", name = "ksp", version.ref = "compose-destination" }
+
+appiconloader-coil = { group = "me.zhanghai.android.appiconloader", name = "appiconloader-coil", version.ref = "appiconloader-coil" }
+mmrl-ui = { group = "com.github.MMRLApp.MMRL", name = "ui", version.ref = "mmrl" }
+
+markdown = { group = "io.noties.markwon", name = "core", version.ref = "markdown" }
+androidx-annotation-jvm = { group = "androidx.annotation", name = "annotation-jvm", version.ref = "annotationJvm" }
+androidx-lifecycle-livedata-core-ktx = { group = "androidx.lifecycle", name = "lifecycle-livedata-core-ktx", version.ref = "lifecycleLivedataCoreKtx" }
+androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+
+sheet-compose-dialogs-core = { group = "com.maxkeppeler.sheets-compose-dialogs", name = "core", version.ref = "sheets-compose-dialogs" }
+sheet-compose-dialogs-list = { group = "com.maxkeppeler.sheets-compose-dialogs", name = "list", version.ref = "sheets-compose-dialogs" }
+sheet-compose-dialogs-input = { group = "com.maxkeppeler.sheets-compose-dialogs", name = "input", version.ref = "sheets-compose-dialogs" }
+
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref  = "kotlin" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin-compose" }
+rikka-tools-refine = { id = "dev.rikka.tools.refine", version.ref = "refine" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+android-test = { id = "com.android.test", version.ref = "agp" }
+
