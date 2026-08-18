@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="type_command">Type Command</string>
+    <string name="type_start">Type Start</string>
+    <string name="type_stdin">Type Input</string>
+    <string name="type_stdout">Type Output</string>
+    <string name="type_stderr">Type Error</string>
+    <string name="type_throw">Type Throw</string>
+    <string name="type_space">Type Space</string>
+    <string name="type_exit">Type Exit</string>
+    <string name="volume_up">Volume UP</string>
+    <string name="volume_down">Volume DOWN</string>
+</resources>
