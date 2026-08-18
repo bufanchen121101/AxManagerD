@@ -1,0 +1,22 @@
+plugins {
+    alias(libs.plugins.android.library)
+}
+
+android {
+    namespace 'frb.axeron.server.stub'
+    buildFeatures {
+        buildConfig false
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    annotationProcessor(libs.rikka.refine.annotation.processor)
+    implementation(libs.rikka.refine.annotation)
+    compileOnly(libs.rikka.hidden.stub)
+    compileOnly(libs.androidx.annotation)
+}
