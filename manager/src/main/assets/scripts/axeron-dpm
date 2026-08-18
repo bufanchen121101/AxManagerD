@@ -1,0 +1,80 @@
+#!/system/bin/sh
+# axeron-dpm —— Device Owner 特权 shell 命令桥接（v2）。
+#
+# 模块的 action.sh 通过 `axeron-dpm <cmd> <pkg>` 调用 Device Owner 特权：
+#   第一级（标准 DPM API）：hide / unhide / suspend / unsuspend
+#   第二级（隐藏 API 包装）：force-stop / uninstall（占位）
+#   第三级（拒绝名单）：mount / chmod / chown / insmod / rmmod -> 提示需 Root
+#
+# v2 原理（关键，解决 SecurityException）：
+#   低版本直接 `app_process` 加载 DpmBridge 会在 shell 进程（uid=2000, 包名=android）
+#   里调 Dhizuku.init() -> getContentResolver().call()，被 AMS 拒绝：
+#     SecurityException: Given calling package android does not match caller's uid 2000
+#   因此改为：用 `am startservice` 把命令发给 manager app 进程内的
+#   DpmCommandService（uid 正确，Dhizuku 已授权），由它执行 DeviceOwnerPrivilege，
+#   并把「退出码 + 输出」写入结果文件，脚本轮询读回后 exit。
+#
+# 返回码：0 成功，非 0 失败（标准 shell 退出码，供 action.sh 用 $? 判断）。
+
+ACTION="frb.axeron.manager.action.EXEC_DPM"
+# 结果文件必须放在 app 进程可写、且模块 shell（含 Shizuku、无 root）可读写的路径。
+# /data/local/tmp 的 SELinux 标签是 shell_data_file，manager app 进程（untrusted_app）
+# 写入会被拒（EACCES），不可用。改用 manager 自己的 external files dir：
+#   /storage/emulated/0/Android/data/frb.axeron.manager/files/axeron-dpm.result
+# （与 DpmCommandReceiver 里 getExternalFilesDir(null) 的缺省路径保持一致）
+RESULT_FILE="/storage/emulated/0/Android/data/frb.axeron.manager/files/axeron-dpm.result"
+TARGET="frb.axeron.manager"
+
+if [ "$#" -eq 0 ]; then
+  # 打印 usage（本地，无需广播）
+  cat <<'EOF'
+Usage: axeron-dpm <hide|unhide|suspend|unsuspend|force-stop|uninstall> ...
+EOF
+  exit 1
+fi
+
+# 清理旧结果（不再预先 touch 空文件——避免与 Service 异步写入产生竞态：
+# 若先 touch 出空文件，轮询 `[ -f ]` 会立即通过，读到空内容导致退出码误判为 1。
+# 直接删除旧文件，由 Service 写完后再出现。）
+rm -f "$RESULT_FILE" 2>/dev/null
+
+# 把 argv 拼成 --esa args 能被 am 解析的形式（逗号分隔）
+ARGS="$1"
+shift
+for a in "$@"; do
+  ARGS="$ARGS,$a"
+done
+
+# 用 am startservice 触发 manager app 进程内的 Service 执行。
+# （说明：am broadcast 在部分设备/Android 版本上会把 manifest receiver 给 Skip 掉，
+#   导致 DpmCommandReceiver.onReceive 根本不执行、结果文件迟迟不出现；改走 Service 更可靠。）
+am startservice \
+  -a "$ACTION" \
+  -n "$TARGET/.owner.DpmCommandService" \
+  --esa args "$ARGS" \
+  --es result "$RESULT_FILE" \
+  >/dev/null 2>&1
+
+# 轮询等待结果文件（Service 在 app 进程里异步执行并写文件，最多等 5 秒）
+i=0
+while [ ! -s "$RESULT_FILE" ] && [ "$i" -lt 50 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+
+if [ ! -s "$RESULT_FILE" ]; then
+  echo "Error: no response from manager (Device Owner not active or manager not running)"
+  exit 3
+fi
+
+# 读结果：第一行等于退出码，其余为输出
+CODE=$(sed -n '1p' "$RESULT_FILE")
+sed -n '2,$p' "$RESULT_FILE"
+
+# 兜底：非数字则视为 1
+case "$CODE" in
+  ''|*[!0-9]*) CODE=1 ;;
+esac
+
+rm -f "$RESULT_FILE" 2>/dev/null
+exit "$CODE"
