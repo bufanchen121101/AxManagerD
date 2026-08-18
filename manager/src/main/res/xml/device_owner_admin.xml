@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Device Admin 声明（用于 Device Owner / Profile Owner 激活）。
+
+  说明：
+  - Device Owner 激活时，系统要求 receiver 的 meta-data 指向一份
+    device_admin.xml，其中 <uses-policies> 声明该 admin 会使用哪些策略能力。
+  - 这里按 AxManager 作为"非 root 高级权限管理"的实际需要，
+    声明了最常用的策略集合。若后续 UI 里要调用某个具体策略未声明，
+    可在此追加对应策略项。
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <!-- 应用/包管理 -->
+        <force-lock />
+        <reset-password />
+        <watch-login />
+        <!-- 设备管理 -->
+        <wipe-data />
+        <expire-password />
+        <encrypted-storage />
+        <disable-camera />
+        <disable-keyguard-features />
+    </uses-policies>
+</device-admin>
