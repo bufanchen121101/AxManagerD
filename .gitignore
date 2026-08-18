@@ -1,0 +1,21 @@
+*.iml
+.gradle
+local.properties
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.idea
+/manager/signing.properties
+/out
+/signing.properties
+
+# build artifacts
+*.dex
+gradle/wrapper/
+
+# third-party binaries
+server/src/main/jniLibs/
+
+# submodule
+.gitmodules
