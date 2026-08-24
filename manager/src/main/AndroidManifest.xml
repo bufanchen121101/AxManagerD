@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="PackageVisibilityPolicy,QueryAllPackagesPermission" />
@@ -39,7 +43,7 @@
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
 
     <application
-        android:name=".AxeronApplication"
+        android:name="org.lsposed.lspatch.LSPApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:debuggable="true"
@@ -202,6 +206,22 @@
             </intent-filter>
         </service>
 
+        <!-- 无 UI 进程唤醒入口：axeron-dpm 脚本在 startservice 前先 am start 本 Activity，
+             让 manager 进程进入前台可见状态，绕开 Android 8+ 后台启动限制（无闪屏）。 -->
+        <activity
+            android:name=".owner.DpmWakeActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:taskAffinity="frb.axeron.manager.wake"
+            android:theme="@style/Theme.Transparent.NoUI"
+            tools:ignore="ExportedActivity">
+            <intent-filter>
+                <action android:name="frb.axeron.manager.action.EXEC_DPM_WAKE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <!-- Device Owner 激活三组件（Dhizuku 机制整合） -->
         <receiver
             android:name=".owner.DeviceOwnerReceiver"
@@ -259,6 +279,31 @@
             android:name=".features.keepalive.KeepAliveService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- LSPatch (AXMD) 注入引擎组件 -->
+        <service
+            android:name="org.lsposed.lspatch.manager.ModuleService"
+            android:exported="true" />
+
+        <service
+            android:name="org.lsposed.lspatch.service.LogCollectorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="continuous log monitoring for patched apps and the Xposed framework" />
+        </service>
+
+        <!-- 将 patched APK 交给其他 installer 安装时用的 FileProvider -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.patched"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/patched_apk_paths" />
+        </provider>
     </application>
 
 </manifest>

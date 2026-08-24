@@ -19,7 +19,7 @@ apply(from = "api/manifest.gradle.kts")
 // 环境无 git 仓库（fuse 文件系统无法写入 git 对象），故硬编码 commit 计数用于编译验证
 val gitCommitCount = 1
 val verCode = findProperty("api_version_code") as Int
-val verName = "${findProperty("api_version_name")}.r${gitCommitCount}"
+val verName = "${findProperty("api_version_name")}"
 
 val localProperties = Properties().apply {
     val localPropertiesFile = rootProject.file("local.properties")

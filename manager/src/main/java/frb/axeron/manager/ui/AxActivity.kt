@@ -224,7 +224,7 @@ class AxActivity : ComponentActivity() {
                 appsViewModel = appsViewModel,
                 activateViewModel = activateViewModel,
                 pluginViewModel = pluginViewModel,
-                privilegeViewModel = privilegeViewModel
+                privilegeViewModel = privilegeViewModel,
             )
         }
 

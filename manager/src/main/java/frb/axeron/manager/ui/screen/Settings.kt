@@ -102,6 +102,8 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
     val confirmDialog = rememberConfirmDialog()
     val scope = rememberCoroutineScope()
     val settingsContext = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val moduleRepoUrl = "https://1852775966.share.123pan.cn/123pan/J03gvd-3ed8h"
 
     var showDevDialog by remember { mutableStateOf(false) }
 
@@ -353,6 +355,15 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 )
             }
 
+            SettingsItem(
+                iconVector = Icons.Filled.Refresh,
+                label = stringResource(R.string.axmanagerd_modules),
+                description = stringResource(R.string.axmanagerd_modules_desc),
+                onClick = {
+                    uriHandler.openUri(moduleRepoUrl)
+                }
+            )
+
             SettingsItem { _, _ ->
 //                AnimatedVisibility(visible = axeronRunning) {
 //                    SettingsItem(
@@ -406,9 +417,9 @@ fun DeveloperInfo(
     onDismissRequest: () -> Unit
 ) {
     val uriHandler = LocalUriHandler.current
-    val githubUrl = "https://github.com/fahrez182"
-    val telegramUrl = "https://t.me/fahrezone"
+    val githubUrl = "https://github.com/bufanchen121101/AxManagerD"
     var showDonate by remember { mutableStateOf(false) }
+    var showSponsor by remember { mutableStateOf(false) }
 
     if (showDialog) {
         ModalBottomSheet(
@@ -432,8 +443,8 @@ fun DeveloperInfo(
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
-                        painter = painterResource(id = R.drawable.fahrez182),
-                        contentDescription = "Developer Profile Picture",
+                    painter = painterResource(id = R.drawable.developer_avatar),
+                    contentDescription = "Developer Profile Picture",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxSize()
@@ -446,7 +457,7 @@ fun DeveloperInfo(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
-                    text = "fahrez182 (FahrezONE)",
+                    text = "小陈",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -454,6 +465,19 @@ fun DeveloperInfo(
                     text = stringResource(R.string.developer_and_maintainer),
                     fontSize = 15.sp,
                     color = MaterialTheme.colorScheme.primary
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "网站开发者",
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "ZTX · 尘风Official",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -487,18 +511,18 @@ fun DeveloperInfo(
                         Text(stringResource(R.string.github))
                     }
 
-                    // Tombol Telegram
+                    // 赞助商
                     FilledTonalButton(
-                        onClick = { uriHandler.openUri(telegramUrl) },
+                        onClick = { showSponsor = true },
                         modifier = Modifier.height(38.dp)
                     ) {
                         Icon(
-                            painter = painterResource(id = R.drawable.ic_telegram),
-                            contentDescription = "Telegram",
+                            imageVector = Icons.Filled.Coffee,
+                            contentDescription = "赞助商",
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.telegram))
+                        Text("赞助商")
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
@@ -520,6 +544,7 @@ fun DeveloperInfo(
             }
         }
         DonateSheet(showDonate) { showDonate = false }
+        SponsorSheet(showSponsor) { showSponsor = false }
     }
 }
 
@@ -562,6 +587,43 @@ fun DonateSheet(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
                     contentScale = ContentScale.Fit
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SponsorSheet(
+    show: Boolean,
+    onDismissRequest: () -> Unit
+) {
+    if (show) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = onDismissRequest,
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "赞助商",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "孟凡嘴",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(24.dp))
             }

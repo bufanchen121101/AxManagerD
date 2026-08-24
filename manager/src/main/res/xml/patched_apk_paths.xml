@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Paths the patched-apk provider may serve.
+
+    A root path rather than one of the named ones because the output lives under noBackupFilesDir,
+    which FileProvider has no tag for, and because the canonical form of an app's data directory
+    differs between /data/user/0 and /data/data on the same device. Reach is not the exposure here:
+    a receiving app gets nothing but the single uri it is handed, for as long as the grant lasts.
+-->
+<paths>
+    <root-path name="root" path="/" />
+</paths>

@@ -2,10 +2,12 @@ package frb.axeron.manager.ui.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AdminPanelSettings
+import androidx.compose.material.icons.outlined.Android
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
@@ -13,6 +15,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.ramcosta.composedestinations.generated.destinations.HomeScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.PluginScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.PrivilegeScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.SelectPatchTargetScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.SettingsScreenDestination
 import com.ramcosta.composedestinations.spec.DirectionDestinationSpec
 import frb.axeron.manager.R
@@ -40,6 +43,13 @@ enum class BottomBarDestination(
         Icons.Filled.Extension,
         Icons.Outlined.Extension,
         true
+    ),
+    Xposed(
+        SelectPatchTargetScreenDestination,
+        R.string.xposed,
+        Icons.Filled.Android,
+        Icons.Outlined.Android,
+        false
     ),
     Settings(
         SettingsScreenDestination,

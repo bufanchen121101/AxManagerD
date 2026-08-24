@@ -79,3 +79,33 @@
 
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
+
+##---------------Begin: LSPatch (AXMD) 移植 keep 规则 ----------
+# 框架 IPC 表面跨 Binder 到 patched app，其 loader 未混淆，必须保持 AIDL 接口签名
+-keep class org.matrix.vector.ipc.** { *; }
+-keep class org.lsposed.lspatch.IShizukuService { *; }
+# Room 数据库实体/DAO 必须保持（R8 否则破坏 schema 与 Room 运行时反射）
+-keep class org.lsposed.lspatch.database.** { *; }
+# Gson 序列化的 DTO（PatchRequest/PatchMode/PatchStep/ModuleBinding 等），避免 nd2.c() 反序列化崩溃
+-keep class org.lsposed.lspatch.data.model.** { *; }
+-keep class org.lsposed.lspatch.share.** { *; }
+-keep class org.lsposed.lspatch.Patcher$Options { *; }
+-keep class org.lsposed.lspatch.share.LSPConfig { *; }
+-keep class org.lsposed.lspatch.share.PatchConfig { *; }
+# 注入引擎核心类，避免字段被混淆导致 LSPatch 反射读取失败
+-keepclassmembers class org.lsposed.patch.LSPatch {
+    private <fields>;
+}
+# Shizuku / refine / hiddenapi 相关
+-keep class rikka.shizuku.** { *; }
+-keep class moe.shizuku.** { *; }
+-dontwarn org.lsposed.hiddenapibypass.**
+-keep class org.lsposed.hiddenapibypass.** { *; }
+# apkzlib / meditor / manifesto 编辑库（纯 Java，反射读取）
+-keep class com.android.tools.build.apkzlib.** { *; }
+-keep class com.wind.meditor.** { *; }
+-keep class pxb.android.** { *; }
+-keep class pxb.android.axml.** { *; }
+-dontwarn com.google.auto.value.AutoValue$Builder
+-dontwarn com.google.auto.value.AutoValue
+##---------------End: LSPatch keep 规则 ----------

@@ -16,65 +16,73 @@
 #
 # 返回码：0 成功，非 0 失败（标准 shell 退出码，供 action.sh 用 $? 判断）。
 
-ACTION="frb.axeron.manager.action.EXEC_DPM"
-# 结果文件必须放在 app 进程可写、且模块 shell（含 Shizuku、无 root）可读写的路径。
-# /data/local/tmp 的 SELinux 标签是 shell_data_file，manager app 进程（untrusted_app）
-# 写入会被拒（EACCES），不可用。改用 manager 自己的 external files dir：
-#   /storage/emulated/0/Android/data/frb.axeron.manager/files/axeron-dpm.result
-# （与 DpmCommandReceiver 里 getExternalFilesDir(null) 的缺省路径保持一致）
-RESULT_FILE="/storage/emulated/0/Android/data/frb.axeron.manager/files/axeron-dpm.result"
+# axeron-dpm —— Device Owner 特权 shell 命令桥接（v3）。
+#
+# v3 原理（彻底绕过结果文件权限死局）：
+#   模块 action.sh 在 Axeron server 派生的 shell 子进程（uid=2000、无 root）里执行，
+#   而 DPM 特权命令必须在 manager app 进程（uid 正确、Dhizuku 已授权）里执行。
+#   结果回传若走「文件 + 轮询」，会撞上 Android 11+ scoped storage 限制：
+#     - app 的 external files dir（/sdcard/Android/data/...）app 能写、shell(uid2000) 读不到；
+#     - /data/local/tmp（shell_data_file）shell 能写、app 进程（untrusted_app）被 SELinux 拒绝。
+#   两者无交集，文件永远无法双向可达 → 脚本永远等不到结果 → rc=3。
+#   解决：改用 ContentProvider 的 call() 同步回传。脚本用系统自带 `content call` 命令
+#   （uid 2000 可调用 exported provider）触发 AxManagerProvider 的 execDpm method，
+#   命令在 app 进程内执行，结果直接塞进返回 Bundle 由脚本读回。
+
 TARGET="frb.axeron.manager"
+# AxManagerProvider 的 authority = ${applicationId}.server = frb.axeron.manager.server
+PROVIDER_URI="content://frb.axeron.manager.server"
 
 if [ "$#" -eq 0 ]; then
-  # 打印 usage（本地，无需广播）
+  # 打印 usage（本地，无需跨进程）
   cat <<'EOF'
 Usage: axeron-dpm <hide|unhide|suspend|unsuspend|force-stop|uninstall> ...
 EOF
   exit 1
 fi
 
-# 清理旧结果（不再预先 touch 空文件——避免与 Service 异步写入产生竞态：
-# 若先 touch 出空文件，轮询 `[ -f ]` 会立即通过，读到空内容导致退出码误判为 1。
-# 直接删除旧文件，由 Service 写完后再出现。）
-rm -f "$RESULT_FILE" 2>/dev/null
-
-# 把 argv 拼成 --esa args 能被 am 解析的形式（逗号分隔）
+# 把 argv 拼成逗号分隔的 args，供 provider 的 execDpm method 解析。
 ARGS="$1"
 shift
 for a in "$@"; do
   ARGS="$ARGS,$a"
 done
 
-# 用 am startservice 触发 manager app 进程内的 Service 执行。
-# （说明：am broadcast 在部分设备/Android 版本上会把 manifest receiver 给 Skip 掉，
-#   导致 DpmCommandReceiver.onReceive 根本不执行、结果文件迟迟不出现；改走 Service 更可靠。）
-am startservice \
-  -a "$ACTION" \
-  -n "$TARGET/.owner.DpmCommandService" \
-  --esa args "$ARGS" \
-  --es result "$RESULT_FILE" \
-  >/dev/null 2>&1
+# 唤醒 manager 进程（保留，无闪屏）：保证 provider 所在 app 进程存活。
+# 当 manager 进程处于「后台 / 已 force-stop」状态时，provider 无法响应 content call。
+# DpmWakeActivity 透明、无 UI、立即 finish，仅把进程带入前台可见状态，无任何闪屏副作用。
+am start -n "$TARGET/.owner.DpmWakeActivity" >/dev/null 2>&1
+sleep 1
 
-# 轮询等待结果文件（Service 在 app 进程里异步执行并写文件，最多等 5 秒）
-i=0
-while [ ! -s "$RESULT_FILE" ] && [ "$i" -lt 50 ]; do
-  sleep 0.1
-  i=$((i + 1))
-done
+# 用 content call 同步触发 provider 的 execDpm method，直接拿返回 Bundle。
+# 返回格式示例：
+#   Result: Bundle[{code=0, output=Success: suspended com.x}]
+RESULT=$(content call --uri "$PROVIDER_URI" \
+  --method execDpm \
+  --extra args:s:"$ARGS" 2>/dev/null)
 
-if [ ! -s "$RESULT_FILE" ]; then
+if [ -z "$RESULT" ]; then
   echo "Error: no response from manager (Device Owner not active or manager not running)"
   exit 3
 fi
 
-# 读结果：第一行等于退出码，其余为输出
-CODE=$(sed -n '1p' "$RESULT_FILE")
-sed -n '2,$p' "$RESULT_FILE"
+# 解析返回 Bundle：提取 code 与 output。
+# Bundle 打印形如 Bundle[{code=0, output=...}]，用 sed 摘出 code 与 output 部分。
+CODE=$(echo "$RESULT" | sed -n 's/.*code=\([-0-9][0-9]*\).*/\1/p')
+OUTPUT=$(echo "$RESULT" | sed -n 's/.*output=\(.*\)\}/\1/p')
 
-# 兜底：非数字则视为 1
+# 兜底：code 为空或非数字则视为 1
 case "$CODE" in
   ''|*[!0-9]*) CODE=1 ;;
 esac
+# 去除前导负号保留（退出码应为非负；负号仅在异常时出现，按 1 处理）
+case "$CODE" in
+  -*) CODE=1 ;;
+esac
 
-rm -f "$RESULT_FILE" 2>/dev/null
+# 打印命令输出（隐藏 leading 空格由 sed 处理）
+if [ -n "$OUTPUT" ]; then
+  echo "$OUTPUT"
+fi
+
 exit "$CODE"

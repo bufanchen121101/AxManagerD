@@ -244,17 +244,58 @@ fun HomeScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGloba
             SupportCard()
             LearnCard()
             IssueReportCard()
+            WebsiteCard()
+        }
+    }
+}
+
+@Composable
+fun WebsiteCard() {
+    val uriHandler = LocalUriHandler.current
+    val websiteUrl = "https://axmd.cc.cd"
+
+    ElevatedCard(
+        onClick = {
+            uriHandler.openUri(websiteUrl)
+        }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "官方网站",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "axmd.cc.cd",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                )
+            }
+            Icon(
+                modifier = Modifier.padding(end = 10.dp, start = 24.dp),
+                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                contentDescription = "Official website",
+            )
         }
     }
 }
 
 @Composable
 fun SupportCard() {
-    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val githubUrl = "https://github.com/bufanchen121101/AxManagerD"
 
     ElevatedCard(
         onClick = {
-            Toast.makeText(context, context.getString(R.string.not_available_yet), Toast.LENGTH_SHORT).show()
+            uriHandler.openUri(githubUrl)
         }
     ) {
         Row(
@@ -866,9 +907,7 @@ fun InfoCard(activateViewModel: ActivateViewModel) {
 
 @Composable
 fun IssueReportCard() {
-    val uriHandler = LocalUriHandler.current
-    val githubIssueUrl = "https://github.com/fahrez182/AxManager/issues"
-    val telegramUrl = "https://t.me/axeron_manager"
+    val feedbackEmail = "xx1112z@qq.com"
 
     ElevatedCard {
         Row(
@@ -897,25 +936,17 @@ fun IssueReportCard() {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                IconButton(onClick = { uriHandler.openUri(githubIssueUrl) }) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_github),
-                        contentDescription = "Report to github",
-                    )
-                }
-                IconButton(onClick = { uriHandler.openUri(telegramUrl) }) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_telegram),
-                        contentDescription = "Report to telegram",
-                    )
-                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "发送邮件至 $feedbackEmail",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }
 }
-
 
 @Composable
 fun PermissionStatusCard(

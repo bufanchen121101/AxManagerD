@@ -227,4 +227,27 @@
     <string name="keep_alive_title">AxManager sedang berjalan</string>
     <string name="keep_alive_channel">Keep-Alive</string>
     <string name="keep_alive_channel_desc">Menjaga AxManager tetap hidup di latar belakang</string>
+
+    <!-- Xposed / LSP module injection -->
+    <string name="xposed">Xposed</string>
+    <string name="xposed_desc">Patch aplikasi tanpa root untuk memuat modul Xposed</string>
+    <string name="xposed_empty">Belum ada aplikasi yang di-patch</string>
+    <string name="xposed_empty_desc">Pilih aplikasi dan modul Xposed untuk menyuntikkannya tanpa root</string>
+    <string name="xposed_select_app">Pilih Aplikasi</string>
+    <string name="xposed_select_module">Pilih Modul</string>
+    <string name="xposed_import_zip">Impor Modul ZIP</string>
+    <string name="xposed_patch">Patch &amp; Instal</string>
+    <string name="xposed_keep_data">Pertahankan data aplikasi</string>
+    <string name="xposed_keep_data_desc">Hapus instalan dengan mempertahankan data → instal ulang APK yang di-patch → pulihkan data agar Anda tidak kehilangan login atau file.</string>
+    <string name="xposed_sig_bypass">Bypass tanda tangan</string>
+    <string name="xposed_sig_bypass_level">Level bypass tanda tangan</string>
+    <string name="xposed_require_dhizuku">Membutuhkan Dhizuku / Device Owner</string>
+    <string name="xposed_require_dhizuku_desc">Fitur ini memerlukan hak Device Owner untuk patch, hapus instalan dengan mempertahankan data, dan instal ulang secara senyap. Silakan aktivasi Dhizuku terlebih dahulu.</string>
+    <string name="xposed_patching">Mem-patch…</string>
+    <string name="xposed_uninstalling">Menghapus instalan (mempertahankan data)…</string>
+    <string name="xposed_installing">Menginstal…</string>
+    <string name="xposed_restoring_data">Memulihkan data…</string>
+    <string name="xposed_success">%s berhasil di-patch</string>
+    <string name="xposed_failed">Gagal mem-patch: %s</string>
+    <string name="xposed_warning_signature">Mengubah tanda tangan akan membatalkan sesi login terenkripsi Keystore. Anda mungkin perlu masuk kembali.</string>
 </resources>

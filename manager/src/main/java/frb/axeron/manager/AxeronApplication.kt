@@ -18,7 +18,7 @@ import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.io.File
 import java.util.Locale
 
-class AxeronApplication : Engine() {
+open class AxeronApplication : Engine() {
     companion object {
         lateinit var axeronApp: AxeronApplication
 

@@ -1,6 +1,3 @@
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -38,11 +35,9 @@ android {
     }
 
     applicationVariants.all {
-        val ts = LocalDateTime.now()
-            .format(DateTimeFormatter.ofPattern("yyMMddHHmm"))
         outputs.all {
             val outputImpl = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            outputImpl.outputFileName = "AxManager_v${versionName}_${versionCode}-${buildType.name}_$ts.apk"
+            outputImpl.outputFileName = "AxManager_v${versionName}_${versionCode}-${buildType.name}.apk"
 
             val outDir = File(rootDir, "out")
             val mappingPath = File(outDir, "mapping").absolutePath
@@ -63,6 +58,7 @@ android {
     }
 
     buildFeatures {
+        aidl = true
         buildConfig = true
         compose = true
     }
@@ -81,6 +77,8 @@ dependencies {
 
     implementation(libs.compose.coil)
     implementation(libs.appiconloader.coil)
+    implementation(libs.appiconloader)
+    implementation(libs.androidx.documentfile)
 
     implementation(libs.androidx.webkit)
     implementation(libs.androidx.core.ktx)
@@ -95,7 +93,19 @@ dependencies {
 
     implementation(libs.gson)
     implementation(libs.markdown)
+    implementation(project(":lspatch-core"))
+    implementation(project(":vector-ui"))
     implementation(project(":server"))
+
+    implementation(libs.rikka.refine.runtime)
+    implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.runtime)
+    ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.compose.ui)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
 
     implementation(project(":aidl"))
     implementation(project(":api"))
