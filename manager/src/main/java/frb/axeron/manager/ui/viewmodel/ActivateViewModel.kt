@@ -192,6 +192,11 @@ class ActivateViewModel : ViewModel() {
         get() = "adb shell dpm set-device-owner " +
                 "${DeviceOwnerState.admin.packageName}/.owner.DeviceOwnerReceiver"
 
+    /** 资料所有者（Profile Owner）激活指令，适用于不支持设备所有者的机型。 */
+    val profileOwnerCommand: String
+        get() = "adb shell dpm set-profile-owner " +
+                "${DeviceOwnerState.admin.packageName}/.owner.DeviceOwnerReceiver"
+
     var isNotificationEnabled by mutableStateOf(false)
         private set
 

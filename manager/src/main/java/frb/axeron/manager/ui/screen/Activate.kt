@@ -22,6 +22,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.outlined.Adb
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Computer
@@ -60,9 +62,17 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -927,37 +937,155 @@ fun DhizukuSection(activateViewModel: ActivateViewModel) {
                 )
             }
 
+            // —— 撤销设备所有者 ——
+            if (activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner) {
+                val revokeDialog = rememberConfirmDialog()
+                val revokeTitle = stringResource(R.string.device_owner_revoke_confirm)
+                val revokeContent = stringResource(R.string.device_owner_revoke_desc)
+                val revokeConfirm = stringResource(R.string.device_owner_revoke)
+                val revokeCancel = stringResource(R.string.cancel)
+                val revokedMsg = stringResource(R.string.device_owner_revoked)
+                val revokeFailedMsg = stringResource(R.string.device_owner_revoke_failed)
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            val result = revokeDialog.awaitConfirm(
+                                title = revokeTitle,
+                                content = revokeContent,
+                                confirm = revokeConfirm,
+                                dismiss = revokeCancel
+                            )
+                            if (result == ConfirmResult.Confirmed) {
+                                val ok = DeviceOwnerState.deactivate(context)
+                                activateViewModel.refreshOwnerState()
+                                Toast.makeText(
+                                    context,
+                                    if (ok) revokedMsg else revokeFailedMsg,
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Stop,
+                        modifier = Modifier
+                            .padding(end = 10.dp)
+                            .size(16.dp),
+                        contentDescription = null
+                    )
+                    Text(revokeConfirm)
+                }
+            }
             // —— 通过指令激活设备所有者 ——
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                var ownerTypeDevice by remember { mutableStateOf(true) }
+                var ownerTypeMenuExpanded by remember { mutableStateOf(false) }
+                var profileOwnerWarningShow by remember { mutableStateOf(false) }
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = stringResource(R.string.device_owner_via_command),
+                        text = stringResource(
+                            if (ownerTypeDevice) R.string.device_owner_via_command
+                            else R.string.profile_owner_via_command
+                        ),
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(Modifier.width(8.dp))
-                    Surface(
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                        shape = MaterialTheme.shapes.small
-                    ) {
+                    if (ownerTypeDevice) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = stringResource(R.string.fewer_restrictions_badge),
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                // —— 所有者类型选择 ——
+                Box {
+                    OutlinedButton(onClick = { ownerTypeMenuExpanded = true }) {
                         Text(
-                            text = stringResource(R.string.fewer_restrictions_badge),
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            stringResource(R.string.device_owner_type_label) + "："
+                        )
+                        Text(
+                            stringResource(
+                                if (ownerTypeDevice) R.string.device_owner_via_command
+                                else R.string.profile_owner_via_command
+                            )
+                        )
+                        Icon(
+                            imageVector = Icons.Filled.ArrowDropDown,
+                            contentDescription = null
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = ownerTypeMenuExpanded,
+                        onDismissRequest = { ownerTypeMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.device_owner_via_command)) },
+                            onClick = {
+                                ownerTypeDevice = true
+                                ownerTypeMenuExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.profile_owner_via_command)) },
+                            onClick = {
+                                ownerTypeMenuExpanded = false
+                                profileOwnerWarningShow = true
+                            }
                         )
                     }
                 }
+                if (profileOwnerWarningShow) {
+                    AlertDialog(
+                        onDismissRequest = { profileOwnerWarningShow = false },
+                        title = {
+                            Text(stringResource(R.string.profile_owner_warning_title))
+                        },
+                        text = {
+                            Text(stringResource(R.string.profile_owner_warning_desc))
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                ownerTypeDevice = false
+                                profileOwnerWarningShow = false
+                            }) {
+                                Text(stringResource(R.string.confirm))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { profileOwnerWarningShow = false }) {
+                                Text(stringResource(R.string.cancel))
+                            }
+                        }
+                    )
+                }
                 Text(
-                    text = stringResource(R.string.device_owner_via_command_desc),
+                    text = stringResource(
+                        if (ownerTypeDevice) R.string.device_owner_via_command_desc
+                        else R.string.profile_owner_via_command_desc
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                val command = activateViewModel.deviceOwnerCommand
+                val command = if (ownerTypeDevice) {
+                    activateViewModel.deviceOwnerCommand
+                } else {
+                    activateViewModel.profileOwnerCommand
+                }
                 val dialogConfirm = rememberConfirmDialog()
                 val title = stringResource(R.string.device_owner_command)
                 val content = stringResource(
@@ -1057,7 +1185,6 @@ fun DhizukuSection(activateViewModel: ActivateViewModel) {
         }
     }
 }
-
 
 @Composable
 fun BatteryOptimizationSection() {

@@ -15,6 +15,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -65,6 +66,7 @@ import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.api.AxeronPluginService
 import frb.axeron.api.AxeronPluginService.ensureManageExternalStorageAllowed
 import frb.axeron.manager.R
+import com.ramcosta.composedestinations.generated.destinations.AIMainScreenDestination
 import frb.axeron.manager.ui.component.AxSnackBarHost
 import frb.axeron.manager.ui.component.SearchAppBar
 import frb.axeron.manager.ui.component.SettingsItem
@@ -77,6 +79,7 @@ import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
 import frb.axeron.manager.ui.webui.WebUIActivity
 import frb.axeron.server.PluginInfo
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.TextButton
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.PathHelper
 import java.io.File
@@ -156,12 +159,21 @@ fun PluginScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlo
                 onClearClick = { pluginViewModel.search = "" },
                 scrollBehavior = scrollBehavior,
                 action = {
-                    IconButton(
-                        onClick = {
-                            showExtraDialog = true
-                        })
-                    {
-                        Icon(Icons.Outlined.MoreVert, null)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { navigator.navigate(AIMainScreenDestination) }) {
+                            Text(
+                                text = "AI",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                showExtraDialog = true
+                            })
+                        {
+                            Icon(Icons.Outlined.MoreVert, null)
+                        }
                     }
                 }
             )

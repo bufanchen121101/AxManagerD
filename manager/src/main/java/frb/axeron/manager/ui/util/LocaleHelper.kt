@@ -106,6 +106,20 @@ object LocaleHelper {
     }
     
     /**
+     * 根据当前应用语言返回对应的「AI 输出语言」指令文本。
+     * 用于注入到 AI 的 system prompt，让 AI 按用户所选语言作答。
+     */
+    fun languageInstruction(context: Context): String {
+        val locale = getCurrentAppLocale(context)
+        val lang = locale?.language ?: Locale.getDefault().language
+        return when {
+            lang.startsWith("zh") -> "请始终使用简体中文回答。"
+            lang == "en" -> "Please always respond in English."
+            else -> "请始终使用简体中文回答。"
+        }
+    }
+
+    /**
      * Get current app locale
      */
     fun getCurrentAppLocale(context: Context): Locale? {

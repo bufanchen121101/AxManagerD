@@ -7,6 +7,7 @@ import coil.Coil
 import coil.ImageLoader
 import com.topjohnwu.superuser.Shell
 import frb.axeron.Axerish
+import frb.axeron.api.AxeronPluginService
 import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.core.Engine
 import frb.axeron.manager.ui.util.createShellBuilder
@@ -64,6 +65,10 @@ open class AxeronApplication : Engine() {
 
         okhttpClient =
             OkHttpClient.Builder().cache(Cache(File(cacheDir, "okhttp"), 10 * 1024 * 1024))
+                // AI 推理（尤其 reasoning 模型）响应很慢，放宽读写超时，避免 10s 默认值截断请求
+                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
                 .addInterceptor { block ->
                     block.proceed(
                         block.request().newBuilder()
@@ -71,5 +76,8 @@ open class AxeronApplication : Engine() {
                             .header("Accept-Language", Locale.getDefault().toLanguageTag()).build()
                     )
                 }.build()
+
+        // 注入 AI 命令分析器（方案 A：在 execWithIO/flashPlugin 执行前拦截分析）
+        AxeronPluginService.commandAnalyzer = frb.axeron.manager.ai.AIEngineManager
     }
 }

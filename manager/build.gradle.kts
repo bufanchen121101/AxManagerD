@@ -96,7 +96,6 @@ dependencies {
     implementation(project(":lspatch-core"))
     implementation(project(":vector-ui"))
     implementation(project(":server"))
-
     implementation(libs.rikka.refine.runtime)
     implementation(libs.androidx.room.ktx)
     implementation(libs.androidx.room.runtime)

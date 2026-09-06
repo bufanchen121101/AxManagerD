@@ -10,12 +10,12 @@ local.properties
 /out
 /signing.properties
 
-# build artifacts
+# 编译产物 / 缓存
 *.dex
 gradle/wrapper/
 
-# third-party binaries
+# 第三方预编译二进制
 server/src/main/jniLibs/
 
-# submodule
+# submodule 相关
 .gitmodules

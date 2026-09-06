@@ -38,6 +38,26 @@ object DeviceOwnerPrivilege {
      */
     fun getDeviceOwnerDpm(context: Context): DevicePolicyManager? {
         return try {
+            // 自我 DO 快速通道：当 AxManager 自己就是 Device/Profile Owner 时，
+            // `axeron-dpm` 命令是「以 DO 身份在自己的 app 进程里执行特权命令」，
+            // 本就具备完整 DPM 特权，直接返回系统真实 DPM 即可，无需再走
+            // Dhizuku 授权校验与 binderWrapper。
+            //
+            // 背景：`axeron-dpm` 由 shell(uid=2000) 通过 content call 触发，
+            // 在 binder 线程里 Binder.getCallingUid()==2000，导致后续
+            // Dhizuku.isPermissionGranted() -> checkCallingPermission(2000) 因
+            // 授权记录不存在而失败（shell 从未被授权），返回 "Device Owner not active"。
+            // 而「授权方式」是第三方 app 用自己的 uid 主动授权，故能通过——两者原理不同。
+            val sysDpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+            if (sysDpm != null) {
+                val adminPkg = DeviceOwnerState.admin.packageName
+                val isSelfOwner = sysDpm.isDeviceOwnerApp(adminPkg) || sysDpm.isProfileOwnerApp(adminPkg)
+                if (isSelfOwner) {
+                    LOGGER.i("getDeviceOwnerDpm: self is Device Owner, use native DPM directly")
+                    return sysDpm
+                }
+            }
+
             // 修复「第一条成功、后续 Device Owner not active」问题：
             // Dhizuku 的 remote(会被 linkToDeath 清空) 与 mOwnerComponent(不会清空)
             // 静态缓存生命周期错位，导致第二次 init 命中缓存分支时
@@ -138,7 +158,9 @@ object DeviceOwnerPrivilege {
             return 1 to "Usage: axeron-dpm <hide|unhide|suspend|unsuspend|set-anim|set-global|set-secure|cleardata|grant|deny|block-uninstall|unblock-uninstall|reboot|locknow|force-stop|uninstall> ..."
         }
         val dpm = getDeviceOwnerDpm(context) ?: return 1 to "Error: Device Owner not active"
-        val admin = ownerComponent() ?: return 1 to "Error: Device Owner not active"
+        // admin 选择：自我 DO 场景下（本进程就是 Owner）直接用 DeviceOwnerState.admin；
+        // 否则（第三方经 Dhizuku 授权）用 Dhizuku 的 ownerComponent。
+        val admin = ownerComponent() ?: DeviceOwnerState.admin
         LOGGER.i("execute: admin=${admin.flattenToString()} package=${admin.packageName} class=${admin.className}")
         val command = args[0]
         return try {
@@ -157,8 +179,8 @@ object DeviceOwnerPrivilege {
                 "unblock-uninstall" -> level1SetUninstallBlocked(dpm, admin, args, false)
                 "reboot" -> level1Reboot(dpm, admin)
                 "locknow" -> level1LockNow(dpm)
-                "force-stop" -> level2ForceStop(args)
-                "uninstall" -> level2Uninstall(args)
+                "force-stop" -> level2ForceStop(context, args)
+                "uninstall" -> level2Uninstall(context, args)
                 "mount", "chmod", "chown", "insmod", "rmmod" -> level3Reject(command)
                 else -> 2 to "Error: unknown command '$command'"
             }
@@ -275,20 +297,64 @@ object DeviceOwnerPrivilege {
         dpm.lockNow()
         return 0 to "Success: locked"
     }
-    // ---------- 第二级：隐藏 API 包装（占位，后续按 SDK_INT 适配事务码） ----------
-
-    private fun level2ForceStop(args: List<String>): Pair<Int, String> {
+// ---------- 第二级：隐藏 API（经 Dhizuku 提升的 system_server binder 反射调用） ----------
+    private fun level2ForceStop(context: Context, args: List<String>): Pair<Int, String> {
         if (args.size < 2) return 1 to "Usage: axeron-dpm force-stop <package>"
-        return 5 to "Error: force-stop needs hidden API (not yet wired)"
+        val pkg = args[1]
+        return try {
+            // 1. 拿 "activity" 服务原始 binder，经 Dhizuku 提升为 Device Owner 身份
+            val amBinder = rikka.shizuku.SystemServiceHelper.getSystemService("activity")
+                ?: return 5 to "Error: activity service unavailable"
+            val wrapped = Dhizuku.binderWrapper(amBinder)
+            val am = Class.forName("android.app.IActivityManager\$Stub")
+                .getMethod("asInterface", IBinder::class.java)
+                .invoke(null, wrapped) ?: return 5 to "Error: IActivityManager asInterface failed"
+            // 2. 反射调用 forceStopPackage(pkg, userId)
+            val userId = android.os.Process.myUid() / 100000
+            val m = am.javaClass.methods.firstOrNull { it.name == "forceStopPackage" }
+                ?: return 5 to "Error: forceStopPackage not found"
+            m.isAccessible = true
+            when {
+                m.parameterTypes.size >= 3 -> m.invoke(am, pkg, userId, false)
+                m.parameterTypes.size == 2 -> m.invoke(am, pkg, userId)
+                else -> return 5 to "Error: unsupported forceStopPackage signature"
+            }
+            0 to "Success: force-stopped $pkg"
+        } catch (e: Exception) {
+            LOGGER.w("level2ForceStop failed", e)
+            5 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
     }
-
-    private fun level2Uninstall(args: List<String>): Pair<Int, String> {
+    private fun level2Uninstall(context: Context, args: List<String>): Pair<Int, String> {
         if (args.size < 2) return 1 to "Usage: axeron-dpm uninstall <package>"
-        return 5 to "Error: uninstall needs hidden API (not yet wired)"
+        val pkg = args[1]
+        return try {
+            // 1. 拿 "package" 服务原始 binder，经 Dhizuku 提升为 Device Owner 身份
+            val pmBinder = rikka.shizuku.SystemServiceHelper.getSystemService("package")
+                ?: return 5 to "Error: package service unavailable"
+            val wrapped = Dhizuku.binderWrapper(pmBinder)
+            val pm = Class.forName("android.content.pm.IPackageManager\$Stub")
+                .getMethod("asInterface", IBinder::class.java)
+                .invoke(null, wrapped) ?: return 5 to "Error: IPackageManager asInterface failed"
+            // 2. 反射调用 deletePackageAsUser(pkg, versionCode, userId)
+            val userId = android.os.Process.myUid() / 100000
+            val m = pm.javaClass.methods.firstOrNull { it.name == "deletePackageAsUser" }
+                ?: return 5 to "Error: deletePackageAsUser not found"
+            m.isAccessible = true
+            when {
+                m.parameterTypes.size >= 4 ->
+                    m.invoke(pm, pkg, -1, userId, 0)
+                m.parameterTypes.size == 3 ->
+                    m.invoke(pm, pkg, -1, userId)
+                else -> return 5 to "Error: unsupported deletePackageAsUser signature"
+            }
+            0 to "Success: uninstalled $pkg"
+        } catch (e: Exception) {
+            LOGGER.w("level2Uninstall failed", e)
+            5 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
     }
-
     // ---------- 第三级：拒绝名单 ----------
-
-    private fun level3Reject(cmd: String): Pair<Int, String> =
+private fun level3Reject(cmd: String): Pair<Int, String> =
         6 to "Error: '$cmd' needs Root permission"
 }

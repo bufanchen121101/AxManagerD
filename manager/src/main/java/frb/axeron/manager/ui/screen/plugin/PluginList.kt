@@ -1,6 +1,7 @@
 package frb.axeron.manager.ui.screen.plugin
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
@@ -32,10 +33,13 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.ramcosta.composedestinations.generated.destinations.EnablePluginScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.api.AxeronPluginService
 import frb.axeron.manager.AxeronApplication.Companion.axeronApp
 import frb.axeron.manager.R
+import frb.axeron.manager.ai.RestoreScriptPreviewActivity
+import frb.axeron.manager.ai.UninstallRollback
 import frb.axeron.manager.ui.component.ConfirmResult
 import frb.axeron.manager.ui.component.rememberConfirmDialog
 import frb.axeron.manager.ui.component.rememberLoadingDialog
@@ -144,47 +148,115 @@ fun PluginList(
 
     val askUninstallPlugin = stringResource(R.string.ask_uninstall_plugin)
     val uninstall = stringResource(R.string.uninstall)
+    val rollbackUninstall = stringResource(R.string.rollback_uninstall)
     val cancel = stringResource(R.string.cancel)
     val moduleUninstallConfirm = stringResource(R.string.uninstall_plugin_confirmation)
     val successUninstall = stringResource(R.string.plugin_uninstalled)
     val failedUninstall = stringResource(R.string.failed_to_uninstall_plugin)
     val restartService = stringResource(R.string.restart_service)
+    val rollbackNoLog = stringResource(R.string.uninstall_rollback_no_log)
+    val rollbackNoAi = stringResource(R.string.uninstall_rollback_no_ai)
+
+    suspend fun doUninstall(plugin: PluginInfo): Boolean {
+        val success = loadingDialog.withLoading {
+            withContext(Dispatchers.IO) {
+                AxeronPluginService.uninstallPlugin(plugin.dirId, plugin.backup)
+            }
+        }
+        if (success) viewModel.fetchModuleList()
+        return success
+    }
+
+    /**
+     * v1.1.0 卸载回滚：uninstallPlugin 仅写 remove 标记（先卸载），
+     * 随后引导用户执行 AI 生成的恢复脚本（撤销模块历史系统操作）。
+     */
+    suspend fun doUninstallWithRollback(plugin: PluginInfo) {
+        // 1. 读取拦截器落盘的指令日志；无日志则提示并退回到普通卸载
+        val logContent = UninstallRollback.readLog(context, plugin.prop, plugin.dirId)
+        if (logContent.isNullOrBlank()) {
+            Toast.makeText(context, rollbackNoLog, Toast.LENGTH_SHORT).show()
+            doUninstall(plugin)
+            return
+        }
+        // 2. 未配置云端 AI 时降级提示（无法生成恢复脚本）
+        if (!frb.axeron.manager.ai.AIChatService.isCloudConfigured()) {
+            val degrade = confirmDialog.awaitConfirm(
+                askUninstallPlugin,
+                content = rollbackNoAi,
+                confirm = uninstall,
+                dismiss = cancel
+            )
+            if (degrade == ConfirmResult.Confirmed) {
+                doUninstall(plugin)
+            }
+            return
+        }
+        // 3. 始终基于最新拦截日志重新生成恢复脚本（去除缓存，选 A）
+        loadingDialog.showLoading()
+        val script = withContext(Dispatchers.IO) {
+            UninstallRollback.generateRestoreScript(context, plugin.prop, logContent)
+        }
+        loadingDialog.hide()
+        if (script.isNullOrBlank()) {
+            Toast.makeText(context, rollbackNoAi, Toast.LENGTH_SHORT).show()
+            doUninstall(plugin)
+            return
+        }
+        // 4. 高危指令过滤（HIGH 风险行剔除，绝不执行）
+        val validated = UninstallRollback.filterDangerous(script)
+        // 5. 先卸载（写 remove 标记），再跳转预览执行界面让用户执行恢复脚本
+        val uninstalled = doUninstall(plugin)
+        if (!uninstalled) {
+            Toast.makeText(context, failedUninstall.format(plugin.prop.name), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(context, RestoreScriptPreviewActivity::class.java)
+            .putExtra(RestoreScriptPreviewActivity.EXTRA_SCRIPT, validated.script)
+            .putExtra(RestoreScriptPreviewActivity.EXTRA_DIR_ID, plugin.dirId)
+            .putExtra(RestoreScriptPreviewActivity.EXTRA_NAME, plugin.prop.name)
+            .putStringArrayListExtra(
+                RestoreScriptPreviewActivity.EXTRA_BLOCKED,
+                ArrayList(validated.blockedLines)
+            )
+            // 原始完整脚本 + 危险行：供「不拦截」入口按需放回执行
+            .putExtra(RestoreScriptPreviewActivity.EXTRA_FULL_SCRIPT, script)
+            .putStringArrayListExtra(
+                RestoreScriptPreviewActivity.EXTRA_DANGEROUS,
+                ArrayList(validated.dangerousLines)
+            )
+            // 拦截到的原始指令清单（供恢复界面展示，验证拦截是否正确）
+            .putExtra(
+                RestoreScriptPreviewActivity.EXTRA_CAPTURED,
+                UninstallRollback.buildCapturedCommandList(logContent)
+            )
+        context.startActivity(intent)
+    }
 
     suspend fun onModuleUninstall(plugin: PluginInfo) {
         val confirmResult = confirmDialog.awaitConfirm(
             askUninstallPlugin,
             content = moduleUninstallConfirm.format(plugin.prop.name),
             confirm = uninstall,
-            dismiss = cancel
+            dismiss = cancel,
+            neutral = rollbackUninstall
         )
-        if (confirmResult != ConfirmResult.Confirmed) {
-            return
-        }
-
-        val success = loadingDialog.withLoading {
-            withContext(Dispatchers.IO) {
-                AxeronPluginService.uninstallPlugin(plugin.dirId, plugin.backup)
+        when (confirmResult) {
+            ConfirmResult.Confirmed -> {
+                doUninstall(plugin)
             }
-        }
-
-        if (success) {
-            viewModel.fetchModuleList()
-        }
-        if (success) {
-            successUninstall.format(plugin.prop.name)
-        } else {
-            failedUninstall.format(plugin.prop.name)
-        }
-        if (success) {
-            restartService
-        } else {
-            null
+            ConfirmResult.Neutral -> {
+                doUninstallWithRollback(plugin)
+            }
+            else -> { /* Dismissed：取消 */ }
         }
     }
 
     val askRestorePlugin = stringResource(R.string.ask_restore_plugin)
     val restore = stringResource(R.string.restore)
     val moduleRestoreConfirm = stringResource(R.string.restore_plugin_confirmation)
+    val pluginRestored = stringResource(R.string.plugin_restored)
+    val failedRestore = stringResource(R.string.failed_to_restore_plugin)
 
     suspend fun onModuleRestore(plugin: PluginInfo) {
 
@@ -203,12 +275,13 @@ fun PluginList(
                 AxeronPluginService.restorePlugin(plugin.dirId, plugin.backup)
             }
         }
-
         if (success) {
             viewModel.fetchModuleList()
+            Toast.makeText(context, pluginRestored, Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, failedRestore, Toast.LENGTH_SHORT).show()
         }
     }
-
     PullToRefreshBox(
         modifier = modifier,
         isRefreshing = viewModel.isRefreshing,
@@ -271,13 +344,23 @@ fun PluginList(
                             onRestore = {
                                 scope.launch { onModuleRestore(plugin) }
                             },
-                            onCheckChanged = {
+                            onCheckChanged = { targetEnabled ->
                                 scope.launch {
+                                    // 启用方向：进入「启用分析」界面（strace 拦截 service.sh/post-fs-data.sh
+                                    // 真实指令 → AI 弹窗决策 → 允许才真正 togglePlugin + ignite）
+                                    // 禁用方向：保持原逻辑，直接 togglePlugin
+                                    if (targetEnabled) {
+                                        navigator.navigate(
+                                            EnablePluginScreenDestination(plugin)
+                                        )
+                                        return@launch
+                                    }
+
                                     val success = loadingDialog.withLoading {
                                         withContext(Dispatchers.IO) {
                                             AxeronPluginService.togglePlugin(
                                                 plugin.dirId,
-                                                !plugin.enabled,
+                                                false,
                                                 plugin.backup
                                             )
                                         }
@@ -286,9 +369,9 @@ fun PluginList(
                                     if (success) {
                                         viewModel.fetchModuleList()
                                     } else {
-                                        val message =
-                                            if (plugin.enabled) failedDisable else failedEnable
-                                        snackBarHost.showSnackbar(message.format(plugin.prop.name))
+                                        snackBarHost.showSnackbar(
+                                            failedDisable.format(plugin.prop.name)
+                                        )
                                     }
                                 }
                             },

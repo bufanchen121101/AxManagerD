@@ -73,6 +73,38 @@ object DeviceOwnerState {
     }
 
     /**
+     * 撤销设备所有者（Device Owner）与工作资料所有者（Profile Owner）身份。
+     *
+     * 参考 Dhizuku 的 DeactivateWidget：分别调用 clearProfileOwner 与
+     * clearDeviceOwnerApp。撤销对象是本应用自己的 admin 组件 / 包名，
+     * 即「通过指令（dpm set-device-owner）激活让 AxManagerD 成为设备所有者」的那个状态。
+     *
+     * @return 逐一执行后是否成功同步了状态（true 表示已尝试撤销并刷新）。
+     */
+    fun deactivate(context: Context): Boolean {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+            ?: return false
+        var anyCleared = false
+        try {
+            @Suppress("DEPRECATION")
+            dpm.clearProfileOwner(admin)
+            anyCleared = true
+        } catch (t: Throwable) {
+            LOGGER.w("clearProfileOwner failed", t)
+        }
+        try {
+            @Suppress("DEPRECATION")
+            dpm.clearDeviceOwnerApp(admin.packageName)
+            anyCleared = true
+        } catch (t: Throwable) {
+            LOGGER.w("clearDeviceOwnerApp failed", t)
+        }
+        // 撤销后重新同步状态，确保界面状态一致。
+        sync(context)
+        return anyCleared
+    }
+
+    /**
      * 遍历本应用在 manifest 中申请的所有 dangerous 权限，并以 Device Owner 身份
      * 将其授权状态置为 GRANTED。这是非 root 情况下获取高级（dangerous）权限的核心能力。
      *

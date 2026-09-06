@@ -69,7 +69,9 @@ fi
 # 解析返回 Bundle：提取 code 与 output。
 # Bundle 打印形如 Bundle[{code=0, output=...}]，用 sed 摘出 code 与 output 部分。
 CODE=$(echo "$RESULT" | sed -n 's/.*code=\([-0-9][0-9]*\).*/\1/p')
-OUTPUT=$(echo "$RESULT" | sed -n 's/.*output=\(.*\)\}/\1/p')
+# output 已由 manager 侧 Base64 编码（纯 [A-Za-z0-9+/=]，无空格/换行/`}`），
+# 因此 sed 可安全截取到唯一结尾 `}` 前的内容。
+OUTPUT=$(echo "$RESULT" | sed -n 's/.*output=\([^}]*\).*/\1/p')
 
 # 兜底：code 为空或非数字则视为 1
 case "$CODE" in
@@ -80,9 +82,12 @@ case "$CODE" in
   -*) CODE=1 ;;
 esac
 
-# 打印命令输出（隐藏 leading 空格由 sed 处理）
+# 解码 output（manager 侧 Base64 编码）。优先用系统 base64 命令，缺省原样输出。
 if [ -n "$OUTPUT" ]; then
-  echo "$OUTPUT"
+  DECODED=$(printf '%s' "$OUTPUT" | base64 -d 2>/dev/null) \
+    || DECODED=$(printf '%s' "$OUTPUT" | busybox base64 -d 2>/dev/null) \
+    || DECODED="$OUTPUT"
+  printf '%s\n' "$DECODED"
 fi
 
 exit "$CODE"

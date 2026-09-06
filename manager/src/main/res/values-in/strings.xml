@@ -62,6 +62,8 @@
     <string name="restart_service">Mulai Ulang Layanan</string>
     <string name="ask_restore_plugin">Pulihkan Plugin?</string>
     <string name="restore_plugin_confirmation">Apakah Anda yakin ingin memulihkan plugin %s?</string>
+    <string name="plugin_restored">Plugin dipulihkan</string>
+    <string name="failed_to_restore_plugin">Gagal memulihkan plugin</string>
     <string name="no_plugin_installed">Tidak ada plugin yang terinstal</string>
     <string name="activate">Aktivasi</string>
     <string name="activate_by_tcp">Aktivasi melalui Debugging TCP</string>

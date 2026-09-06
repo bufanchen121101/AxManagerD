@@ -55,6 +55,10 @@
     <string name="start_downloading_plugin">开始下载插件: %s</string>
     <string name="fetch_changelog_failed">获取更新日志失败: %s</string>
     <string name="ask_uninstall_plugin">卸载插件？</string>
+    <string name="rollback_uninstall">恢复卸载</string>
+    <string name="uninstall_rollback_no_log">未找到该插件的拦截指令日志，无法生成恢复脚本。</string>
+    <string name="uninstall_rollback_no_ai">未配置云端 AI，无法生成恢复脚本。直接卸载？</string>
+    <string name="uninstall_rollback_generating">正在生成恢复脚本…</string>
     <string name="cancel">取消</string>
     <string name="uninstall_plugin_confirmation">您确定要卸载插件 %s 吗？</string>
     <string name="failed_to_uninstall_plugin">插件卸载失败: %s</string>
@@ -62,6 +66,8 @@
     <string name="restart_service">重启服务</string>
     <string name="ask_restore_plugin">恢复插件？</string>
     <string name="restore_plugin_confirmation">您确定要恢复插件 %s 吗？</string>
+    <string name="plugin_restored">插件已恢复</string>
+    <string name="failed_to_restore_plugin">恢复插件失败</string>
     <string name="no_plugin_installed">尚未安装插件</string>
     <string name="activate">激活</string>
     <string name="activate_by_tcp">通过无线调试激活</string>
@@ -238,7 +244,18 @@
     <string name="device_owner_command_message">`%s`\n\n预配置前设备必须无现有账户（或使用 provisioning 流程）。</string>
     <string name="device_owner_active">设备所有者已激活</string>
     <string name="device_owner_inactive">设备所有者未激活</string>
+    <string name="device_owner_revoke">撤销设备所有者</string>
+    <string name="device_owner_revoke_confirm">撤销设备所有者权限？</string>
+    <string name="device_owner_revoke_desc">将撤销 AxManagerD 通过指令获得的设备所有者/工作资料所有者权限。撤销后相关系统级能力将失效。</string>
+    <string name="device_owner_revoked">已撤销设备所有者权限</string>
+    <string name="device_owner_revoke_failed">撤销失败（可能无需撤销或权限不允许）</string>
     <string name="profile_owner_active">工作资料所有者已激活</string>
+    <string name="profile_owner_via_command">通过指令激活资料所有者</string>
+    <string name="profile_owner_via_command_desc">部分机型不支持设备所有者。可改用此方式激活为「资料所有者（Profile Owner）」，能获得一部分设备管理能力。</string>
+    <string name="device_owner_type_label">所有者类型</string>
+    <string name="profile_owner_warning_title">激活为资料所有者？</string>
+    <string name="profile_owner_warning_desc">资料所有者能力弱于设备所有者，且需要工作资料（工作空间）。部分高级设备所有者功能将不可用。</string>
+    <string name="confirm">确认</string>
     <string name="fully_activated">已完全激活</string>
     <string name="not_fully_activated">未完全激活</string>
     <string name="permission_status">权限状态</string>
@@ -560,4 +577,14 @@
     <string name="plugin_compat_desc">分析并识别结构相似但未声明 axeronPlugin 字段的 Magisk / KernelSU 模块，并将其作为兼容插件安装。</string>
     <string name="shizuku_not_granted">未授予 Shizuku 权限</string>
     <string name="shizuku_not_running">Shizuku 未运行，请先启动 Shizuku。</string>
+    <string name="dhizuku_request_permission_title">是否授予「%s」设备所有者权限？</string>
+    <string name="dhizuku_request_permission_desc">该应用可通过 AxManager 执行设备所有者（Dhizuku 兼容）相关操作。请仅授权给可信应用。</string>
+    <string name="dhizuku_allow">允许</string>
+    <string name="dhizuku_deny">拒绝</string>
+    <string name="dhizuku_permission_manage">管理设备所有者授权</string>
+    <string name="dhizuku_permission_manage_desc">查看并管理已请求设备所有者（Dhizuku 兼容）权限的应用。</string>
+    <string name="dhizuku_permission_empty">暂无授权记录</string>
+    <string name="dhizuku_permission_allow">允许 API</string>
+    <string name="dhizuku_permission_blocked">已拦截</string>
+    <string name="dhizuku_permission_remove">移除</string>
 </resources>

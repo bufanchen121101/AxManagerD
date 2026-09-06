@@ -169,7 +169,19 @@ install_plugin() {
     fi
   fi
 
-  [ "$MODPLUGIN" -gt "$AXERONVER" ] && abort "! This module need AxManager Version >= $MODPLUGIN!"
+  # 版本兼容：旧版 AxManager 用 major*10000+minor*1000+patch 编码（如 1.4.0 -> 14000），
+  # 新版改为简单递增整数。两者数值域不重叠，故对 axeronPlugin >= 10000 的旧格式声明
+  # 直接放行（无法用新编码的整数比较），仅对新格式（< 10000）做版本校验。
+  case "$MODPLUGIN" in
+    ''|*[!0-9]*) : ;;                                  # 空或非数字：无法比较，放行
+    *)
+      if [ "$MODPLUGIN" -lt 10000 ]; then
+        [ "$MODPLUGIN" -gt "$AXERONVER" ] && abort "! This module need AxManager Version >= $MODPLUGIN!"
+      else
+        ui_print "- Legacy axeronPlugin encoding ($MODPLUGIN), skipping version check"
+      fi
+      ;;
+  esac
   MODPATH=$MODROOT/$MODID
   MODPATH_UPDATE=$MODROOT_UPDATE/$MODID
   

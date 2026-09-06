@@ -9,6 +9,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.annotation.RequiresApi
 import com.google.gson.annotations.SerializedName
+import frb.axeron.api.ai.CommandAnalyzer
 import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.core.Engine.Companion.application
 import frb.axeron.server.Environment
@@ -30,6 +31,30 @@ import java.util.concurrent.CompletableFuture
 
 object AxeronPluginService {
     const val TAG = "PluginService"
+
+    /**
+     * 命令分析器（方案 A 拦截挂钩）。
+     *
+     * 由 manager 层在启动时注入实现。execWithIO / flashPlugin 在执行命令前
+     * 会调用它；返回 null 表示无需分析（白名单），返回 AnalyzeResult 则按
+     * allow 字段决定放行或拦截。
+     */
+    @Volatile
+    var commandAnalyzer: CommandAnalyzer? = null
+
+    /**
+     * 内部白名单：AxManager 自身部署/维护命令，不应被 AI 拦截，
+     * 否则会导致 App 启动/初始化陷入死循环。
+     */
+    private val INTERNAL_WHITELIST = listOf(
+        "ignite", "ensureScripts", "ensureLibrary", "unzip -p", "dos2unix",
+        "busybox --install", "cp $BUSYBOX", "cp $RESETPROP", "find $AXERONBIN",
+        "ax_reignite.dex", "libbusybox", "libresetprop",
+    )
+
+    private fun isInternalCommand(cmd: String): Boolean {
+        return INTERNAL_WHITELIST.any { cmd.contains(it) }
+    }
 
     val BUSYBOX: String
         get() = "${application.applicationInfo.nativeLibraryDir}/libbusybox.so"
@@ -196,6 +221,24 @@ object AxeronPluginService {
             val backupFlag = if (installer.backupInstall) "true" else "false"
             val cmd =
                 "ZIPFILE=${file.absolutePath}; . functions.sh; install_plugin ${installer.autoEnable} $compatFlag $backupFlag; exit 0"
+
+            // ---- AI 拦截挂钩（方案 A，安装场景）----
+            val analyzer = commandAnalyzer
+            if (analyzer != null) {
+                val name = installer.uri.lastPathSegment ?: "unknown"
+                val ctx = CommandAnalyzer.CommandContext(
+                    source = CommandAnalyzer.CommandContext.Source.INSTALL,
+                    pluginName = name,
+                )
+                val analysis = analyzer.analyze(cmd, ctx)
+                if (analysis != null && !analysis.allow) {
+                    Log.w(TAG, "Install blocked by AI analyzer: $name")
+                    fs.delete(file.absolutePath)
+                    return FlashResult(AxeronPluginService.ResultExec(127, "", "已拦截：${analysis.summary}"))
+                }
+            }
+            // ---- 挂钩结束 ----
+
             val result = execWithIO(cmd, onStdout, onStderr, standAlone = true)
 
             Log.i(TAG, "install module ${installer.uri} result: $result")
@@ -230,6 +273,24 @@ object AxeronPluginService {
     ): ResultExec = runCatching {
 
         Log.d(TAG, "execWithIO: $cmd")
+
+        // ---- AI 拦截挂钩（方案 A）----
+        val analyzer = commandAnalyzer
+        if (analyzer != null && !isInternalCommand(cmd)) {
+            val ctx = CommandAnalyzer.CommandContext(
+                source = CommandAnalyzer.CommandContext.Source.INTERNAL
+            )
+            val result = analyzer.analyze(cmd, ctx)
+            if (result != null && !result.allow) {
+                Log.w(TAG, "Blocked by AI analyzer: $cmd")
+                return@runCatching ResultExec(
+                    code = 127,
+                    out = "",
+                    err = "已拦截：${result.summary}"
+                )
+            }
+        }
+        // ---- 挂钩结束 ----
 
         val process = Axeron.newProcess(
             if (useSetsid) arrayOf(BUSYBOX, "setsid", "sh")
@@ -439,7 +500,13 @@ object AxeronPluginService {
         val pluginDir = if (backup) PLUGINBACKUPDIR else PLUGINDIR
         val path = "$pluginDir/$dirId"
         val updatePath = "$PLUGINUPDATEDIR/$dirId"
-        return fs.delete("$path/remove") && fs.delete("$updatePath/update_remove")
+        // 删除 remove / update_remove 两个标记即"恢复"。
+        // 关键：Java File.delete() 对【已不存在的文件】返回 false，导致 `a && b` 整体失败，
+        // 使"普通安装（无 update 目录）的模块"恢复永远失败。这里改为"幂等"语义：
+        // 删除后只要两个标记都不存在，即视为恢复成功。
+        fs.delete("$path/remove")
+        fs.delete("$updatePath/update_remove")
+        return !fs.exists("$path/remove") && !fs.exists("$updatePath/update_remove")
     }
 
     //===================================
@@ -704,9 +771,27 @@ object AxeronPluginService {
         if (!fs.exists(binDir) && !fs.mkdirs(binDir)) return@withContext false
 
         for (filename in files) {
-            // Step 1: Ekstrak dulu ke folder temporary atau folder utama
             val dstFile = File(binDir, filename)
-            if (fs.exists(dstFile.absolutePath)) continue
+
+            // 用 sha256 比对 APK 内 asset 与设备上已释放文件内容：
+            // 内容一致则跳过；不一致（含旧版本残留）则删除后重新解压，保证脚本更新能生效。
+            // 之前用「存在即跳过」，导致更新 APK 后旧脚本（如 axeron-dpm）不会被覆盖。
+            if (fs.exists(dstFile.absolutePath)) {
+                val needUpdate = run {
+                    val hashCmd =
+                        "apkhash=\$($BUSYBOX unzip -p $BASEAPK assets/scripts/$filename | $BUSYBOX sha256sum | $BUSYBOX cut -d' ' -f1); " +
+                            "curhash=\$($BUSYBOX sha256sum ${dstFile.absolutePath} | $BUSYBOX cut -d' ' -f1); " +
+                            "[ \"\$apkhash\" = \"\$curhash\" ] && echo SAME || echo DIFF"
+                    val r = execWithIO(hashCmd, hideStderr = true)
+                    r.out.trim() != "SAME"
+                }
+                if (!needUpdate) {
+                    Log.i(TAG, "$filename unchanged, skip")
+                    continue
+                }
+                Log.i(TAG, "$filename changed, updating")
+                fs.delete(dstFile.absolutePath)
+            }
 
             // Ekstrak file
             val extractCmd = "$BUSYBOX unzip -p $BASEAPK assets/scripts/$filename > ${dstFile.absolutePath} && chmod 755 ${dstFile.absolutePath}"

@@ -133,6 +133,20 @@
             android:process=":crash"
             android:theme="@style/Theme.AxManager" />
 
+        <!-- AI 安全分析整页界面（方案 A：安装/运行模块前拦截分析弹窗） -->
+        <activity
+            android:name=".ai.AIAnalysisActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.AxManager" />
+
+        <!-- v1.1.0 卸载回滚：恢复脚本预览 + 执行界面 -->
+        <activity
+            android:name=".ai.RestoreScriptPreviewActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.AxManager" />
+
         <receiver
             android:name="frb.axeron.server.shell.BinderRequestReceiver"
             android:directBootAware="true"
@@ -152,6 +166,13 @@
             android:exported="true"
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+        <!-- Dhizuku 兼容 Daemon：Device Owner 授权 Provider（第三方 Dhizuku API app 自动连接） -->
+        <provider
+            android:name="frb.axeron.manager.dhizuku.AxManagerDhizukuProvider"
+            android:authorities="${applicationId}.dhizuku_server.provider"
+            android:directBootAware="true"
+            android:enabled="true"
+            android:exported="true" />
         <!-- Shizuku Binder 接收 Provider（Shizuku 授权链路） -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
@@ -242,6 +263,19 @@
                 <action android:name="android.app.action.PROFILE_OWNER_CHANGED" />
             </intent-filter>
         </receiver>
+
+        <!-- Dhizuku 兼容：接收第三方 app 的授权请求弹窗 -->
+        <activity
+            android:name="frb.axeron.manager.dhizuku.RequestDhizukuPermissionActivity"
+            android:directBootAware="true"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:theme="@style/GrantPermissions">
+            <intent-filter>
+                <action android:name="${applicationId}.action.REQUEST_DHIZUKU_PERMISSION" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <activity
             android:name=".owner.ProvisioningActivity"

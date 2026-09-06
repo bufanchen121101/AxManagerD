@@ -64,6 +64,10 @@
     <string name="start_downloading_plugin">Start downloading plugin: %s</string>
     <string name="fetch_changelog_failed">Fetch changelog failed: %s</string>
     <string name="ask_uninstall_plugin">Uninstall Plugin?</string>
+    <string name="rollback_uninstall">Uninstall with Rollback</string>
+    <string name="uninstall_rollback_no_log">No captured command log found for this plugin, cannot generate rollback script.</string>
+    <string name="uninstall_rollback_no_ai">Cloud AI is not configured, cannot generate rollback script. Uninstall directly?</string>
+    <string name="uninstall_rollback_generating">Generating rollback script…</string>
     <string name="cancel">Cancel</string>
     <string name="uninstall_plugin_confirmation">Are you sure you want to uninstall plugin %s?</string>
     <string name="failed_to_uninstall_plugin">Failed to uninstall plugin: %s</string>
@@ -71,6 +75,8 @@
     <string name="restart_service">Restart Service</string>
     <string name="ask_restore_plugin">Restore Plugin?</string>
     <string name="restore_plugin_confirmation">Are you sure you want to restore plugin %s?</string>
+    <string name="plugin_restored">Plugin restored</string>
+    <string name="failed_to_restore_plugin">Failed to restore plugin</string>
     <string name="no_plugin_installed">No plugin installed</string>
     <string name="activate">Activate</string>
     <string name="activate_by_tcp">Activate by TCP Debugging</string>
@@ -243,7 +249,18 @@
     <string name="device_owner_command_message">`%s`\n\nThe device must have no existing accounts before provisioning (or use the provisioning flow).</string>
     <string name="device_owner_active">Device Owner Active</string>
     <string name="device_owner_inactive">Device Owner Inactive</string>
+    <string name="device_owner_revoke">Revoke Device Owner</string>
+    <string name="device_owner_revoke_confirm">Revoke Device Owner permission?</string>
+    <string name="device_owner_revoke_desc">This will revoke the Device Owner / Profile Owner permission that AxManagerD obtained via command. System-level capabilities will be disabled afterwards.</string>
+    <string name="device_owner_revoked">Device Owner permission revoked</string>
+    <string name="device_owner_revoke_failed">Revoke failed (may not need revoking, or permission denied)</string>
     <string name="profile_owner_active">Profile Owner Active</string>
+    <string name="profile_owner_via_command">Activate Profile Owner via Command</string>
+    <string name="profile_owner_via_command_desc">Some devices do not support Device Owner. Use this to activate as Profile Owner instead, which grants a subset of device management capabilities.</string>
+    <string name="device_owner_type_label">Owner Type</string>
+    <string name="profile_owner_warning_title">Activate as Profile Owner?</string>
+    <string name="profile_owner_warning_desc">Profile Owner has weaker capabilities than Device Owner and requires a work profile. Some advanced device-owner features will be unavailable.</string>
+    <string name="confirm">Confirm</string>
     <string name="fully_activated">Fully Activated</string>
     <string name="not_fully_activated">Not Fully Activated</string>
     <string name="permission_status">Permission Status</string>
@@ -566,4 +583,14 @@
     <string name="log_service_channel">Log monitoring</string>
     <string name="log_service_title">LSPatch is monitoring logs</string>
     <string name="log_service_text">Collecting framework and patched-app logs</string>
+    <string name="dhizuku_request_permission_title">Grant Device Owner permission to "%s"?</string>
+    <string name="dhizuku_request_permission_desc">This app can perform Device Owner (Dhizuku-compatible) operations through AxManager. Only authorize trusted apps.</string>
+    <string name="dhizuku_allow">Allow</string>
+    <string name="dhizuku_deny">Deny</string>
+    <string name="dhizuku_permission_manage">Manage Device Owner Authorizations</string>
+    <string name="dhizuku_permission_manage_desc">View and manage apps that requested Device Owner (Dhizuku-compatible) privileges.</string>
+    <string name="dhizuku_permission_empty">No authorization records</string>
+    <string name="dhizuku_permission_allow">Allow API</string>
+    <string name="dhizuku_permission_blocked">Blocked</string>
+    <string name="dhizuku_permission_remove">Remove</string>
 </resources>

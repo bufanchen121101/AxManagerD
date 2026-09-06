@@ -135,9 +135,17 @@ class AxManagerProvider : AxeronProvider() {
             4 to "Error: ${t.message ?: t.javaClass.simpleName}"
         }
 
+        // output 可能来自任意模块/命令，内容可含 `}`、换行、中文等，直接塞进 Bundle 会让
+        // 脚本侧 `content call` 的文本解析（sed 抽取 output=...}）因括号不匹配而失败。
+        // 因此这里对 output 做 Base64 编码，仅返回纯 ASCII，脚本侧再解码还原。
+        val encoded = android.util.Base64.encodeToString(
+            output.toByteArray(Charsets.UTF_8),
+            android.util.Base64.NO_WRAP
+        )
+
         return Bundle().apply {
             putInt(EXTRA_CODE, code)
-            putString(EXTRA_OUTPUT, output)
+            putString(EXTRA_OUTPUT, encoded)
         }
     }
 }

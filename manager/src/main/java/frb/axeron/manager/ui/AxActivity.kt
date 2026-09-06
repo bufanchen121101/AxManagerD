@@ -59,6 +59,7 @@ import com.ramcosta.composedestinations.DestinationsNavHost
 import com.ramcosta.composedestinations.animations.NavHostAnimatedDestinationStyle
 import com.ramcosta.composedestinations.generated.NavGraphs
 import com.ramcosta.composedestinations.generated.destinations.ActivateScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.EnablePluginScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.ExecutePluginActionScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.HomeScreenDestination
@@ -232,6 +233,7 @@ class AxActivity : ComponentActivity() {
             ActivateScreenDestination.route -> false // Hide for Activate
             FlashScreenDestination.route -> false // Hide for Flash
             ExecutePluginActionScreenDestination.route -> false // Hide for ExecutePluginAction
+            EnablePluginScreenDestination.route -> false // Hide for EnablePlugin
             else -> true
         }
 

@@ -15,7 +15,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.gson.Gson
 import frb.axeron.api.Axeron
 import frb.axeron.manager.AxeronApplication.Companion.axeronApp
 import frb.axeron.manager.ui.util.HanziToPinyin
@@ -89,9 +88,6 @@ class AppsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val prefs = application.getSharedPreferences("apps_prefs", Context.MODE_PRIVATE)
-    private val gson = Gson()
-
     var addedPackageNames: List<String> by mutableStateOf(emptyList())
         private set
 
@@ -128,25 +124,6 @@ class AppsViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-
-//    fun addApp(app: AppInfo) {
-//        if (!addedApps.any { it.packageName == app.packageName }) {
-//            val updatedApp = app.copy(isAdded = true)
-//            addedApps = addedApps + updatedApp
-//            installedApps = installedApps.map {
-//                if (it.packageName == app.packageName) it.copy(isAdded = true) else it
-//            }
-//            saveAddedPackageNames(addedApps.map { it.packageName })
-//        }
-//    }
-//
-//    fun removeApp(packageName: String) {
-//        addedApps = addedApps.filterNot { it.packageName == packageName }
-//        installedApps = installedApps.map {
-//            if (it.packageName == packageName) it.copy(isAdded = false) else it
-//        }
-//        saveAddedPackageNames(addedApps.map { it.packageName })
-//    }
 
     fun addApp(app: AppInfo) {
         if (!addedApps.any { it.packageName == app.packageName }) {
@@ -203,21 +180,6 @@ class AppsViewModel(application: Application) : AndroidViewModel(application) {
             emptyList()
         }
     }
-
-//    private fun saveAddedPackageNames(packageNames: List<String>) {
-//        val json = gson.toJson(packageNames)
-//        prefs.edit { putString("added_apps", json) }
-//    }
-//
-//    private fun getSavedPackageNames(): List<String> {
-//        val json = prefs.getString("added_apps", null)
-//        return if (!json.isNullOrEmpty()) {
-//            val type = object : TypeToken<List<String>>() {}.type
-//            gson.fromJson(json, type)
-//        } else {
-//            emptyList()
-//        }
-//    }
 }
 
 

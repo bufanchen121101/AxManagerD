@@ -189,6 +189,7 @@ fun NewPatchScreen(
     val lines = if (mine) logLines else emptyList()
     val hasError = lines.any { it.level == android.util.Log.ERROR }
     val copied = stringResource(R.string.patch_log_copied)
+    val busyMessage = stringResource(R.string.patch_busy)
 
     if (request == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -291,7 +292,11 @@ fun NewPatchScreen(
                 request = request,
                 onPatch = {
                     logExpanded = false
-                    PatchJobHost.start(request)
+                    if (PatchJobHost.busy) {
+                        scope.launch { snackbarHost.showSnackbar(busyMessage) }
+                    } else {
+                        PatchJobHost.start(request)
+                    }
                 },
                 onInstall = { PatchJobHost.install() },
                 onUninstallAndInstall = { PatchJobHost.install(uninstallFirst = true) },
