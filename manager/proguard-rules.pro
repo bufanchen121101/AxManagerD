@@ -1,111 +1,98 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ============================================================
+# AxManager release R8 rules
+# ============================================================
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
-
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
-
-##---------------Begin: proguard configuration for Gson  ----------
-# Gson uses generic type information stored in a class file when working with fields. Proguard
-# removes such information by default, so configure it to keep all of it.
+# ---------- 1. 属性 ----------
 -keepattributes Signature
-
-# For using GSON @Expose annotation
 -keepattributes *Annotation*
+-keepattributes InnerClasses,EnclosingMethod
+-keepattributes RuntimeVisibleAnnotations,RuntimeVisibleParameterAnnotations
+-renamesourcefileattribute SourceFile
 
-# Gson specific classes
--dontwarn sun.misc.**
-#-keep class com.google.gson.stream.** { *; }
-
-# Application classes that will be serialized/deserialized over Gson
--keep class com.google.gson.examples.android.model.** { <fields>; }
-
-# Prevent proguard from stripping interface information from TypeAdapter, TypeAdapterFactory,
-# JsonSerializer, JsonDeserializer instances (so they can be used in @JsonAdapter)
--keep class * extends com.google.gson.TypeAdapter
--keep class * implements com.google.gson.TypeAdapterFactory
--keep class * implements com.google.gson.JsonSerializer
--keep class * implements com.google.gson.JsonDeserializer
-
-# Prevent R8 from leaving Data object members always null
+# ---------- 2. Gson 反序列化模型 ----------
+-keep class org.lsposed.lspatch.data.model.** { *; }
+-keep class org.lsposed.lspatch.data.repository.** { *; }
+-keep class frb.axeron.manager.ui.webui.** { *; }
+-keep class com.google.gson.** { *; }
+-keep class com.google.gson.reflect.TypeToken { *; }
+-keep class * extends com.google.gson.reflect.TypeToken
 -keepclassmembers,allowobfuscation class * {
-  @com.google.gson.annotations.SerializedName <fields>;
+    @com.google.gson.annotations.SerializedName <fields>;
 }
+-keepclassmembers enum * { *; }
 
-# Retain generic signatures of TypeToken and its subclasses with R8 version 3.0 and higher.
--keep,allowobfuscation,allowshrinking class com.google.gson.reflect.TypeToken
--keep,allowobfuscation,allowshrinking class * extends com.google.gson.reflect.TypeToken
+# ---------- 3. 反射 / AIDL / Shizuku ----------
+-keep class rikka.shizuku.** { *; }
+-keep class moe.shizuku.** { *; }
+-keep class rikka.hidden.** { *; }
+-keep class rikka.rish.** { *; }
+-keep class frb.axeron.** { *; }
+-keep class **.Stub { *; }
+-keep class **$Stub { *; }
+-keep class **$Proxy { *; }
+-keep class * implements android.os.IInterface { *; }
 
-##---------------End: proguard configuration for Gson  ----------
-
+# ---------- 4. Parcelable ----------
 -keep class * implements android.os.Parcelable {
     public static final android.os.Parcelable$Creator *;
 }
-
 -keepnames class * implements android.os.Parcelable
 
+# ---------- 5. 组件 ----------
+-keep public class * extends android.app.Activity
+-keep public class * extends android.app.Service
+-keep public class * extends android.content.BroadcastReceiver
+-keep public class * extends android.content.ContentProvider
+-keep public class * extends android.app.Application
+-keep public class * extends android.app.admin.DeviceAdminReceiver
+-keep public class * extends android.service.quicksettings.TileService
+-keep class frb.axeron.manager.owner.** { *; }
 
+# ---------- 6. LSPatch ----------
+-keep class org.lsposed.lspatch.** { *; }
+-keep class org.lsposed.lspd.** { *; }
+-dontwarn org.lsposed.**
+
+# ---------- 7. native ----------
 -keepclasseswithmembernames,includedescriptorclasses class * {
     native <methods>;
 }
-
--assumenosideeffects class kotlin.jvm.internal.Intrinsics {
-	public static void check*(...);
-	public static void throw*(...);
+-keepclassmembers class * {
+    native <methods>;
 }
 
--assumenosideeffects class java.util.Objects{
-    ** requireNonNull(...);
+# ---------- 8. Kotlin / Compose / Room ----------
+-keep class kotlin.Metadata { *; }
+-keepclassmembers class **$WhenMappings { <fields>; }
+-keepclassmembers class kotlin.Metadata { public <methods>; }
+-dontwarn kotlin.**
+-keep class kotlinx.coroutines.** { *; }
+-dontwarn kotlinx.coroutines.**
+-keep class androidx.compose.runtime.** { *; }
+-dontwarn androidx.compose.**
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
+-keep @androidx.room.Entity class * { *; }
+
+# ---------- 9. 第三方 ----------
+-keep class org.topjohnwu.** { *; }
+-keep class com.topjohnwu.** { *; }
+-dontwarn org.topjohnwu.**
+-keep class com.google.android.material.** { *; }
+-dontwarn com.google.android.material.**
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
 }
 
-#-keep class com.frb.engine.Starter {
-#    public static void main(java.lang.String[]);
-#}
-
--keepattributes SourceFile,LineNumberTable
--renamesourcefileattribute SourceFile
-
-##---------------Begin: LSPatch (AXMD) 移植 keep 规则 ----------
-# 框架 IPC 表面跨 Binder 到 patched app，其 loader 未混淆，必须保持 AIDL 接口签名
--keep class org.matrix.vector.ipc.** { *; }
--keep class org.lsposed.lspatch.IShizukuService { *; }
-# Room 数据库实体/DAO 必须保持（R8 否则破坏 schema 与 Room 运行时反射）
--keep class org.lsposed.lspatch.database.** { *; }
-# Gson 序列化的 DTO（PatchRequest/PatchMode/PatchStep/ModuleBinding 等），避免 nd2.c() 反序列化崩溃
--keep class org.lsposed.lspatch.data.model.** { *; }
--keep class org.lsposed.lspatch.share.** { *; }
--keep class org.lsposed.lspatch.Patcher$Options { *; }
--keep class org.lsposed.lspatch.share.LSPConfig { *; }
--keep class org.lsposed.lspatch.share.PatchConfig { *; }
-# 注入引擎核心类，避免字段被混淆导致 LSPatch 反射读取失败
--keepclassmembers class org.lsposed.patch.LSPatch {
-    private <fields>;
-}
-# Shizuku / refine / hiddenapi 相关
--keep class rikka.shizuku.** { *; }
--keep class moe.shizuku.** { *; }
--dontwarn org.lsposed.hiddenapibypass.**
--keep class org.lsposed.hiddenapibypass.** { *; }
-# apkzlib / meditor / manifesto 编辑库（纯 Java，反射读取）
--keep class com.android.tools.build.apkzlib.** { *; }
--keep class com.wind.meditor.** { *; }
--keep class pxb.android.** { *; }
--keep class pxb.android.axml.** { *; }
--dontwarn com.google.auto.value.AutoValue$Builder
--dontwarn com.google.auto.value.AutoValue
-##---------------End: LSPatch keep 规则 ----------
+# ---------- 10. dontwarn ----------
+-dontwarn android.app.**
+-dontwarn android.content.**
+-dontwarn android.os.**
+-dontwarn android.view.**
+-dontwarn android.hardware.**
+-dontwarn android.permission.**
+-dontwarn com.android.**
+-dontwarn android.ddm.**
+-dontwarn java.lang.management.**
+-dontwarn org.slf4j.**
+-dontwarn org.jetbrains.annotations.**
