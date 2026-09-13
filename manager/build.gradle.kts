@@ -123,4 +123,5 @@ dependencies {
     implementation(libs.sheet.compose.dialogs.core)
     implementation(libs.sheet.compose.dialogs.list)
     implementation(libs.sheet.compose.dialogs.input)
+    implementation(libs.haze)
 }
