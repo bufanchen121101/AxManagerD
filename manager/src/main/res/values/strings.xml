@@ -593,4 +593,8 @@
     <string name="dhizuku_permission_allow">Allow API</string>
     <string name="dhizuku_permission_blocked">Blocked</string>
     <string name="dhizuku_permission_remove">Remove</string>
+    <string name="ai_security_engine">AI Security Engine</string>
+    <string name="ai_security_engine_desc">Micro analysis model, cloud AI and decision prompts</string>
+    <string name="danger_code_library">Danger code library</string>
+    <string name="danger_code_library_desc">View and edit built-in / custom danger rules</string>
 </resources>

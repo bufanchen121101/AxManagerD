@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Adb
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Coffee
+import androidx.compose.material.icons.filled.Dangerous
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderDelete
 import androidx.compose.material.icons.filled.Palette
@@ -73,7 +74,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.rememberLifecycleOwner
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
+import com.ramcosta.composedestinations.generated.destinations.AIMainScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.AppearanceScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.DangerCodeScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.DeveloperScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.SettingsEditorScreenDestination
@@ -316,6 +319,25 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 }
             )
 
+
+            // AI 安全引擎入口（置于「自动重载」上方，便于快速进入）
+            SettingsItem(
+                iconVector = Icons.Filled.Security,
+                label = stringResource(R.string.ai_security_engine),
+                description = stringResource(R.string.ai_security_engine_desc),
+                onClick = {
+                    navigator.navigate(AIMainScreenDestination)
+                }
+            )
+            // 危险代码库入口：查看并编辑内置 / 自定义危险规则
+            SettingsItem(
+                iconVector = Icons.Filled.Dangerous,
+                label = stringResource(R.string.danger_code_library),
+                description = stringResource(R.string.danger_code_library_desc),
+                onClick = {
+                    navigator.navigate(DangerCodeScreenDestination)
+                }
+            )
 
             SettingsItem(
                 iconVector = Icons.Filled.Refresh,

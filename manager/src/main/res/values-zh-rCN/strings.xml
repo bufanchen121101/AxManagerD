@@ -587,4 +587,8 @@
     <string name="dhizuku_permission_allow">允许 API</string>
     <string name="dhizuku_permission_blocked">已拦截</string>
     <string name="dhizuku_permission_remove">移除</string>
+    <string name="ai_security_engine">AI 安全引擎</string>
+    <string name="ai_security_engine_desc">微型分析模型、云端 AI 与拦截决策弹窗</string>
+    <string name="danger_code_library">危险代码库</string>
+    <string name="danger_code_library_desc">查看并编辑内置 / 自定义危险规则</string>
 </resources>

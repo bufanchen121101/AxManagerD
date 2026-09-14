@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
@@ -155,11 +156,44 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
 
     var showExtraDialog by remember { mutableStateOf(false) }
 
+    // 终端 AI 助手面板开关（右下角 AI 悬浮按钮唤起）
+    var showAiSheet by remember { mutableStateOf(false) }
+
     ExtraSettings(
         showExtraDialog,
         viewModel,
     ) {
         showExtraDialog = false
+    }
+
+    // 终端 AI 助手：只回答 Shell/命令/系统排障/本应用功能类问题
+    if (showAiSheet) {
+        TerminalAiSheet(
+            onDismiss = { showAiSheet = false },
+            onInsertCommand = { cmd ->
+                if (cmd.isNotBlank()) {
+                    viewModel.setCommand(
+                        androidx.compose.ui.text.input.TextFieldValue(
+                            text = cmd,
+                            selection = androidx.compose.ui.text.TextRange(cmd.length),
+                        )
+                    )
+                    showAiSheet = false
+                }
+            },
+            terminalContext = {
+                // 把最近若干行终端输出 + 最近一次命令作为上下文交给 AI
+                val tail = logs.takeLast(40).joinToString("\n") { it.output }
+                val lastCmd = viewModel.snapshotLastCommand()
+                buildString {
+                    if (lastCmd.isNotBlank()) appendLine("最近执行的命令：$lastCmd")
+                    if (tail.isNotBlank()) {
+                        appendLine("最近的终端输出：")
+                        append(tail.take(3000))
+                    }
+                }.trim()
+            },
+        )
     }
 
 
@@ -186,18 +220,33 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
             )
         },
         floatingActionButton = {
-            AnimatedVisibility(
-                visible = fabVisible && logs.isNotEmpty(),
-                enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
-                exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                val context = LocalContext.current
-                FloatingActionButton(onClick = {
-                    scope.launch {
-                        saveLogsToDownload(context, logs, snackBarHost)
+                // 保存日志（仅在终端有输出时出现）
+                AnimatedVisibility(
+                    visible = fabVisible && logs.isNotEmpty(),
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+                ) {
+                    val context = LocalContext.current
+                    FloatingActionButton(onClick = {
+                        scope.launch {
+                            saveLogsToDownload(context, logs, snackBarHost)
+                        }
+                    }) {
+                        Icon(Icons.Default.Save, contentDescription = stringResource(R.string.save))
                     }
-                }) {
-                    Icon(Icons.Default.Save, contentDescription = stringResource(R.string.save))
+                }
+
+                // 终端 AI 助手（常驻，右下角）
+                FloatingActionButton(
+                    onClick = { showAiSheet = true },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ) {
+                    Icon(Icons.Filled.AutoAwesome, contentDescription = "终端 AI 助手")
                 }
             }
         },

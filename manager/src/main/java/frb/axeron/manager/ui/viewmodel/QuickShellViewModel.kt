@@ -160,6 +160,12 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
         commandText = text
     }
 
+    // 最近一次执行过的命令快照，供终端 AI 助手获取上下文（只读）
+    private var lastCommandSnapshot: String = ""
+
+    /** 获取最近一次执行的命令（只读），用于终端 AI 助手上下文。 */
+    fun snapshotLastCommand(): String = lastCommandSnapshot
+
     fun clear() {
         //make a toggle state
         clear = !clear
@@ -224,6 +230,7 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
 
+        lastCommandSnapshot = cmd
         session.runCommand(cmd, isCompatModeEnabled)
     }
 
@@ -236,6 +243,7 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
 
+        lastCommandSnapshot = cmd
         runDhizukuInternal(cmd)
     }
 
