@@ -10,7 +10,6 @@ import androidx.lifecycle.Observer
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
-import java.net.ServerSocket
 
 class AdbMdns(
     context: Context, private val serviceType: String,
@@ -87,13 +86,24 @@ class AdbMdns(
         }
     }
 
-    private fun isPortAvailable(port: Int) = try {
-        ServerSocket().use {
-            it.bind(InetSocketAddress("127.0.0.1", port), 1)
-            false
-        }
-    } catch (e: IOException) {
+    /**
+     * 【v1.6.3 修复】判断 mDNS 发现的端口是否「真的已经在本机监听」。
+     *
+     * 原实现用的是 `ServerSocket().bind(127.0.0.1, port)` —— 即「端口能否被我占用」，
+     * 只有**没被占用**才算通过。但无线调试场景下，这个端口**正是 adbd 自己占着**的，
+     * 于是 bind 必然抛「Address already in use」→ 返回 true，看起来也能通过。
+     *
+     * 问题在于开机早期：此时 adbd 还没起来，端口无人占用 → bind 成功 → 返回 false
+     * → 走「重启 discovery」分支，一直空转到 45s 超时。也就是说这个判定在开机时刻
+     * 恰好把「adbd 已就绪」判成不可用。（本工程开机自启动的另一个卡点。）
+     *
+     * 改为直接**尝试连接**：能连上就说明确实有服务在监听（adbd）→ 可用。
+     */
+    private fun isPortAvailable(port: Int): Boolean = try {
+        java.net.Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 300) }
         true
+    } catch (e: IOException) {
+        false
     }
 
     internal class DiscoveryListener(private val adbMdns: AdbMdns) : NsdManager.DiscoveryListener {

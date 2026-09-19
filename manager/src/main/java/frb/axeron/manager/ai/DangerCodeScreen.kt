@@ -22,16 +22,22 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -79,6 +85,10 @@ fun DangerCodeScreen(navigator: DestinationsNavigator) {
     // 触发刷新规则列表
     var refreshKey by remember { mutableStateOf(0) }
     val extraRules = remember(refreshKey) { RuleEngine.getExtraRules() }
+
+    // 规则编辑器状态：showEditor=是否显示对话框；editingRule=null 表示新建，非 null 表示编辑
+    var showEditor by remember { mutableStateOf(false) }
+    var editingRule by remember { mutableStateOf<RuleEngine.Rule?>(null) }
 
     val scope = rememberCoroutineScope()
 
@@ -132,6 +142,14 @@ fun DangerCodeScreen(navigator: DestinationsNavigator) {
                 onSwitchChange = { RuleEngine.setBuiltinEnabled(it) },
             )
 
+            // 新建规则（用户手动添加，避免想要的危险代码被直接拦截却无处放行）
+            SettingsItem(
+                iconVector = Icons.Filled.Add,
+                label = "新建规则",
+                description = "手动添加一条危险规则（可自定义名称、正则、风险等级）",
+                onClick = { editingRule = null; showEditor = true },
+            )
+
             // 导入
             SettingsItem(
                 iconVector = Icons.Filled.Upload,
@@ -174,6 +192,10 @@ fun DangerCodeScreen(navigator: DestinationsNavigator) {
                         name = rule.name,
                         pattern = rule.pattern.pattern,
                         risk = rule.risk,
+                        onEdit = {
+                            editingRule = rule
+                            showEditor = true
+                        },
                         onDelete = {
                             RuleEngine.removeExtraRule(rule.name)
                             refreshKey++
@@ -183,6 +205,101 @@ fun DangerCodeScreen(navigator: DestinationsNavigator) {
             }
         }
     }
+
+    // 规则编辑对话框（新建 / 编辑）
+    if (showEditor) {
+        RuleEditorDialog(
+            initial = editingRule,
+            onDismiss = { showEditor = false },
+            onSave = { name, pattern, risk ->
+                val regex = runCatching { Regex(pattern) }.getOrNull()
+                if (regex == null) {
+                    Toast.makeText(context, "正则表达式无效，请检查语法", Toast.LENGTH_SHORT).show()
+                    return@RuleEditorDialog
+                }
+                RuleEngine.upsertRule(RuleEngine.Rule(name, regex, risk))
+                refreshKey++
+                showEditor = false
+                Toast.makeText(context, "已保存规则：$name", Toast.LENGTH_SHORT).show()
+            },
+        )
+    }
+}
+
+/**
+ * 规则编辑对话框：新建或编辑一条自定义危险规则。
+ *
+ * @param initial 非 null 表示编辑已有规则（预填内容），null 表示新建。
+ */
+@Composable
+private fun RuleEditorDialog(
+    initial: RuleEngine.Rule?,
+    onDismiss: () -> Unit,
+    onSave: (name: String, pattern: String, risk: Risk) -> Unit,
+) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var pattern by remember { mutableStateOf(initial?.pattern?.pattern ?: "") }
+    var risk by remember { mutableStateOf(initial?.risk ?: Risk.MEDIUM) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial == null) "新建危险规则" else "编辑危险规则") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("规则名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = pattern,
+                    onValueChange = { pattern = it },
+                    label = { Text("匹配正则表达式") },
+                    supportingText = { Text("例如：rm\\s+-rf\\s+/ ") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("风险等级", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Risk.entries.forEach { r ->
+                        FilterChip(
+                            selected = risk == r,
+                            onClick = { risk = r },
+                            label = { Text(riskLabel(r)) },
+                        )
+                    }
+                }
+                Text(
+                    text = "提示：标记为「高」的规则命中后会【直接拦截】，不再询问。" +
+                        "若你确实想执行某段被内置规则拦截的代码，可在此把对应操作加" +
+                        "为自定义规则并调低等级，或直接关闭上方「内置危险代码库」。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (name.isBlank() || pattern.isBlank()) return@TextButton
+                    onSave(name.trim(), pattern.trim(), risk)
+                },
+                enabled = name.isNotBlank() && pattern.isNotBlank(),
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+private fun riskLabel(risk: Risk): String = when (risk) {
+    Risk.SAFE -> "安全"
+    Risk.LOW -> "低"
+    Risk.MEDIUM -> "中"
+    Risk.HIGH -> "高"
 }
 
 @Composable
@@ -190,6 +307,7 @@ private fun RuleItem(
     name: String,
     pattern: String,
     risk: Risk,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val riskColor = riskColor(risk)
@@ -219,6 +337,9 @@ private fun RuleItem(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        IconButton(onClick = onEdit) {
+            Icon(Icons.Filled.Edit, contentDescription = "编辑", tint = MaterialTheme.colorScheme.primary)
         }
         IconButton(onClick = onDelete) {
             Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
@@ -272,22 +393,34 @@ suspend fun importRules(
 
         val arr = JSONArray(text)
         var count = 0
+        var skipped = 0
         for (i in 0 until arr.length()) {
-            val obj = arr.getJSONObject(i)
+            val obj = arr.optJSONObject(i)
+            if (obj == null) { skipped++; continue }
             val name = obj.optString("name")
             val pattern = obj.optString("pattern")
             val riskName = obj.optString("risk", "MEDIUM")
-            if (name.isBlank() || pattern.isBlank()) continue
+            if (name.isBlank() || pattern.isBlank()) { skipped++; continue }
             val risk = try {
-                Risk.valueOf(riskName)
+                Risk.valueOf(riskName.trim().uppercase())
             } catch (e: IllegalArgumentException) {
                 Risk.MEDIUM
             }
-            RuleEngine.addRule(RuleEngine.Rule(name, Regex(pattern), risk))
+            // 非法正则不能直接 Regex()，否则会中断整个导入；这里逐条校验并跳过。
+            val regex = try {
+                Regex(pattern)
+            } catch (e: Exception) {
+                skipped++
+                continue
+            }
+            RuleEngine.addRule(RuleEngine.Rule(name, regex, risk))
             count++
         }
-        onResult(true, "成功导入 $count 条规则")
+        val suffix = if (skipped > 0) "，跳过 $skipped 条无效规则" else ""
+        // 回调必须回主线程：onResult 内部会操作 Toast / Compose state，
+        // 在 Dispatchers.IO 线程直接调用会导致 UI 线程违规而崩溃。
+        withContext(Dispatchers.Main) { onResult(true, "成功导入 $count 条规则$suffix") }
     } catch (e: Exception) {
-        onResult(false, "导入失败：${e.message}")
+        withContext(Dispatchers.Main) { onResult(false, "导入失败：${e.message}") }
     }
 }

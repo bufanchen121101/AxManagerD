@@ -18,9 +18,10 @@ import java.lang.reflect.Method
  * Dhizuku 自己的 DeviceAdminReceiver（[ownerComponent]），而不是 AxManager 的 Receiver，
  * 否则 system_server 会抛 SecurityException。
  *
- * 提供三级路由的 shell 命令解析（供模块的 action.sh 通过 `axeron-dpm` 调用）：
- * - 第一级：标准 DPM 公开 API（hide / unhide）
- * - 第二级：隐藏 API 包装（force-stop / uninstall，占位）
+ * 提供三级路由的 shell 命令解析（`axeron-dpm` 调用）：
+ * - 第一级：标准 DPM 公开 API（hide / unhide / suspend / grant / org-name / camera / keyguard /
+ *   statusbar / user-restrict / lock-task / wipe 等）
+ * - 第二级：隐藏 API 包装（force-stop / uninstall）
  * - 第三级：拒绝名单（mount / chmod ... 返回需 root 提示）
  */
 object DeviceOwnerPrivilege {
@@ -155,7 +156,7 @@ object DeviceOwnerPrivilege {
      */
     fun execute(context: Context, args: List<String>): Pair<Int, String> {
         if (args.isEmpty()) {
-            return 1 to "Usage: axeron-dpm <hide|unhide|suspend|unsuspend|set-anim|set-global|set-secure|cleardata|grant|deny|block-uninstall|unblock-uninstall|reboot|locknow|force-stop|uninstall> ..."
+            return 1 to "Usage: axeron-dpm <hide|unhide|suspend|unsuspend|set-anim|set-global|set-secure|cleardata|grant|deny|block-uninstall|unblock-uninstall|reboot|locknow|org-name|lock-task|camera|keyguard|statusbar|user-restrict|clear-user-restrict|install-apps|wipe|force-stop|uninstall> ..."
         }
         val dpm = getDeviceOwnerDpm(context) ?: return 1 to "Error: Device Owner not active"
         // admin 选择：自我 DO 场景下（本进程就是 Owner）直接用 DeviceOwnerState.admin；
@@ -179,6 +180,15 @@ object DeviceOwnerPrivilege {
                 "unblock-uninstall" -> level1SetUninstallBlocked(dpm, admin, args, false)
                 "reboot" -> level1Reboot(dpm, admin)
                 "locknow" -> level1LockNow(dpm)
+                "org-name" -> level1SetOrganizationName(dpm, admin, args)
+                "lock-task" -> level1SetLockTaskPackages(dpm, admin, args)
+                "camera" -> level1SetCameraDisabled(dpm, admin, args)
+                "keyguard" -> level1SetKeyguardDisabled(dpm, admin, args)
+                "statusbar" -> level1SetStatusBarDisabled(dpm, admin, args)
+                "user-restrict" -> level1UserRestriction(dpm, admin, args, true)
+                "clear-user-restrict" -> level1UserRestriction(dpm, admin, args, false)
+                "install-apps" -> level1SetInstallApps(dpm, admin, args)
+                "wipe" -> level1WipeData(dpm, admin, args)
                 "force-stop" -> level2ForceStop(context, args)
                 "uninstall" -> level2Uninstall(context, args)
                 "mount", "chmod", "chown", "insmod", "rmmod" -> level3Reject(command)
@@ -297,7 +307,130 @@ object DeviceOwnerPrivilege {
         dpm.lockNow()
         return 0 to "Success: locked"
     }
-// ---------- 第二级：隐藏 API（经 Dhizuku 提升的 system_server binder 反射调用） ----------
+
+    /**
+     * org-name [name]：设置「组织名称」（锁屏 "This device belongs to <name>" 中的 <name>）。
+     *
+     * 这是**唯一**能自定义锁屏托管提示里组织名的公开 API（API 24/26+）。
+     * 不传参数或传空串则清除（锁屏回退为系统默认文案）。
+     */
+    private fun level1SetOrganizationName(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>): Pair<Int, String> {
+        val name = if (args.size >= 2) args[1] else ""
+        return try {
+            dpm.setOrganizationName(admin, name)
+            if (name.isEmpty()) {
+                0 to "Success: organization name cleared"
+            } else {
+                0 to "Success: organization name set to '$name'"
+            }
+        } catch (e: Exception) {
+            LOGGER.w("level1SetOrganizationName failed", e)
+            4 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** lock-task <package|clear>：设置 LockTask（Kiosk 固定任务）包名单。 */
+    private fun level1SetLockTaskPackages(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>): Pair<Int, String> {
+        if (args.size < 2) return 1 to "Usage: axeron-dpm lock-task <package|clear> [package2 ...]"
+        val packages = if (args[1] == "clear") {
+            emptyArray()
+        } else {
+            args.subList(1, args.size).toTypedArray()
+        }
+        return try {
+            dpm.setLockTaskPackages(admin, packages)
+            if (packages.isEmpty()) 0 to "Success: lock task packages cleared"
+            else 0 to "Success: lock task packages = ${packages.joinToString(" ")}"
+        } catch (e: Exception) {
+            LOGGER.w("level1SetLockTaskPackages failed", e)
+            4 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** camera on|off：启用/禁用摄像头。 */
+    private fun level1SetCameraDisabled(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>): Pair<Int, String> {
+        if (args.size < 2) return 1 to "Usage: axeron-dpm camera <on|off>"
+        val disable = args[1].equals("off", true) || args[1] == "0" || args[1] == "false"
+        return try {
+            dpm.setCameraDisabled(admin, disable)
+            0 to "Success: camera ${if (disable) "disabled" else "enabled"}"
+        } catch (e: Exception) {
+            LOGGER.w("level1SetCameraDisabled failed", e)
+            4 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** keyguard on|off：启用/禁用锁屏（关闭锁屏时界面更接近 Kiosk）。 */
+    private fun level1SetKeyguardDisabled(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>): Pair<Int, String> {
+        if (args.size < 2) return 1 to "Usage: axeron-dpm keyguard <on|off>"
+        val disable = args[1].equals("off", true) || args[1] == "0" || args[1] == "false"
+        return try {
+            dpm.setKeyguardDisabled(admin, disable)
+            0 to "Success: keyguard ${if (disable) "disabled" else "enabled"}"
+        } catch (e: Exception) {
+            LOGGER.w("level1SetKeyguardDisabled failed", e)
+            4 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** statusbar on|off：启用/禁用状态栏。 */
+    private fun level1SetStatusBarDisabled(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>): Pair<Int, String> {
+        if (args.size < 2) return 1 to "Usage: axeron-dpm statusbar <on|off>"
+        val disable = args[1].equals("off", true) || args[1] == "0" || args[1] == "false"
+        return try {
+            dpm.setStatusBarDisabled(admin, disable)
+            0 to "Success: status bar ${if (disable) "disabled" else "enabled"}"
+        } catch (e: Exception) {
+            LOGGER.w("level1SetStatusBarDisabled failed", e)
+            4 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** user-restrict/clear-user-restrict <restriction>：添加/清除用户限制（DISALLOW_*）。 */
+    private fun level1UserRestriction(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>, add: Boolean): Pair<Int, String> {
+        val cmd = if (add) "user-restrict" else "clear-user-restrict"
+        if (args.size < 2) return 1 to "Usage: axeron-dpm $cmd <restriction>"
+        val restriction = args[1]
+        return try {
+            if (add) dpm.addUserRestriction(admin, restriction)
+            else dpm.clearUserRestriction(admin, restriction)
+            0 to "Success: ${if (add) "added" else "cleared"} restriction $restriction"
+        } catch (e: Exception) {
+            LOGGER.w("level1UserRestriction failed", e)
+            4 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** install-apps on|off：允许/禁止安装应用（DISALLOW_INSTALL_APPS 用户限制）。 */
+    private fun level1SetInstallApps(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>): Pair<Int, String> {
+        if (args.size < 2) return 1 to "Usage: axeron-dpm install-apps <on|off>"
+        val allow = args[1].equals("on", true) || args[1] == "1" || args[1] == "true"
+        return try {
+            if (allow) {
+                dpm.clearUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_APPS)
+            } else {
+                dpm.addUserRestriction(admin, android.os.UserManager.DISALLOW_INSTALL_APPS)
+            }
+            0 to "Success: installing apps ${if (allow) "allowed" else "disallowed"}"
+        } catch (e: Exception) {
+            LOGGER.w("level1SetInstallApps failed", e)
+            4 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** wipe [flags]：恢复出厂设置（危险）。flags 默认 0。 */
+    private fun level1WipeData(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>): Pair<Int, String> {
+        val flags = args.getOrNull(1)?.toIntOrNull() ?: 0
+        return try {
+            dpm.wipeData(flags)
+            0 to "Success: wipe requested (flags=$flags)"
+        } catch (e: Exception) {
+            LOGGER.w("level1WipeData failed", e)
+            4 to "Error: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    // ---------- 第二级：隐藏 API（经 Dhizuku 提升的 system_server binder 反射调用） ----------
     private fun level2ForceStop(context: Context, args: List<String>): Pair<Int, String> {
         if (args.size < 2) return 1 to "Usage: axeron-dpm force-stop <package>"
         val pkg = args[1]

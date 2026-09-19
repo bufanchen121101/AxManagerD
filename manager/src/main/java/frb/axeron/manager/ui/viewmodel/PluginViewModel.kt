@@ -116,9 +116,23 @@ class PluginViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     var pluginInstalers by mutableStateOf<List<PluginInstaller>>(emptyList())
-
     fun updateZipUris(installers: List<PluginInstaller>) {
         pluginInstalers = installers
+    }
+
+    /**
+     * 本次安装是否以「运行时模块」为目标。
+     *
+     * 为什么不直接用 [PluginInstaller.runtimeModule]：该对象要经导航参数 Parcel
+     * 往返一次，实际出现过字段丢失导致装进 plugins/ 的情况。这里用一个进程内的
+     * 标志位做冗余传递，Flash 页以它为准。
+     */
+    var installRuntimeTarget by mutableStateOf(false)
+        private set
+
+    /** 设置安装目标（运行时模块 / 普通 shell 模块）。 */
+    fun updateInstallRuntimeTarget(runtime: Boolean) {
+        installRuntimeTarget = runtime
     }
 
     fun clearZipUris() {

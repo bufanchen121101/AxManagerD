@@ -250,6 +250,10 @@
     <string name="device_owner_revoked">已撤销设备所有者权限</string>
     <string name="device_owner_revoke_failed">撤销失败（可能无需撤销或权限不允许）</string>
     <string name="profile_owner_active">工作资料所有者已激活</string>
+    <string name="device_owner_not_active">设备所有者未激活</string>
+    <string name="port_boot_start">端口自启动</string>
+    <string name="port_boot_start_desc">使用已保存的固定端口直接连接。重启后点一下即可一步激活。</string>
+    <string name="port_boot_start_no_port">尚未保存固定端口，请先在设置里打开「设备所有者自启动」。</string>
     <string name="profile_owner_via_command">通过指令激活资料所有者</string>
     <string name="profile_owner_via_command_desc">部分机型不支持设备所有者。可改用此方式激活为「资料所有者（Profile Owner）」，能获得一部分设备管理能力。</string>
     <string name="device_owner_type_label">所有者类型</string>
@@ -569,8 +573,9 @@
     <string name="command_block_empty">命令为空。</string>
     <string name="command_block_unsupported">此命令不可执行，已拦截。</string>
     <string name="command_block_dangerous">此命令有危险，已拦截。</string>
-    <string name="module_keep_alive">模块进程保活</string>
-    <string name="module_keep_alive_desc">每 5 分钟检查一次模块（Axeron 服务）是否仍在运行。若已停止，则通过运行中的保活服务自动重启。</string>
+    <!-- module_keep_alive: removed -->
+    <string name="do_keep_alive">设备所有者保活加固</string>
+    <string name="do_keep_alive_desc">利用设备所有者（Device Owner）权限降低被系统冻结、回收的概率（放宽电池优化与应用待机）。仅在手机已授予本应用「设备所有者」权限时生效；其他情况下打开此开关不会报错，也不会有任何作用。</string>
     <string name="axmanagerd_modules">AxManagerD 模块</string>
     <string name="axmanagerd_modules_desc">此链接内的模块都是经过官方测试的模块</string>
     <string name="plugin_compat">插件兼容</string>
@@ -587,8 +592,62 @@
     <string name="dhizuku_permission_allow">允许 API</string>
     <string name="dhizuku_permission_blocked">已拦截</string>
     <string name="dhizuku_permission_remove">移除</string>
+    <string name="owner_privilege_active">设备所有者特权已激活（Dhizuku 转发）</string>
+    <string name="device_owner_remove_title">移除设备所有者</string>
+    <string name="device_owner_remove_desc">直接在应用内解除设备所有者特权（与官方 Dhizuku 应用做法一致），无需 adb 或 root。</string>
+    <string name="device_owner_remove_button">移除设备所有者</string>
+    <string name="device_owner_removing">正在移除…</string>
+    <string name="device_owner_removed">设备所有者已移除，应用恢复为普通权限运行。</string>
+    <string name="device_owner_remove_failed">移除失败：%s。可尝试下方的兜底指令。</string>
+    <string name="device_owner_remove_confirm_message">此操作将解除 AxManager 的设备所有者特权，部分高级功能在重新激活前将不可用。确定继续？</string>
+    <string name="device_owner_fallback_show">显示兜底指令</string>
+    <string name="device_owner_fallback_hide">隐藏兜底指令</string>
+    <string name="device_owner_remove_fallback_desc">若应用内移除在你的设备上无效，可在 adb shell 中执行以下指令，然后重启 AxManager 以刷新状态。</string>
+    <string name="device_owner_remove_fallback_command">adb shell dpm remove-active-admin %s/%s</string>
+    <string name="device_owner_remove_command">兜底指令</string>
+    <!-- Device Owner 增强激活（用设备所有者替代 ADB 激活） -->
+    <string name="activate_by_owner">通过设备所有者激活</string>
+    <string name="activate_by_owner_desc">把 AxManager 设为设备所有者，让它自行打开 ADB 并通过 127.0.0.1 回连。此方式替代电脑 ADB 激活，只需设置一次。</string>
+    <string name="owner_activate_prereq_title">第 1 步 · 将 AxManager 设为设备所有者</string>
+    <string name="owner_activate_prereq_desc">在电脑（或已有的 shell）中执行一次以下指令：</string>
+    <string name="owner_activate_adb_title">第 2 步 · 打开 ADB 并连接</string>
+    <string name="owner_activate_adb_desc">AxManager 将以设备所有者权限打开 ADB（含无线调试），重启 adbd 进入 TCP 模式，然后连接 127.0.0.1 获取 shell。</string>
+    <string name="owner_activate_start">打开 ADB 并激活</string>
+    <string name="owner_activate_running">正在打开 ADB…</string>
+    <string name="owner_activate_need_owner">需要设备所有者权限，请先完成第 1 步。</string>
+    <string name="owner_activate_ready">已检测到设备所有者，可以激活。</string>
+    <string name="owner_activate_success">已通过设备所有者激活。</string>
+    <string name="owner_activate_failed">激活失败：%s</string>
+    <string name="owner_activate_no_port">打开 ADB 后未能检测到 ADB TCP 端口。</string>
+    <string name="owner_activate_tcp_port">ADB TCP 端口：%d</string>
+    <string name="liquid_glass_title">底边栏美化</string>
+    <string name="liquid_glass_desc"></string>
+    <string name="liquid_glass_requires_13"></string>
+    <string name="liquid_glass_press_title">液态按压效果</string>
+    <string name="liquid_glass_press_desc">按压玻璃控件时轻微鼓起并增强高光。</string>
+
+    <!-- AI 安全引擎 / 危险代码库（设置页入口） -->
     <string name="ai_security_engine">AI 安全引擎</string>
     <string name="ai_security_engine_desc">微型分析模型、云端 AI 与拦截决策弹窗</string>
     <string name="danger_code_library">危险代码库</string>
     <string name="danger_code_library_desc">查看并编辑内置 / 自定义危险规则</string>
+    <string name="lockscreen_org">锁屏组织名称</string>
+    <string name="lockscreen_org_desc">自定义锁屏「此设备归 XX 所有」中的 XX（需设备所有者）。开启并填入名称后生效；留空则恢复系统默认文案。</string>
+    <string name="lockscreen_org_hint">组织名称</string>
+    <string name="lockscreen_org_save">应用</string>
+    <!-- 开机自动启动（无线调试预热，v1.6.1） -->
+    <string name="boot_start_switch">设备所有者自启动</string>
+    <string name="boot_start_switch_desc">开启后会生成并记住一个固定 ADB 端口。重启后设备所有者会自动保持无线调试开启，进入 AxManager 点击「激活」即可直接连接该端口，无需再搜索。需要设备所有者权限。</string>
+    <string name="boot_start_channel_name">开机启动</string>
+    <string name="boot_start_channel_desc">开机后自动恢复 AxManager 时显示进度。</string>
+    <string name="boot_start_notification_title">正在启动 AxManager</string>
+    <string name="boot_start_enabling_adb">正在打开 ADB…</string>
+    <string name="boot_start_discovering_port">正在发现无线调试端口…</string>
+    <string name="boot_start_connecting">正在连接 127.0.0.1…</string>
+    <string name="boot_start_retrying">正在重试…</string>
+    <string name="boot_start_success">AxManager 已启动。</string>
+    <string name="boot_start_failed">开机自启失败。点击打开 AxManager 手动激活。</string>
+    <string name="boot_start_autostart_title">允许自启动</string>
+    <string name="boot_start_autostart_desc">部分系统会拦截开机广播，请到自启动白名单中允许 AxManager。</string>
+    <string name="boot_start_autostart_action">打开自启动设置</string>
 </resources>

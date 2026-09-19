@@ -13,6 +13,7 @@
     <string name="privilege">Privilege</string>
     <string name="privilege_plural">Privileges</string>
     <string name="plugin">Plugin</string>
+    <string name="runtime_module">运行时模块</string>
     <string name="plugin_plural">Plugins</string>
     <string name="settings">Settings</string>
     <string name="search_label_plugin">Search Plugin</string>
@@ -255,6 +256,10 @@
     <string name="device_owner_revoked">Device Owner permission revoked</string>
     <string name="device_owner_revoke_failed">Revoke failed (may not need revoking, or permission denied)</string>
     <string name="profile_owner_active">Profile Owner Active</string>
+    <string name="device_owner_not_active">Device Owner Not Active</string>
+    <string name="port_boot_start">Port Auto Start</string>
+    <string name="port_boot_start_desc">Connect directly using the saved fixed port. Tap after a reboot to activate in one step.</string>
+    <string name="port_boot_start_no_port">No fixed port saved yet. Turn on Device Owner Auto Start in Settings first.</string>
     <string name="profile_owner_via_command">Activate Profile Owner via Command</string>
     <string name="profile_owner_via_command_desc">Some devices do not support Device Owner. Use this to activate as Profile Owner instead, which grants a subset of device management capabilities.</string>
     <string name="device_owner_type_label">Owner Type</string>
@@ -271,9 +276,9 @@
     <string name="keep_alive_title">AxManager is running</string>
     <string name="keep_alive_channel">Keep-Alive</string>
     <string name="keep_alive_channel_desc">Keeps AxManager alive in background</string>
-    <!-- Module process keep-alive -->
-    <string name="module_keep_alive">Module Process Keep-Alive</string>
-    <string name="module_keep_alive_desc">Every 5 minutes, check whether the module (Axeron server) is still running. If it has stopped, restart it automatically via the running keep-alive service.</string>
+    <!-- Module process keep-alive: removed（功能已按需求移除） -->
+    <string name="do_keep_alive">设备所有者保活加固</string>
+    <string name="do_keep_alive_desc">利用设备所有者（Device Owner）权限降低被系统冻结、回收的概率（放宽电池优化与应用待机）。仅在手机已授予本应用「设备所有者」权限时生效；其他情况下打开此开关不会报错，也不会有任何作用。</string>
     <string name="axmanagerd_modules">AxManagerD 模块</string>
     <string name="axmanagerd_modules_desc">此链接内的模块都是经过官方测试的模块</string>
     <!-- Terminal mode -->
@@ -593,8 +598,63 @@
     <string name="dhizuku_permission_allow">Allow API</string>
     <string name="dhizuku_permission_blocked">Blocked</string>
     <string name="dhizuku_permission_remove">Remove</string>
+    <string name="owner_privilege_active">Device Owner privilege active (Dhizuku forwarded)</string>
+    <string name="device_owner_remove_title">Remove Device Owner</string>
+    <string name="device_owner_remove_desc">Revoke the Device Owner privilege directly in-app (same approach as the official Dhizuku app). No adb or root required.</string>
+    <string name="device_owner_remove_button">Remove Device Owner</string>
+    <string name="device_owner_removing">Removing…</string>
+    <string name="device_owner_removed">Device Owner removed. The app is now running with normal privileges.</string>
+    <string name="device_owner_remove_failed">Removal failed: %s. You may try the fallback command below.</string>
+    <string name="device_owner_remove_confirm_message">This will revoke the Device Owner privilege of AxManager. Some advanced features may stop working until it is activated again. Continue?</string>
+    <string name="device_owner_fallback_show">Show fallback command</string>
+    <string name="device_owner_fallback_hide">Hide fallback command</string>
+    <string name="device_owner_remove_fallback_desc">If the in-app removal does not work on your device, run the following command from an adb shell, then restart AxManager to refresh the status.</string>
+    <string name="device_owner_remove_fallback_command">adb shell dpm remove-active-admin %s/%s</string>
+    <string name="device_owner_remove_command">Fallback command</string>
+    <!-- Device Owner 增强激活（用设备所有者替代 ADB 激活） -->
+    <string name="activate_by_owner">Activate via Device Owner</string>
+    <string name="activate_by_owner_desc">Make AxManager the Device Owner and let it switch ADB on by itself, then reconnect through 127.0.0.1. This replaces the ADB computer activation and only needs to be set up once.</string>
+    <string name="owner_activate_prereq_title">Step 1 · Make AxManager the Device Owner</string>
+    <string name="owner_activate_prereq_desc">Run this command once from a computer (or an existing shell):</string>
+    <string name="owner_activate_adb_title">Step 2 · Switch ADB on and connect</string>
+    <string name="owner_activate_adb_desc">AxManager uses Device Owner privileges to enable ADB (and wireless debugging), reboot adbd into TCP mode, then connects to 127.0.0.1 to obtain a shell.</string>
+    <string name="owner_activate_start">Enable ADB and Activate</string>
+    <string name="owner_activate_running">Enabling ADB…</string>
+    <string name="owner_activate_need_owner">Device Owner is required. Finish step 1 first.</string>
+    <string name="owner_activate_ready">Device Owner detected. Ready to activate.</string>
+    <string name="owner_activate_success">Activated through Device Owner.</string>
+    <string name="owner_activate_failed">Activation failed: %s</string>
+    <string name="owner_activate_no_port">Could not detect an ADB TCP port after enabling ADB.</string>
+    <string name="owner_activate_tcp_port">ADB TCP port: %d</string>
+
+    <string name="liquid_glass_title">Bottom bar style</string>
+    <string name="liquid_glass_desc"></string>
+    <string name="liquid_glass_requires_13"></string>
+    <string name="liquid_glass_press_title">Liquid press effect</string>
+    <string name="liquid_glass_press_desc">Bulge and glow slightly when a glass element is pressed.</string>
+
+    <!-- AI 安全引擎 / 危险代码库（设置页入口） -->
     <string name="ai_security_engine">AI Security Engine</string>
     <string name="ai_security_engine_desc">Micro analysis model, cloud AI and decision prompts</string>
     <string name="danger_code_library">Danger code library</string>
     <string name="danger_code_library_desc">View and edit built-in / custom danger rules</string>
+    <string name="lockscreen_org">Lock screen organization name</string>
+    <string name="lockscreen_org_desc">Customize the XX in "This device belongs to XX" on the lock screen (requires Device Owner). Enable and enter a name to apply; leave blank to restore system default.</string>
+    <string name="lockscreen_org_hint">Organization name</string>
+    <string name="lockscreen_org_save">Apply</string>
+    <!-- 开机自动启动（无线调试预热，v1.6.1） -->
+    <string name="boot_start_switch">Device Owner Auto Start</string>
+    <string name="boot_start_switch_desc">Creates a fixed ADB port and remembers it. After a reboot the Device Owner keeps wireless debugging on, so just open AxManager and tap Activate to reconnect on that port — no mDNS search needed. A Device Owner privilege is required.</string>
+    <string name="boot_start_channel_name">Boot start</string>
+    <string name="boot_start_channel_desc">Shows progress while AxManager restores itself after boot.</string>
+    <string name="boot_start_notification_title">Starting AxManager</string>
+    <string name="boot_start_enabling_adb">Enabling ADB…</string>
+    <string name="boot_start_discovering_port">Discovering the wireless debugging port…</string>
+    <string name="boot_start_connecting">Connecting to 127.0.0.1…</string>
+    <string name="boot_start_retrying">Retrying…</string>
+    <string name="boot_start_success">AxManager is up.</string>
+    <string name="boot_start_failed">Boot start failed. Tap to open AxManager and activate manually.</string>
+    <string name="boot_start_autostart_title">Allow auto start</string>
+    <string name="boot_start_autostart_desc">Some system skins block boot broadcasts. Open the auto-start list and allow AxManager.</string>
+    <string name="boot_start_autostart_action">Open auto-start settings</string>
 </resources>

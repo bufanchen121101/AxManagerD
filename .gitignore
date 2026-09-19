@@ -2,20 +2,14 @@
 .gradle
 local.properties
 .DS_Store
-/build
-/captures
+build/
+captures
 .externalNativeBuild
 .idea
 /manager/signing.properties
-/out
+out/
 /signing.properties
 
-# 编译产物 / 缓存
-*.dex
-gradle/wrapper/
-
-# 第三方预编译二进制
-server/src/main/jniLibs/
-
-# submodule 相关
-.gitmodules
+# 编译产物 / 缓存（注意：不要忽略 gradle/wrapper 与 jniLibs，CI 必需）
+.kotlin
+.cxx

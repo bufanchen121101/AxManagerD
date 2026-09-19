@@ -1,0 +1,66 @@
+name: Quick Verify (Kotlin compile only)
+
+# 快速验证通道：只做 Kotlin 编译，不跑 R8/打包，用于「代码能不能过」这一步。
+# 目标耗时 3-6 分钟，比完整 APK 构建（~19 分钟）快 4 倍以上。
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Locate Android SDK
+        run: |
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> $GITHUB_ENV
+          echo "ANDROID_HOME=${ANDROID_HOME:-$ANDROID_SDK_ROOT}" >> $GITHUB_ENV
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+      - name: Install SDK components
+        run: |
+          SDKROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMAN=$(find "$SDKROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -1)
+          if [ -z "$SDKMAN" ]; then SDKMAN="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"; fi
+          "$SDKMAN" --install "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1" >/dev/null 2>&1 || true
+          yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
+      - name: Write local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          echo "signing.storeFile=$HOME/.android/debug.keystore" >> local.properties
+          echo "signing.storePassword=android" >> local.properties
+          echo "signing.keyAlias=androiddebugkey" >> local.properties
+          echo "signing.keyPassword=android" >> local.properties
+      - name: Grant gradlew permission
+        run: chmod +x gradlew
+      - name: Use official maven repos
+        run: sed -i '/maven.aliyun.com/d' settings.gradle.kts
+      # 只编 Kotlin：跳过 R8 / dex / 资源打包 / 签名，编译错误仍会暴露
+      - name: Verify Kotlin compile (official)
+        run: |
+          ./gradlew :manager:compileOfficialReleaseKotlin \
+            --console=plain --parallel --build-cache \
+            -Dorg.gradle.jvmargs="-Xmx5g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -XX:+TieredCompilation -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8"
+      - name: Verify Kotlin compile (manages)
+        run: |
+          ./gradlew :manager:compileManagesReleaseKotlin \
+            --console=plain --parallel --build-cache \
+            -Dorg.gradle.jvmargs="-Xmx5g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -XX:+TieredCompilation -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8"

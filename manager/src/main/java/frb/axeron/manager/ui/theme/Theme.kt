@@ -55,6 +55,6 @@ fun AxManagerTheme(
         colorScheme = colorScheme,
         typography = Typography
     ) {
-        contentCompose(settingsViewModel)
+            contentCompose(settingsViewModel)
     }
 }

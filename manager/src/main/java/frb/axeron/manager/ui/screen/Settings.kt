@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -90,6 +92,7 @@ import frb.axeron.manager.ui.component.SettingsItemType
 import frb.axeron.manager.ui.component.rememberConfirmDialog
 import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
 import frb.axeron.manager.features.keepalive.KeepAliveService
+import frb.axeron.manager.owner.LockscreenOrganization
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.PathHelper
 import kotlinx.coroutines.launch
@@ -109,6 +112,9 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
     val moduleRepoUrl = "https://1852775966.share.123pan.cn/123pan/J03gvd-3ed8h"
 
     var showDevDialog by remember { mutableStateOf(false) }
+
+    // 锁屏组织名称开关状态（初始值从偏好读取，避免每次重组重置）
+    var orgEnabled by remember { mutableStateOf(LockscreenOrganization.isEnabled()) }
 
     DeveloperInfo(
         showDevDialog
@@ -295,6 +301,15 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                     settings.setActivateOnBoot(it)
                 }
             )
+                        SettingsItem(
+                iconVector = Icons.Filled.Adb,
+                label = stringResource(R.string.boot_start_switch),
+                description = stringResource(R.string.boot_start_switch_desc),
+                checked = settings.isBootStartEnabled,
+                onSwitchChange = {
+                    settings.setBootStart(it)
+                }
+            )
             SettingsItem(
                 iconVector = Icons.Filled.BugReport,
                 label = stringResource(R.string.keep_alive),
@@ -310,17 +325,90 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 }
             )
             SettingsItem(
-                iconVector = Icons.Filled.Refresh,
-                label = stringResource(R.string.module_keep_alive),
-                description = stringResource(R.string.module_keep_alive_desc),
-                checked = settings.isModuleKeepAliveEnabled,
+                iconVector = Icons.Filled.Shield,
+                label = stringResource(R.string.do_keep_alive),
+                description = stringResource(R.string.do_keep_alive_desc),
+                checked = settings.isDoKeepAliveEnabled,
                 onSwitchChange = { enabled ->
-                    settings.setModuleKeepAlive(enabled)
+                    settings.setDoKeepAlive(enabled)
                 }
             )
+            SettingsItem(
+                iconVector = Icons.Filled.Security,
+                label = stringResource(R.string.lockscreen_org),
+                description = stringResource(R.string.lockscreen_org_desc),
+                checked = orgEnabled,
+                    onSwitchChange = { enabled ->
+                        orgEnabled = enabled
+                        LockscreenOrganization.setEnabled(enabled)
+                        if (enabled) {
+                            scope.launch {
+                                val (ok, msg) = kotlinx.coroutines.withContext(
+                                    kotlinx.coroutines.Dispatchers.IO
+                                ) { LockscreenOrganization.apply(settingsContext) }
+                                Toast.makeText(
+                                    settingsContext,
+                                    msg,
+                                    if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        } else {
+                            // 关闭：清除组织名，恢复系统默认文案
+                            scope.launch {
+                                val (ok, msg) = kotlinx.coroutines.withContext(
+                                    kotlinx.coroutines.Dispatchers.IO
+                                ) { LockscreenOrganization.apply(settingsContext, "") }
+                                Toast.makeText(
+                                    settingsContext,
+                                    msg,
+                                    if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                ) { _, checked ->
+                    AnimatedVisibility(checked) {
+                        val orgNameState = remember { mutableStateOf(LockscreenOrganization.getName()) }
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                            TextField(
+                                modifier = Modifier.fillMaxWidth(),
+                                value = orgNameState.value,
+                                onValueChange = { orgNameState.value = it },
+                                label = { Text(stringResource(R.string.lockscreen_org_hint)) },
+                                singleLine = true,
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = {
+                                            val name = orgNameState.value
+                                            LockscreenOrganization.setName(name)
+                                            scope.launch {
+                                                val (ok, msg) = kotlinx.coroutines.withContext(
+                                                    kotlinx.coroutines.Dispatchers.IO
+                                                ) { LockscreenOrganization.apply(settingsContext, name) }
+                                                Toast.makeText(
+                                                    settingsContext,
+                                                    msg,
+                                                    if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Save,
+                                            contentDescription = stringResource(R.string.lockscreen_org_save)
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+            // 锁屏组织名称：自定义「此设备归 XX 所有」中的 XX。
+            // 需设备所有者；仅改名称文案，纯 API、不需要 root，不影响签名。
 
 
-            // AI 安全引擎入口（置于「自动重载」上方，便于快速进入）
+            // AI 安全引擎入口（已上移至「自动重载」上方，便于快速进入）
             SettingsItem(
                 iconVector = Icons.Filled.Security,
                 label = stringResource(R.string.ai_security_engine),
@@ -329,7 +417,8 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                     navigator.navigate(AIMainScreenDestination)
                 }
             )
-            // 危险代码库入口：查看并编辑内置 / 自定义危险规则
+
+            // 危险代码库入口：直接查看/编辑内置与自定义危险规则
             SettingsItem(
                 iconVector = Icons.Filled.Dangerous,
                 label = stringResource(R.string.danger_code_library),
@@ -417,6 +506,8 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                         navigator.navigate(AppearanceScreenDestination)
                     }
                 )
+
+                 // AI 安全引擎入口：已上移至「自动重载」上方（见 SettingsScreen 顶部区域）
 
                 SettingsItem(
                     type = SettingsItemType.CHILD,

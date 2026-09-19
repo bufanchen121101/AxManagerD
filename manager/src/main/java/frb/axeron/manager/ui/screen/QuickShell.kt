@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
@@ -43,6 +42,7 @@ import androidx.compose.material.icons.outlined.DoNotTouch
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Output
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -182,7 +182,8 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
                 }
             },
             terminalContext = {
-                // 把最近若干行终端输出 + 最近一次命令作为上下文交给 AI
+                // 把最近若干行终端输出 + 最近一次命令作为上下文交给 AI，
+                // 用户不必手动复制报错内容。
                 val tail = logs.takeLast(40).joinToString("\n") { it.output }
                 val lastCmd = viewModel.snapshotLastCommand()
                 buildString {

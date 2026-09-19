@@ -2,15 +2,14 @@ package frb.axeron.manager.ui.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
-import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AdminPanelSettings
-import androidx.compose.material.icons.outlined.Android
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
+import frb.axeron.manager.ui.icon.LspatchIcons
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.ramcosta.composedestinations.generated.destinations.HomeScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.PluginScreenDestination
@@ -47,8 +46,8 @@ enum class BottomBarDestination(
     Xposed(
         SelectPatchTargetScreenDestination,
         R.string.xposed,
-        Icons.Filled.Android,
-        Icons.Outlined.Android,
+        LspatchIcons.XposedFilled,
+        LspatchIcons.XposedOutlined,
         false
     ),
     Settings(

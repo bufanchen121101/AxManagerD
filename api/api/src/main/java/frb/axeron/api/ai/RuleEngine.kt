@@ -85,8 +85,17 @@ object RuleEngine {
     fun addRule(rule: Rule) { extraRules.add(rule) }
     fun clearExtraRules() { extraRules.clear() }
 
+    /** 获取内置危险规则（参考代码库）副本，仅用于 UI 展示。 */
+    fun getBuiltinRules(): List<Rule> = BUILTIN_RULES.toList()
+
     /** 获取所有用户自定义规则（危险代码库），按名称去重返回副本。 */
     fun getExtraRules(): List<Rule> = extraRules.toList()
+
+    /** 新增或按名称覆盖一条自定义规则（UI 保存用）。 */
+    fun upsertRule(rule: Rule) {
+        extraRules.removeIf { it.name == rule.name }
+        extraRules.add(rule)
+    }
 
     /** 按名称删除一条自定义规则，返回是否删除成功。 */
     fun removeExtraRule(name: String): Boolean =

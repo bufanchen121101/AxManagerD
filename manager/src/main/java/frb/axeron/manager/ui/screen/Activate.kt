@@ -22,7 +22,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -41,7 +40,6 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.outlined.Adb
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Computer
@@ -61,17 +59,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -113,8 +108,15 @@ fun ActivateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
     val activateViewModel = viewModelGlobal.activateViewModel
     val axeronInfo = activateViewModel.axeronInfo
 
+    // 【v1.1.6 修复】激活后再次进入本页时，服务已在运行，会立即命中 popBackStack()。
+    // 但 LaunchedEffect 在首帧组合期即执行，此时本页的导航事务尚未提交，
+    // 直接 pop 会操作到"正在入栈"的 back stack，触发导航状态崩溃（表现为进入即闪退）。
+    // 用 remember 标记保证只回退一次，并延迟到本页入栈稳定后再执行。
+    val popped = remember { mutableStateOf(false) }
     LaunchedEffect(axeronInfo) {
-        if (axeronInfo.isRunning() && !axeronInfo.isNeedUpdate()) {
+        if (axeronInfo.isRunning() && !axeronInfo.isNeedUpdate() && !popped.value) {
+            popped.value = true
+            delay(600)
             navigator.popBackStack()
         }
     }
@@ -184,6 +186,7 @@ fun ActivateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 WirelessDebuggingCard(navigator, activateViewModel)
             }
             RootCard(navigator, activateViewModel)
+            DeviceOwnerActivateCard(activateViewModel)
             PermissionSections(activateViewModel)
             ComputerCard()
         }
@@ -721,6 +724,254 @@ fun ComputerCard() {
 }
 
 @Composable
+fun DeviceOwnerActivateCard(activateViewModel: ActivateViewModel) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val loadingDialog = rememberLoadingDialog()
+    val shareLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { }
+
+    // 进入界面时刷新一次真实 Owner 状态，避免激活后回到本页仍显示未激活。
+    LaunchedEffect(Unit) {
+        activateViewModel.refreshOwnerState()
+    }
+
+    ElevatedCard(
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.Shield,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.activate_by_owner),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Text(
+                text = stringResource(R.string.activate_by_owner_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            val ownerActive =
+                activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner
+
+            // 状态指示：是否已具备设备所有者（本激活方式的前置条件）
+            Surface(
+                color = if (ownerActive) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        modifier = Modifier.size(14.dp),
+                        imageVector = if (ownerActive) Icons.Filled.CheckCircle else Icons.Filled.Security,
+                        contentDescription = null,
+                        tint = if (ownerActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                    Text(
+                        text = stringResource(
+                            if (ownerActive) R.string.owner_activate_ready
+                            else R.string.owner_activate_need_owner
+                        ),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+
+            // —— Step 1：把 AxManager 设为设备所有者（一次性，需一条 ADB 指令） ——
+            Text(
+                text = stringResource(R.string.owner_activate_prereq_title),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = stringResource(R.string.owner_activate_prereq_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val ownerCommand = activateViewModel.deviceOwnerCommand
+            val cmdDialog = rememberConfirmDialog()
+            val cmdTitle = stringResource(R.string.device_owner_command)
+            val cmdContent = stringResource(R.string.device_owner_command_message, ownerCommand)
+            val copyLabel = stringResource(R.string.copy)
+            val cancelLabel = stringResource(R.string.cancel)
+            val sendLabel = stringResource(R.string.send)
+            val copiedLabel = stringResource(R.string.copied)
+            val shareLabel = stringResource(R.string.share_command)
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        val result = cmdDialog.awaitConfirm(
+                            title = cmdTitle,
+                            content = cmdContent,
+                            markdown = true,
+                            confirm = copyLabel,
+                            dismiss = cancelLabel,
+                            neutral = sendLabel
+                        )
+                        if (result == ConfirmResult.Confirmed) {
+                            if (ClipboardUtil.put(context, ownerCommand)) {
+                                Toast.makeText(context, copiedLabel, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        if (result == ConfirmResult.Neutral) {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, ownerCommand)
+                            }
+                            shareLauncher.launch(Intent.createChooser(intent, shareLabel))
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Code,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(cmdTitle)
+            }
+
+            // —— Step 2：用设备所有者权限开 ADB 并激活 ——
+            Text(
+                text = stringResource(R.string.owner_activate_adb_title),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = stringResource(R.string.owner_activate_adb_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val failedTemplate = stringResource(R.string.owner_activate_failed, "%s")
+            Button(
+                enabled = ownerActive && !activateViewModel.tryActivate,
+                onClick = {
+                    scope.launch {
+                        loadingDialog.withLoading {
+                            val ai = activateViewModel.startAdbByDeviceOwner(context)
+                            when (ai) {
+                                is AdbStateInfo.Success -> {
+                                    activateViewModel.awaitRunning()
+                                }
+
+                                is AdbStateInfo.Failed -> {
+                                    Toast.makeText(
+                                        context,
+                                        failedTemplate.format(ai.message),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+
+                                else -> {
+                                    Toast.makeText(context, ai.message, Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            activateViewModel.setTryToActivate(false)
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.owner_activate_start))
+            }
+            // -------- Port Auto Start: reuse the persisted fixed port --------
+            Text(
+                text = stringResource(R.string.port_boot_start),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = stringResource(R.string.port_boot_start_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val noPortTemplate = stringResource(R.string.port_boot_start_no_port)
+            Button(
+                enabled = activateViewModel.isDeviceOwner &&
+                    !activateViewModel.tryActivate &&
+                    AxeronSettings.getBootStartPort() in 1..65535,
+                onClick = {
+                    scope.launch {
+                        loadingDialog.withLoading {
+                            val ai = activateViewModel.startAdbByFixedPort(context)
+                            when (ai) {
+                                is AdbStateInfo.Success -> {
+                                    activateViewModel.awaitRunning()
+                                }
+                                is AdbStateInfo.Failed -> {
+                                    Toast.makeText(
+                                        context,
+                                        failedTemplate.format(ai.message),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                                else -> {
+                                    Toast.makeText(context, ai.message, Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            activateViewModel.setTryToActivate(false)
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.port_boot_start))
+            }
+            if (AxeronSettings.getBootStartPort() !in 1..65535) {
+                Text(
+                    text = noPortTemplate,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun PermissionSections(activateViewModel: ActivateViewModel) {
     Column(
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -887,34 +1138,62 @@ fun DhizukuSection(activateViewModel: ActivateViewModel) {
             )
 
             // 状态指示：Dhizuku 授权状态（Device Owner 激活的前置步骤）
+            // 修复：当本应用已成为 Device Owner 时，Dhizuku 授权只是「前置步骤/附属能力」，
+            // 不应再作为主状态显示（否则会出现「已是设备所有者却显示 Dhizuku 授权」的误导）。
             val dhizukuGranted = activateViewModel.isDhizukuGranted
-            Surface(
-                color = if (dhizukuGranted) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+            val ownerActive = activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner
+            if (ownerActive) {
+                // 已是设备所有者：显示所有者具备的高级能力标识（包含 Dhizuku 转发能力）
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        modifier = Modifier.size(14.dp),
-                        imageVector = if (dhizukuGranted) Icons.Filled.CheckCircle else Icons.Filled.Security,
-                        contentDescription = null,
-                        tint = if (dhizukuGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = if (dhizukuGranted) stringResource(R.string.dhizuku_granted) else stringResource(R.string.dhizuku_not_granted),
-                        style = MaterialTheme.typography.labelMedium
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            modifier = Modifier.size(14.dp),
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = stringResource(R.string.owner_privilege_active),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            } else {
+                Surface(
+                    color = if (dhizukuGranted) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            modifier = Modifier.size(14.dp),
+                            imageVector = if (dhizukuGranted) Icons.Filled.CheckCircle else Icons.Filled.Security,
+                            contentDescription = null,
+                            tint = if (dhizukuGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (dhizukuGranted) stringResource(R.string.dhizuku_granted) else stringResource(R.string.dhizuku_not_granted),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
                 }
             }
-
             // 状态指示：Device Owner / Profile Owner 激活状态
             val ownerLabel = when {
                 activateViewModel.isDeviceOwner -> stringResource(R.string.device_owner_active)
@@ -937,155 +1216,170 @@ fun DhizukuSection(activateViewModel: ActivateViewModel) {
                 )
             }
 
-            // —— 撤销设备所有者 ——
-            if (activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner) {
-                val revokeDialog = rememberConfirmDialog()
-                val revokeTitle = stringResource(R.string.device_owner_revoke_confirm)
-                val revokeContent = stringResource(R.string.device_owner_revoke_desc)
-                val revokeConfirm = stringResource(R.string.device_owner_revoke)
-                val revokeCancel = stringResource(R.string.cancel)
-                val revokedMsg = stringResource(R.string.device_owner_revoked)
-                val revokeFailedMsg = stringResource(R.string.device_owner_revoke_failed)
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            val result = revokeDialog.awaitConfirm(
-                                title = revokeTitle,
-                                content = revokeContent,
-                                confirm = revokeConfirm,
-                                dismiss = revokeCancel
-                            )
-                            if (result == ConfirmResult.Confirmed) {
-                                val ok = DeviceOwnerState.deactivate(context)
-                                activateViewModel.refreshOwnerState()
-                                Toast.makeText(
-                                    context,
-                                    if (ok) revokedMsg else revokeFailedMsg,
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
+            // —— 已激活 Device Owner / Profile Owner 时的「移除设备所有者」入口 ——
+            // 参照 Dhizuku 官方实现：应用内直接调用 clearProfileOwner + clearDeviceOwnerApp，
+            // 无需 adb / root。仅在系统拒绝时才需要下面的兜底指令。
+            if (activateViewModel.canRemoveOwner) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Stop,
-                        modifier = Modifier
-                            .padding(end = 10.dp)
-                            .size(16.dp),
-                        contentDescription = null
+                    Text(
+                        text = stringResource(R.string.device_owner_remove_title),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold
                     )
-                    Text(revokeConfirm)
+                    Text(
+                        text = stringResource(R.string.device_owner_remove_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    val removeDialog = rememberConfirmDialog()
+                    val removeTitle = stringResource(R.string.device_owner_remove_title)
+                    val removeMessage = stringResource(R.string.device_owner_remove_confirm_message)
+                    val confirmLabel = stringResource(R.string.confirm)
+                    val cancelLabel = stringResource(R.string.cancel)
+                    val removingLabel = stringResource(R.string.device_owner_removing)
+                    val removedLabel = stringResource(R.string.device_owner_removed)
+                    val removeBtnLabel = stringResource(R.string.device_owner_remove_button)
+                    val failedLabel = stringResource(R.string.device_owner_remove_failed)
+                    val isDeactivating = activateViewModel.isDeactivating
+
+                    Button(
+                        enabled = !isDeactivating,
+                        onClick = {
+                            scope.launch {
+                                val result = removeDialog.awaitConfirm(
+                                    title = removeTitle,
+                                    content = removeMessage,
+                                    confirm = confirmLabel,
+                                    dismiss = cancelLabel
+                                )
+                                if (result == ConfirmResult.Confirmed) {
+                                    activateViewModel.deactivateOwner { success, error ->
+                                        val msg = if (success) {
+                                            removedLabel
+                                        } else {
+                                            failedLabel.format(error ?: "")
+                                        }
+                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                        activateViewModel.clearDeactivateResult()
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Stop,
+                            modifier = Modifier
+                                .padding(end = 10.dp)
+                                .size(16.dp),
+                            contentDescription = null
+                        )
+                        Text(if (isDeactivating) removingLabel else removeBtnLabel)
+                    }
+
+                    // —— 兜底：系统拒绝应用内解除时，用 adb/root 执行此指令 ——
+                    val showFallback = remember { mutableStateOf(false) }
+                    TextButton(
+                        onClick = { showFallback.value = !showFallback.value },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = stringResource(
+                                if (showFallback.value) R.string.device_owner_fallback_hide
+                                else R.string.device_owner_fallback_show
+                            ),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                    if (showFallback.value) {
+                        Text(
+                            text = stringResource(R.string.device_owner_remove_fallback_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        val removeCmd = activateViewModel.removeOwnerCommand
+                        val cmdDialog = rememberConfirmDialog()
+                        val removeCmdMessage = removeCmd
+                        val copyLabel = stringResource(R.string.copy)
+                        val cancelLabel2 = stringResource(R.string.cancel)
+                        val sendLabel = stringResource(R.string.send)
+                        val copiedLabel = stringResource(R.string.copied)
+                        val shareLabel = stringResource(R.string.share_command)
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    val result = cmdDialog.awaitConfirm(
+                                        title = removeTitle,
+                                        content = removeCmdMessage,
+                                        markdown = true,
+                                        confirm = copyLabel,
+                                        dismiss = cancelLabel2,
+                                        neutral = sendLabel
+                                    )
+                                    if (result == ConfirmResult.Confirmed) {
+                                        if (ClipboardUtil.put(context, removeCmd)) {
+                                            Toast.makeText(context, copiedLabel, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    if (result == ConfirmResult.Neutral) {
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(Intent.EXTRA_TEXT, removeCmd)
+                                        }
+                                        shareLauncher.launch(Intent.createChooser(intent, shareLabel))
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Code,
+                                modifier = Modifier
+                                    .padding(end = 10.dp)
+                                    .size(16.dp),
+                                contentDescription = null
+                            )
+                            Text(removeCmd)
+                        }
+                    }
                 }
             }
+
+
             // —— 通过指令激活设备所有者 ——
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                var ownerTypeDevice by remember { mutableStateOf(true) }
-                var ownerTypeMenuExpanded by remember { mutableStateOf(false) }
-                var profileOwnerWarningShow by remember { mutableStateOf(false) }
-
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = stringResource(
-                            if (ownerTypeDevice) R.string.device_owner_via_command
-                            else R.string.profile_owner_via_command
-                        ),
+                        text = stringResource(R.string.device_owner_via_command),
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(Modifier.width(8.dp))
-                    if (ownerTypeDevice) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.tertiaryContainer,
-                            shape = MaterialTheme.shapes.small
-                        ) {
-                            Text(
-                                text = stringResource(R.string.fewer_restrictions_badge),
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
-                // —— 所有者类型选择 ——
-                Box {
-                    OutlinedButton(onClick = { ownerTypeMenuExpanded = true }) {
-                        Text(
-                            stringResource(R.string.device_owner_type_label) + "："
-                        )
-                        Text(
-                            stringResource(
-                                if (ownerTypeDevice) R.string.device_owner_via_command
-                                else R.string.profile_owner_via_command
-                            )
-                        )
-                        Icon(
-                            imageVector = Icons.Filled.ArrowDropDown,
-                            contentDescription = null
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = ownerTypeMenuExpanded,
-                        onDismissRequest = { ownerTypeMenuExpanded = false }
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = MaterialTheme.shapes.small
                     ) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.device_owner_via_command)) },
-                            onClick = {
-                                ownerTypeDevice = true
-                                ownerTypeMenuExpanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.profile_owner_via_command)) },
-                            onClick = {
-                                ownerTypeMenuExpanded = false
-                                profileOwnerWarningShow = true
-                            }
+                        Text(
+                            text = stringResource(R.string.fewer_restrictions_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         )
                     }
-                }
-                if (profileOwnerWarningShow) {
-                    AlertDialog(
-                        onDismissRequest = { profileOwnerWarningShow = false },
-                        title = {
-                            Text(stringResource(R.string.profile_owner_warning_title))
-                        },
-                        text = {
-                            Text(stringResource(R.string.profile_owner_warning_desc))
-                        },
-                        confirmButton = {
-                            TextButton(onClick = {
-                                ownerTypeDevice = false
-                                profileOwnerWarningShow = false
-                            }) {
-                                Text(stringResource(R.string.confirm))
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { profileOwnerWarningShow = false }) {
-                                Text(stringResource(R.string.cancel))
-                            }
-                        }
-                    )
                 }
                 Text(
-                    text = stringResource(
-                        if (ownerTypeDevice) R.string.device_owner_via_command_desc
-                        else R.string.profile_owner_via_command_desc
-                    ),
+                    text = stringResource(R.string.device_owner_via_command_desc),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                val command = if (ownerTypeDevice) {
-                    activateViewModel.deviceOwnerCommand
-                } else {
-                    activateViewModel.profileOwnerCommand
-                }
+                val command = activateViewModel.deviceOwnerCommand
                 val dialogConfirm = rememberConfirmDialog()
                 val title = stringResource(R.string.device_owner_command)
                 val content = stringResource(
@@ -1185,6 +1479,7 @@ fun DhizukuSection(activateViewModel: ActivateViewModel) {
         }
     }
 }
+
 
 @Composable
 fun BatteryOptimizationSection() {

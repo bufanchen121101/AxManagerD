@@ -9,7 +9,12 @@ import kotlinx.parcelize.Parcelize
 data class PluginInstaller(
     val uri: Uri,
     var autoEnable: Boolean = true,
-    var backupInstall: Boolean = false
+    var backupInstall: Boolean = false,
+    /**
+     * 安装为「运行时模块」：解压目标为 axeron/runtime_plugins/<id>，
+     * 与普通插件目录（axeron/plugins/<id>）隔离。
+     */
+    var runtimeModule: Boolean = false
 ): Parcelable
 
 class ModuleProp(json: String = "") : ParcelableMapJson(json) {

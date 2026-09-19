@@ -53,6 +53,17 @@
 -keep class org.lsposed.lspd.** { *; }
 -dontwarn org.lsposed.**
 
+# apkzlib / meditor / manifesto 编辑库（纯 Java，反射读取）
+# 【修复】apkzlib 全部实现在 lspatch.jar 内（上游 fork，含 NestedZip），
+# 必须 keep，否则 R8 混淆/裁剪后运行时会出现
+# "Failed resolution of: Lcom/android/tools/build/apkzlib/zip/NestedZip$NameCallback"。
+-keep class com.android.tools.build.apkzlib.** { *; }
+-keep class com.wind.meditor.** { *; }
+-keep class pxb.android.** { *; }
+-keep class pxb.android.axml.** { *; }
+-dontwarn com.google.auto.value.AutoValue$Builder
+-dontwarn com.google.auto.value.AutoValue
+
 # ---------- 7. native ----------
 -keepclasseswithmembernames,includedescriptorclasses class * {
     native <methods>;

@@ -31,10 +31,14 @@
         android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
         tools:node="remove" />
 
+    <!-- MANAGER 权限：用 ${applicationId} 占位，使 main/manages 两个发行版
+         各自声明自己的权限名（main=frb.axeron.manager.permission.MANAGER，
+         manages=frb.axerond.manages.permission.MANAGER）。
+         main 展开后与原硬编码值完全一致，不影响现有行为与签名。 -->
     <permission
-        android:name="frb.axeron.manager.permission.MANAGER"
+        android:name="${applicationId}.permission.MANAGER"
         android:protectionLevel="signature" />
-    <uses-permission android:name="frb.axeron.manager.permission.MANAGER" />
+    <uses-permission android:name="${applicationId}.permission.MANAGER" />
 
     <!-- Device Owner / Device Admin：非 root 下获取设备所有者高级权限 -->
     <uses-feature
@@ -196,7 +200,7 @@
             android:directBootAware="true"
             android:enabled="true"
             android:exported="true"
-            android:permission="frb.axeron.manager.permission.MANAGER">
+            android:permission="${applicationId}.permission.MANAGER">
             <intent-filter>
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
             </intent-filter>
@@ -311,6 +315,14 @@
         </service>
         <service
             android:name=".features.keepalive.KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".features.runtime.RuntimeModuleService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".features.bootstart.BootStartService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 

@@ -73,19 +73,50 @@ object StraceHelper {
         // 导致 waitFor() 卡死、日志不产出。加 `-k 1` 会在 SIGTERM 后 1 秒补发 SIGKILL 强制杀掉
         // strace 本身，使命令自然返回并写出日志（实测 exit=137、strace 无残留、日志正常生成）。
         //
-        // v1.1.1 拦截效率优化：模块脚本（尤其"极限调度"类）里常嵌大量 `sleep`（几十处，累计十几秒），
-        // 固定 timeout 方案会被这些 sleep 拖延，导致：① 耗时长（必须等 timeout 到点）；② 截不全
-        // （关键指令如 pm disable 在品牌分支后段，timeout 到点强杀时还没执行到）。
-        // 方案：生成脚本的【临时加速副本】——用 sed 把所有 `sleep X` 替换成 `sleep 0.01`，
-        // 十几秒的 sleep 瞬间归零，strace 在极短时间内即可抓全所有 execve（含后段品牌分支指令），
-        // 且不会改动模块原脚本。副本在 strace 结束后立即删除。
-        val tmpScript = "${traceLog}.run.sh"
+        // 【v1.2.3 关键修复：移除 sleep 加速 sed】
+        // 旧实现用 sed 把所有 `sleep X` 改写成 `sleep 0.01` 后再 strace，本意是"加速等待、
+        // 让品牌分支后段的指令也能跑到"。但它会**打乱模块的执行时序**，造成三个致命后果：
+        //   1) 模块设计 `sleep 30` 是等 ADB 服务/进程就绪，加速后立刻往下走，后续指令因
+        //      前置条件未满足而**执行失败**（失败就不会 execve）→ 核心指令抓不到；
+        //   2) 加速后脚本更快跑完 → 更快进入 `while true` 常驻循环，循环内无新 execve，
+        //      于是"设置 15 秒 vs 3 秒抓到的条数几乎一样"→ 用户观察到"调长调短都没用"；
+        //   3) `if [ 条件 ]` 因 sleep 时序变化走了另一分支，被跳过的分支指令**永远抓不到**。
+        // 因此直接对**原脚本**做追踪，由 timeout 控制时长，让脚本按真实时序执行。
+        // 代价是等待时间变长，但这正是「拦截抓取时长」这个设置项存在的意义。
+        //
+        // 【v1.4.0 关键修复：execve 抓不到 shell 内建命令】
+        // 用户反馈「有 sleep 命令的模块拦截不全 / 非加密模块指令不准确」。根因是
+        // `-e trace=execve` 只能看到**真正 fork+exec 出去的外部命令**（如 axeron-dpm、pm、setprop），
+        // 而模块里占比最大的性能/温控类核心操作——`echo 1 > /sys/.../scaling_governor`、
+        // `printf ... > /proc/...`、`[ "$x" = "1" ]` 判断、变量赋值、`for`/`if` 结构——
+        // **全部是 shell 内建（builtin），根本不产生 execve，strace 永远抓不到**。
+        // 这就是"无论把抓取时长调多长都抓不全"的机制性原因（时长再长也没有 execve 可抓）。
+        //
+        // 修复：由于 shell 内建命令（echo > /sys/...、[ ]、变量赋值）不产生 execve，
+        // 单靠 strace 抓不全，故 v1.4.0 起调用方**总是**额外跑一段 `sh -x`
+        // （见 StraceHelper.buildXtraceCmd），两段结果合并互补。本函数保持纯 execve 抓取。
         return "cd \"${pluginPath}\"; " +
             "rm -f \"$traceLog\"; " +
-            "sed 's/\\([[:space:]]\\)sleep[[:space:]][0-9.]*/\\1sleep 0.01/g' \"./$scriptName\" > \"$tmpScript\" 2>/dev/null; " +
-            "timeout -k 1 $timeoutSeconds $stracePath -f -e trace=execve -o \"$traceLog\" sh \"$tmpScript\" >/dev/null 2>&1; " +
-            "rm -f \"$tmpScript\"; " +
+            "timeout -k 1 $timeoutSeconds $stracePath -f -e trace=execve -o \"$traceLog\" sh \"./$scriptName\" >/dev/null 2>&1; " +
             "exit 0"
+    }
+
+    /**
+     * 【v1.4.0 新增】生成「前台 sh -x + timeout」的 xtrace 抓取命令。
+     *
+     * 与 buildTraceCmdSync 的区别：那个用 strace 抓 execve（能穿加密壳，但看不到内建命令），
+     * 这个直接用 `sh -x` 跑脚本、把 xtrace 行（`+ cmd`）输出到 stdout/stderr，
+     * 调用方逐行 addTrace()。**两者互补，必须都跑**：
+     *   - strace 段：抓加密/混淆后真正 exec 出去的命令（axeron-dpm / pm / setprop / mount）
+     *   - sh -x 段：抓脚本里的 shell 内建核心操作（echo > /sys/...、[ ] 判断、变量赋值）
+     *
+     * 旧实现对 sh -x 段只做 `snapshot().isEmpty()` 兜底，导致只要 strace 抓到任何一条
+     * （哪怕只是 chmod）就跳过 sh -x 段 → 内建核心指令全部丢失。v1.4.0 改为**总是执行**。
+     */
+    fun buildXtraceCmd(pluginPath: String, pluginBin: String, scriptName: String, timeoutSeconds: Int): String {
+        // 只丢弃 stdout，保留 stderr（xtrace 行走 stderr，`2>&1` 会把它吞掉）。
+        // `timeout -k 1` 限时；常驻脚本（while true）抓"启动后前 N 秒核心指令"即可。
+        return "export PATH=$pluginBin:\$PATH; cd \"$pluginPath\"; timeout -k 1 $timeoutSeconds sh -x \"./$scriptName\"; exit 0"
     }
 
     /** 生成「读取日志当前 execve 行数」的命令。 */

@@ -82,6 +82,7 @@ import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.core.Starter
 import frb.axeron.api.utils.AnsiFilter
 import frb.axeron.manager.R
+import frb.axeron.manager.features.runtime.RuntimeModuleService
 import frb.axeron.manager.ui.component.AxSnackBarHost
 import frb.axeron.manager.ui.component.KeyEventBlocker
 import frb.axeron.manager.ui.component.rememberLoadingDialog
@@ -318,9 +319,23 @@ fun FlashScreen(
     InstallDialog(
         confirm = flashing == FlashingStatus.IDLE,
         flashIt = flashIt,
-        onConfirm = {
+        onConfirm = { confirmed ->
+            // ⚠️ 关键：InstallDialog 内部的 installers 是从「导航入参 flashIt」复制出来的，
+            // 而 PluginInstaller.runtimeModule 经 Parcel 往返会丢失（实测恒为 false）。
+            // 这里不信任任何 Parcel 数据，改用 ViewModel 的进程内安装目标强制重写，
+            // 否则运行时模块会被装进 plugins/。
+            val runtimeTarget = pluginViewModel.installRuntimeTarget
+            pendingFlashIt = if (confirmed is FlashIt.FlashPlugins) {
+                FlashIt.FlashPlugins(
+                    confirmed.installers.map { inst ->
+                        if (inst.runtimeModule == runtimeTarget) inst
+                        else inst.copy(runtimeModule = runtimeTarget)
+                    }
+                )
+            } else {
+                confirmed
+            }
             flashing = FlashingStatus.FLASHING
-            pendingFlashIt = it
         },
         onDismiss = {
             flashing = FlashingStatus.FAILED
@@ -343,8 +358,25 @@ fun FlashScreen(
         hasFlashed = true
         // No need for an external 'scope' when inside LaunchedEffect
         launch(Dispatchers.IO) {
+            // 以「实际待安装对象 pendingFlashIt」为基础（而非导航参数 flashIt），
+            // 并以 ViewModel 的进程内标志安装目标为准（覆盖经 Parcel 往返可能丢失的字段），
+            // 确保「在运行时模块分区安装」一定落到 axeron/runtime_plugins/。
+            val pendingNow = pendingFlashIt
+            val runtimeTarget = pluginViewModel.installRuntimeTarget
+            val effective: FlashIt = if (pendingNow is FlashIt.FlashPlugins) {
+                FlashIt.FlashPlugins(
+                    pendingNow.installers.map { inst ->
+                        if (inst.runtimeModule == runtimeTarget) inst
+                        else inst.copy(runtimeModule = runtimeTarget)
+                    }
+                )
+            } else {
+                pendingNow!!
+            }
+            // 本次实际安装的目标分区，供收尾逻辑（重扫判断）使用。
+            val installingRuntime = runtimeTarget
             val result = flashIt(
-                pendingFlashIt!!,
+                effective,
                 onStdout = {
                     logContent.append(it).append("\n")
                     if (AnsiFilter.isScreenControl(it)) { // clear command
@@ -376,6 +408,12 @@ fun FlashScreen(
                     text += finalLogText
                 }
                 flashing = if (result.code == 0) FlashingStatus.SUCCESS else FlashingStatus.FAILED
+
+                // 运行时模块安装：装完立即让常驻服务重扫目录，使新模块出现在运行时模块列表。
+                if (result.code == 0 && installingRuntime) {
+                    runCatching { RuntimeModuleService.start(context) }
+                    runCatching { RuntimeModuleService.rescan(context) }
+                }
             }
         }
     }

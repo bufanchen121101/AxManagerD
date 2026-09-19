@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.CompletableFuture
 
@@ -219,12 +220,15 @@ object AxeronPluginService {
                 .getBoolean("plugin_compat", false)
             val compatFlag = if (pluginCompat) "true" else "false"
             val backupFlag = if (installer.backupInstall) "true" else "false"
+            val runtimeFlag = if (installer.runtimeModule) "true" else "false"
             val cmd =
-                "ZIPFILE=${file.absolutePath}; . functions.sh; install_plugin ${installer.autoEnable} $compatFlag $backupFlag; exit 0"
+                "ZIPFILE=${file.absolutePath}; . functions.sh; install_plugin ${installer.autoEnable} $compatFlag $backupFlag $runtimeFlag; exit 0"
 
             // ---- AI 拦截挂钩（方案 A，安装场景）----
+            // 运行时模块（installer.runtimeModule=true）不做拦截分析，直接安装。
+            // 需求：运行时模块安装不需要像 shell 模块那样先拦截分析。
             val analyzer = commandAnalyzer
-            if (analyzer != null) {
+            if (analyzer != null && !installer.runtimeModule) {
                 val name = installer.uri.lastPathSegment ?: "unknown"
                 val ctx = CommandAnalyzer.CommandContext(
                     source = CommandAnalyzer.CommandContext.Source.INSTALL,
@@ -236,6 +240,8 @@ object AxeronPluginService {
                     fs.delete(file.absolutePath)
                     return FlashResult(AxeronPluginService.ResultExec(127, "", "已拦截：${analysis.summary}"))
                 }
+            } else if (analyzer != null && installer.runtimeModule) {
+                Log.i(TAG, "Skip AI analyzer for runtime module: ${installer.uri.lastPathSegment}")
             }
             // ---- 挂钩结束 ----
 
@@ -617,6 +623,96 @@ object AxeronPluginService {
         ExecResult(exitCode, stdout.toString(), stderr.toString())
     }
 
+    /**
+     * 【带真实超时的 exec】与 [execProcessSafe] 的唯一区别：
+     * 到点会**真正强杀底层进程**，而不是只取消协程。
+     *
+     * 背景（为什么必须新增这个函数）：
+     * [execProcessSafe] 内部用 `process.waitFor()` 阻塞等待，这是 JVM 阻塞调用而非协程
+     * 挂起点。调用方用 `withTimeoutOrNull { execProcessSafe(...) }` 只能取消协程，**杀不掉
+     * 底层进程**：协程层"以为"超时返回了空串，实际进程还在后台跑，且 stdout 是在
+     * waitFor() 之后才取的，超时分支永远拿不到任何输出。
+     *
+     * 本函数改为：先在独立协程里等 waitFor()，主协程用 withTimeoutOrNull 限时；
+     * 一旦超时，显式 process.destroy() 强杀进程，再返回**已收集到的部分输出**
+     * （流式读取的 stdout/stderr 在进程被杀后仍保留已读到的内容）。这样：
+     *  - 超时真正生效（进程被杀，不再泄漏后台 strace/sh -x）；
+     *  - 超时也能拿到部分日志，而不是丢成空串。
+     *
+     * @param timeoutMs 超时时长（毫秒）；<= 0 表示不限时（退化为 execProcessSafe 行为）。
+     */
+    suspend fun execProcessSafeWithTimeout(
+        cmd: Array<String>,
+        env: Environment? = null,
+        timeoutMs: Long,
+        onStdout: (String) -> Unit = {},
+        onStderr: (String) -> Unit = {}
+    ): ExecResult = withContext(Dispatchers.IO) {
+        if (timeoutMs <= 0) {
+            return@withContext execProcessSafe(cmd, env, onStdout, onStderr)
+        }
+
+        val process = Axeron.newProcess(cmd, env, null)
+
+        val stdout = StringBuilder()
+        val stderr = StringBuilder()
+
+        val outJob = launch {
+            runCatching {
+                process.inputStream.bufferedReader().useLines {
+                    it.forEach { line ->
+                        onStdout(line)
+                        synchronized(stdout) { stdout.appendLine(line) }
+                    }
+                }
+            }
+        }
+
+        val errJob = launch {
+            runCatching {
+                process.errorStream.bufferedReader().useLines {
+                    it.forEach { line ->
+                        onStderr(line)
+                        synchronized(stderr) { stderr.appendLine(line) }
+                    }
+                }
+            }
+        }
+
+        // 在独立协程里等进程结束（waitFor 是阻塞调用，不能直接放在可取消的主协程上）
+        val waitJob = async(Dispatchers.IO) { process.waitFor() }
+
+        val exitCode = withTimeoutOrNull(timeoutMs) { waitJob.await() }
+
+        val timedOut = (exitCode == null)
+        if (timedOut) {
+            // 关键：真正强杀底层进程（否则后台 strace / sh -x 会一直跑）
+            runCatching { process.destroy() }
+        }
+
+        // 给流读取协程一点时间把已到达的数据读干（强杀后流会 EOF，join 很快返回）
+        runCatching {
+            withTimeoutOrNull(1000L) { outJob.join() }
+        }
+        runCatching {
+            withTimeoutOrNull(1000L) { errJob.join() }
+        }
+        if (!outJob.isCompleted) outJob.cancel()
+        if (!errJob.isCompleted) errJob.cancel()
+        if (!waitJob.isCompleted) waitJob.cancel()
+
+        runCatching { process.destroy() }
+
+        val out = synchronized(stdout) { stdout.toString() }
+        val err = synchronized(stderr) { stderr.toString() }
+
+        ExecResult(
+            exitCode = exitCode ?: -1,
+            stdout = out,
+            stderr = err + if (timedOut) "\n[execProcessSafeWithTimeout] 已超时 ${timeoutMs}ms，进程被强制终止" else ""
+        )
+    }
+
     suspend fun fsBarrier() {
         withContext(Dispatchers.IO) {
             // opsi minimal & portable
@@ -676,8 +772,44 @@ object AxeronPluginService {
             if (result.stdout.isNotBlank()) Log.i(TAG, "STDOUT:\n${result.stdout}")
             if (result.stderr.isNotBlank()) Log.e(TAG, "STDERR:\n${result.stderr}")
 
+            // ---- 激活回调钩子 ----
+            // 场景：受非 root 权限限制，App 无法开机自启；开机后需要用户通过 shell
+            // 指令等方式重新激活本软件（触发上面的 Igniter）。此时如果用户在
+            // AXERONBIN 下放置了 onactivate.sh，则执行它，供用户挂接"开机后激活时"
+            // 的自定义逻辑（同一路径也会随 assets/scripts/ 一起释放默认脚本）。
+            //
+            // 位置放在 Igniter 成功之后：激活成功才回调，失败时不误触发。
+            if (result.isSuccess()) {
+                runActivateHook(onStdout, onStderr)
+            }
+            // ---- 钩子结束 ----
+
             result.isSuccess()
         }
+
+    /**
+     * 执行激活回调脚本 [AXERONBIN]/onactivate.sh（存在才执行）。
+     *
+     * 需求：开机后通过 shell 指令等方式激活软件时，运行用户放置的脚本。
+     * 这是纯可选钩子——脚本不存在时静默跳过，不影响激活主流程。
+     */
+    private suspend fun runActivateHook(
+        onStdout: (String) -> Unit,
+        onStderr: (String) -> Unit,
+    ) = withContext(Dispatchers.IO) {
+        val hook = File(AXERONBIN, "onactivate.sh")
+        val exists = runCatching { axFS?.exists(hook.absolutePath) == true }.getOrDefault(false)
+        if (!exists) return@withContext
+        Log.i(TAG, "Running activate hook: ${hook.absolutePath}")
+        runCatching {
+            execProcessSafe(
+                arrayOf(BUSYBOX, "sh", hook.absolutePath),
+                Axeron.getEnvironment(),
+                onStdout,
+                onStderr,
+            )
+        }.onFailure { Log.w(TAG, "activate hook failed", it) }
+    }
 
 
     suspend fun removeScripts() = withContext(Dispatchers.IO) {

@@ -155,11 +155,18 @@ fun ExecutePluginActionScreen(
                         // 2. 【同步 timeout 版】前台跑 strace，timeout 到点强制退出，绝不卡死。
                         // 抛弃旧的 setsid 后台轮询方案——那在 Shizuku binder 下 execProcessSafe 的
                         // waitFor() 会卡死，导致抓不到或阻塞。同步 timeout 对任意模块（含 while true
-                        // 常驻）都安全：抓"启动后前 N 秒核心指令"即可，最多 60 秒。
-                        stage = "正在跟踪模块真实执行…"
+                        // 常驻）都安全：抓"启动后前 N 秒核心指令"即可。
+                        //
+                        // 【v1.4.0 关键修复 1：时长必须读设置值】
+                        // 旧代码这里**写死 60**，完全没读 AIConfigStore.traceTimeoutSeconds，
+                        // 导致用户在 AI 设置里调「拦截抓取时长」滑块对 action.sh 这条链路**完全无效**
+                        // （这正是用户反馈"调长调短都抓不全"的直接原因之一）。
+                        // 现改为读取设置值，与 PluginScriptTracer（启用模块链路）保持一致。
+                        val timeoutSec = frb.axeron.manager.ai.AIConfigStore.traceTimeoutSeconds
+                        stage = "正在跟踪模块真实执行（${timeoutSec}s）…"
                         val traceLog = "/data/local/tmp/ax_trace_${plugin.dirId}.log"
                         val straceCmd = frb.axeron.manager.ai.StraceHelper.buildTraceCmdSync(
-                            stracePath, pluginPath.absolutePath, traceLog, "action.sh", timeoutSeconds = 60
+                            stracePath, pluginPath.absolutePath, traceLog, "action.sh", timeoutSeconds = timeoutSec
                         )
                         android.util.Log.i("AIEngine", "strace 同步启动: $straceCmd")
                         runCatching {
@@ -191,27 +198,39 @@ fun ExecutePluginActionScreen(
                 } catch (t: Throwable) {
                     android.util.Log.e("AIEngine", "strace 预执行抓取失败，回退 sh -x", t)
                 } finally {
-                    // 若 strace 没抓到，回退到 sh -x 抓 xtrace
-                    if (frb.axeron.manager.ai.RuntimeCommandTracer.snapshot().isEmpty()) {
-                        stage = "正在回退解析（sh -x）…"
-                        // 加 timeout 限时：while true 等常驻脚本会卡死 sh -x，限时抓前 60 秒核心指令
-                        val traceCmd = "export PATH=${pluginBin}:\$PATH; cd \"${pluginPath.absolutePath}\"; timeout -k 1 60 sh -x ./action.sh; exit 0"
-                        runCatching {
-                            AxeronPluginService.execWithIO(
-                                cmd = traceCmd,
-                                onStdout = { _ -> },
-                                onStderr = { chunk ->
-                                    if (frb.axeron.manager.ai.RuntimeCommandTracer.enabled) {
-                                        chunk.split('\n').forEach { line ->
-                                            if (frb.axeron.manager.ai.RuntimeCommandTracer.isTraceLine(line)) {
-                                                frb.axeron.manager.ai.RuntimeCommandTracer.addTrace(line)
-                                            }
+                    // ============ v1.4.0 关键修复 2：sh -x 段「总是执行」，不再只做兜底 ============
+                    // 旧逻辑：仅当 `snapshot().isEmpty()`（strace 一条都没抓到）才跑 sh -x。
+                    // 问题：strace 抓 execve 时，模块里占比最大的 shell 内建核心操作
+                    // （`echo 1 > /sys/.../scaling_governor`、`[ "$x" = "1" ]` 判断、变量赋值、
+                    //  `for`/`if` 结构、`sleep` 等待后的写入）**根本不产生 execve**，永远抓不到。
+                    // 于是只要 strace 抓到哪怕一条 chmod，就跳过 sh -x → 内建核心指令全丢，
+                    // 表现为「抓到的指令不准确/不全」，且「时长调多长都没用」（再长也没 execve）。
+                    // 现改为：两段**互补、都跑**——strace 抓外部命令（能穿加密壳），
+                    // sh -x 抓内建命令（带完整重定向与参数）。
+                    stage = "正在补抓 shell 内建指令（sh -x）…"
+                    val xtraceSec = runCatching { frb.axeron.manager.ai.AIConfigStore.traceTimeoutSeconds }
+                        .getOrDefault(15)
+                    val traceCmd = frb.axeron.manager.ai.StraceHelper.buildXtraceCmd(
+                        pluginPath = pluginPath.absolutePath,
+                        pluginBin = pluginBin,
+                        scriptName = "action.sh",
+                        timeoutSeconds = xtraceSec
+                    )
+                    runCatching {
+                        AxeronPluginService.execWithIO(
+                            cmd = traceCmd,
+                            onStdout = { _ -> },
+                            onStderr = { chunk ->
+                                if (frb.axeron.manager.ai.RuntimeCommandTracer.enabled) {
+                                    chunk.split('\n').forEach { line ->
+                                        if (frb.axeron.manager.ai.RuntimeCommandTracer.isTraceLine(line)) {
+                                            frb.axeron.manager.ai.RuntimeCommandTracer.addTrace(line)
                                         }
                                     }
-                                },
-                                hideStderr = false,
-                            )
-                        }
+                                }
+                            },
+                            hideStderr = false,
+                        )
                     }
                     frb.axeron.manager.ai.RuntimeCommandTracer.end()
                 }

@@ -92,11 +92,11 @@ fun CloudModelScreen(navigator: DestinationsNavigator) {
                 .padding(vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // ============ 1. 云端对话入口 ============
+            // ============ 1. 云端对话入口（唯一入口） ============
             SettingsItem(
                 iconVector = Icons.Filled.Chat,
                 label = "云端对话",
-                description = "与云端 AI 模型对话",
+                description = "与云端 AI 模型对话（官方默认 AI 或自定义 API）",
                 onClick = {
                     navigator.navigate(ChatScreenDestination(modelType = "cloud"))
                 },

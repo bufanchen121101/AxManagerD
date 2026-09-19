@@ -160,10 +160,15 @@ object AdbStarter {
         Log.d(TAG, "awaitAdbPort: SUCCESS port=$port")
 
 
-        startAdbClient(context, port, result)
+        startAdbClient(context, port, result = result)
     }
 
-    suspend fun startAdbClient(context: Context, port: Int, result: (AdbStateInfo) -> Unit = {}) {
+    suspend fun startAdbClient(
+        context: Context,
+        port: Int,
+        forceTcpPort: Int? = null,
+        result: (AdbStateInfo) -> Unit = {}
+    ) {
         if (port <= 0) {
             result(AdbStateInfo.Failed(context.getString(R.string.adb_failed_to_get_port)))
             return
@@ -185,8 +190,11 @@ object AdbStarter {
             }
 
         var activePort = port
-        val tcpMode = AxeronSettings.getTcpMode()
-        val tcpPort = AxeronSettings.getTcpPort()
+        // forceTcpPort != null: caller (Port Auto Start) explicitly wants adbd pinned
+        // onto that fixed port. Otherwise fall back to the user's global TCP setting --
+        // so the classic "Enable ADB and Activate" flow stays exactly as before.
+        val tcpMode = forceTcpPort != null || AxeronSettings.getTcpMode()
+        val tcpPort = forceTcpPort ?: AxeronSettings.getTcpPort()
         if (tcpMode && activePort != tcpPort) {
             Log.d(TAG, "Try to switching to TCP mode")
             Log.d(TAG, "Connecting on port $activePort...")

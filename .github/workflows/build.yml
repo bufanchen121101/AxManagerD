@@ -1,0 +1,101 @@
+name: Build Release APK (R8)
+
+# 完整 APK 构建耗时约 19 分钟，改为「仅手动触发」，避免每次 push 都跑全量。
+# 日常代码验证走 verify.yml（只编 Kotlin，3-6 分钟）。
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      # ubuntu-latest runner 自带 ANDROID_SDK_ROOT 与 cmdline-tools，
+      # 不再使用 android-actions/setup-android@v3（其内部 sdkmanager tools 已因
+      # Google 移除 tools 包而失败），改为直接使用 runner 自带 SDK。
+      - name: Locate Android SDK
+        run: |
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> $GITHUB_ENV
+          echo "ANDROID_HOME=${ANDROID_HOME:-$ANDROID_SDK_ROOT}" >> $GITHUB_ENV
+          echo "SDK root = ${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          ls "${ANDROID_SDK_ROOT:-$ANDROID_HOME}" || true
+          ls "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools" || true
+      # 缓存 Gradle 依赖 + wrapper（提速关键）
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+      - name: Install SDK components
+        run: |
+          SDKROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMAN=$(find "$SDKROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -1)
+          echo "sdkmanager = $SDKMAN"
+          if [ -z "$SDKMAN" ]; then
+            SDKMAN="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          "$SDKMAN" --install "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1" || true
+          if [ ! -d "$SDKROOT/ndk/29.0.14206865" ]; then
+            "$SDKMAN" --install "ndk;29.0.14206865" || true
+          fi
+          yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
+          echo "SDKMAN=$SDKMAN" >> $GITHUB_ENV
+      - name: Restore debug keystore
+        run: |
+          mkdir -p ~/.android
+          echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > ~/.android/debug.keystore
+      - name: Write local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          # frb-project signingConfig 需要这些字段，否则 packageDebug 报 missing storeFile
+          echo "signing.storeFile=$HOME/.android/debug.keystore" >> local.properties
+          echo "signing.storePassword=android" >> local.properties
+          echo "signing.keyAlias=androiddebugkey" >> local.properties
+          echo "signing.keyPassword=android" >> local.properties
+          cat local.properties
+      - name: Grant gradlew permission
+        run: chmod +x gradlew
+      # GitHub Actions 在国外，访问阿里云镜像不通，改回官方源
+      - name: Use official maven repos
+        run: |
+          sed -i '/maven.aliyun.com/d' settings.gradle.kts
+          echo '--- settings.gradle.kts pluginManagement ---'
+          sed -n '1,30p' settings.gradle.kts
+      # 一次 Gradle 调用同时构建两个 flavor：省掉一次冷启动 + 配置阶段（约 2-3 分钟）
+      - name: Build release APKs (R8 enabled)
+        run: |
+          # R8 需要更大 CodeCache：覆盖掉 gradle.properties 里
+          # CICompilerCount=1 / -TieredCompilation 的省内存组合，
+          # 否则 minifyReleaseWithR8 会抛 "Out of space in CodeCache for method handle intrinsic"
+          ./gradlew :manager:assembleOfficialRelease :manager:assembleManagesRelease \
+            --console=plain --parallel --build-cache \
+            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -XX:+TieredCompilation -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8"
+      - name: Verify signature
+        run: |
+          SDKROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          APKSIGNER=$(find "$SDKROOT/build-tools" -type f -name apksigner 2>/dev/null | sort | tail -1)
+          echo "apksigner = $APKSIGNER"
+          for APK in $(find . -path '*/build/outputs/apk/*/release/*.apk'); do
+            echo "---- $APK ----"
+            "$APKSIGNER" verify --print-certs "$APK"
+          done
+      - name: Collect APK
+        run: |
+          mkdir -p artifacts
+          find . -path '*/build/outputs/apk/*/release/*.apk' -exec cp {} artifacts/ \;
+          ls -la artifacts/
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AxManager-release-apk
+          path: artifacts/*.apk

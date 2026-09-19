@@ -48,7 +48,12 @@ import java.util.Locale
 class WebUIActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var insets: Insets
+    /** shell 模块信息；运行时模块模式下不使用（走 runtimeDirId）。 */
     private lateinit var plugin: PluginInfo
+
+    /** 运行时模块模式下的目录 id（作为下载文件名前缀）。 */
+    private var runtimeMode: Boolean = false
+    private var runtimeDirId: String = ""
 
     private lateinit var fileChooserLauncher: ActivityResultLauncher<Intent>
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -111,31 +116,77 @@ class WebUIActivity : ComponentActivity() {
     }
 
     private suspend fun setupWebView() {
-        plugin = Axeron.getPluginById(intent.getStringExtra("id") ?: finishAndRemoveTask().let {
-            Toast.makeText(this, "Plugin-Id not found", Toast.LENGTH_SHORT).show()
-            return
-        })
+        // 运行时模块不在 Axeron 插件表里（装在 axeron/runtime_plugins/，
+        // 而 Axeron.getPluginById 只认 axeron/plugins/），因此不能走 getPluginById。
+        // 当调用方传入 runtime_mode=true 时，直接用传进来的 id / 目录定位 webroot。
+        val runtimeMode = intent.getBooleanExtra("runtime_mode", false)
+        val runtimeDirId = intent.getStringExtra("runtime_dir").orEmpty()
+        this.runtimeMode = runtimeMode
+        this.runtimeDirId = runtimeDirId
 
-        if (!plugin.hasWebUi || plugin.remove || !plugin.enabled) {
-            Toast.makeText(
-                this,
-                when {
-                    plugin.remove -> "Plugin removed"
-                    !plugin.enabled -> "Plugin disabled"
-                    else -> "Plugin has no web UI"
-                },
-                Toast.LENGTH_SHORT
-            ).show()
-            finish()
-            return
+        val pluginDir: File
+        val displayName: String
+
+        if (runtimeMode) {
+            if (runtimeDirId.isBlank()) {
+                Toast.makeText(this, "缺少运行时模块目录", Toast.LENGTH_SHORT).show()
+                finish()
+                return
+            }
+            val axeronRoot = PathHelper.getWorkingPath(
+                Axeron.getAxeronInfo().isRoot(),
+                AxeronApiConstant.folder.PARENT,
+            )
+            val resolved = File(File(axeronRoot, "runtime_plugins"), runtimeDirId)
+            if (!RuntimeWebUiProbe.exists(File(resolved, "webroot/index.html").absolutePath)) {
+                Toast.makeText(this, "模块没有 Web UI", Toast.LENGTH_SHORT).show()
+                finish()
+                return
+            }
+            pluginDir = resolved
+            displayName = intent.getStringExtra("runtime_name") ?: runtimeDirId
+        } else {
+            val pluginId = intent.getStringExtra("id")
+            if (pluginId.isNullOrBlank()) {
+                Toast.makeText(this, "Plugin-Id not found", Toast.LENGTH_SHORT).show()
+                finish()
+                return
+            }
+            // 注意：Axeron.getPluginById 是 Java 方法，返回 @Nullable（平台类型）。
+            // 运行时模块 / 已卸载模块 / id 不匹配时都会返回 null，
+            // 若直接解包成非空类型会抛 NullPointerException 导致 Activity 崩溃。
+            val info: PluginInfo? = Axeron.getPluginById(pluginId)
+            if (info == null || !info.hasWebUi || info.remove || !info.enabled) {
+                Toast.makeText(
+                    this,
+                    when {
+                        info == null -> "Plugin not found: $pluginId"
+                        info.remove -> "Plugin removed"
+                        !info.enabled -> "Plugin disabled"
+                        else -> "Plugin has no web UI"
+                    },
+                    Toast.LENGTH_SHORT
+                ).show()
+                finish()
+                return
+            }
+            plugin = info
+            pluginDir = File(
+                PathHelper.getWorkingPath(
+                    Axeron.getAxeronInfo().isRoot(),
+                    AxeronApiConstant.folder.PARENT_PLUGIN,
+                ),
+                info.dirId,
+            )
+            displayName = info.prop.name
         }
 
         val taskDescription = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ActivityManager.TaskDescription.Builder().setLabel("AxWebUI | ${plugin.prop.name}")
+            ActivityManager.TaskDescription.Builder().setLabel("AxWebUI | $displayName")
                 .build()
         } else {
             @Suppress("DEPRECATION")
-            ActivityManager.TaskDescription("AxWebUI | ${plugin.prop.name}")
+            ActivityManager.TaskDescription("AxWebUI | $displayName")
         }
         setTaskDescription(taskDescription)
 
@@ -144,8 +195,7 @@ class WebUIActivity : ComponentActivity() {
 
         WebView.setWebContentsDebuggingEnabled(developerOptionsEnabled && enableWebDebugging)
 
-        val pluginDir =
-            File(PathHelper.getWorkingPath(Axeron.getAxeronInfo().isRoot(),AxeronApiConstant.folder.PARENT_PLUGIN), plugin.dirId)
+        // pluginDir 已在上面按 shell / 运行时两种模式分别解析完毕。
         val webRoot = File(pluginDir, "webroot")
 
         insets = Insets(0, 0, 0, 0)
@@ -367,7 +417,8 @@ class WebUIActivity : ComponentActivity() {
         }
 
         val sdf = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.getDefault())
-        val fileName = "${plugin.dirId}_${sdf.format(Date())}${extension ?: ""}"
+        val prefix = if (runtimeMode) runtimeDirId else plugin.dirId
+        val fileName = "${prefix}_${sdf.format(Date())}${extension ?: ""}"
 
         try {
             pendingDownloadData = Base64.decode(base64Data, Base64.DEFAULT)

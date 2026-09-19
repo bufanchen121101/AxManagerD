@@ -60,15 +60,21 @@ object PluginScriptTracer {
                 ).stdout
             } ?: ""
         }
-        // strace 专用：命令内部用 `timeout -k 1 $timeoutSec` 限时，协程层超时必须更长
-        // （timeoutSec + 缓冲），否则配置的抓取时长会被 8 秒默认超时提前打断。
+        // strace 专用：命令内部用 `timeout -k 1 $timeoutSec` 限时，协程层超时**必须**用
+        // execProcessSafeWithTimeout（带真实 process.destroy() 强杀），而**不能**用
+        // withTimeoutOrNull { execProcessSafe(...) }——后者只能取消协程，杀不掉底层
+        // `timeout -k 1 ... strace ...` 进程，且 stdout 在 waitFor() 之后才取，
+        // 超时分支永远返回空串（用户反馈"调长调短都抓不全"的机制性原因之一）。
+        // 协程层超时设为「设置值 + 8 秒缓冲」，长于命令内部的 `timeout -k 1`，
+        // 保证正常情况由命令自身限时返回；异常情况由协程层强杀兜底。
         suspend fun execSafeLong(timeoutMs: Long, cmd: String): String {
-            return withTimeoutOrNull(timeoutMs) {
-                AxeronPluginService.execProcessSafe(
+            return runCatching {
+                AxeronPluginService.execProcessSafeWithTimeout(
                     cmd = arrayOf("/system/bin/sh", "-c", cmd),
-                    env = Axeron.getEnvironment()
+                    env = Axeron.getEnvironment(),
+                    timeoutMs = timeoutMs
                 ).stdout
-            } ?: ""
+            }.getOrDefault("")
         }
 
         RuntimeCommandTracer.begin()
@@ -106,9 +112,10 @@ object PluginScriptTracer {
             // exec 前先清空旧 debug 头（仅第一次）
             val t0 = System.currentTimeMillis()
             runCatching {
-                // strace 命令内部用 `timeout -k 1 $timeoutSec` 限时，协程层超时必须
-                // 大于它（+5 秒缓冲），否则配置的抓取时长会被 8 秒的默认 execSafe 超时提前打断。
-                execSafeLong((timeoutSec + 5) * 1000L, straceCmd)
+                // 协程层超时 = 设置值 + 8 秒缓冲，长于命令内部的 `timeout -k 1 $timeoutSec`。
+                // 正常情况下命令自身到点返回；异常（strace 卡在 ptrace 上不响应 SIGKILL）时
+                // 由 execProcessSafeWithTimeout 的 process.destroy() 强杀兜底。
+                execSafeLong((timeoutSec + 8) * 1000L, straceCmd)
             }.onFailure {
                 Log.e(TAG, "strace 执行异常", it)
             }
@@ -144,12 +151,19 @@ object PluginScriptTracer {
                 if (RuntimeCommandTracer.enabled) {
                     // 只丢弃 stdout，保留 stderr：sh -x 的 xtrace 行（`+ cmd`）正是发往 stderr 的，
                     // execWithIO 的 onStderr 才能逐行捕获；若 `2>&1` 会把它们一并重定向吞掉导致抓不到。
-                    // 与 strace 段一致：先 sed 加速 sleep（生成临时副本），再 sh -x 追踪，避免被大量 sleep 拖延。
-                    val xtraceRun = "${traceLog}.xtrace.sh"
-                    val xtraceCmd = "cd \"${pluginPath}\"; " +
-                        "sed 's/\\([[:space:]]\\)sleep[[:space:]][0-9.]*/\\1sleep 0.01/g' \"./$scriptName\" > \"$xtraceRun\" 2>/dev/null; " +
-                        "timeout -k 1 $timeoutSec sh -x \"$xtraceRun\" >/dev/null; " +
-                        "rm -f \"$xtraceRun\"; exit 0"
+                    // 【v1.2.3 修复】与 strace 段一致：**不再用 sed 加速 sleep**，直接对原脚本
+                    // 做 xtrace 追踪。旧实现的 sleep 加速副本会打乱时序、跳错分支，导致核心指令
+                    // 抓不全；统一改为真实时序执行，时长由 `timeout -k 1 $timeoutSec` 控制。
+                    // 【v1.4.0】统一改用 StraceHelper.buildXtraceCmd，带上 pluginBin 到 PATH
+                    // （模块脚本可能引用自身 bin 目录里的工具，旧实现没带 PATH 会执行失败→抓不到）。
+                    // 同时 strace 段已改为 `2>>$traceLog`，把 shell 的 xtrace fd 也并入日志；
+                    // 但 sh -x 只在 `sh -x` 启动时生效，故本段仍是内建命令抓取的主力。
+                    val xtraceCmd = StraceHelper.buildXtraceCmd(
+                        pluginPath = pluginPath,
+                        pluginBin = "$pluginPath/system/bin",
+                        scriptName = scriptName,
+                        timeoutSeconds = timeoutSec,
+                    )
                     AxeronPluginService.execWithIO(
                         cmd = xtraceCmd,
                         onStdout = { _ -> },

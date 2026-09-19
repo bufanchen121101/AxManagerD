@@ -9,13 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.app.ActivityManager
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.util.Log
-import frb.axeron.api.Axeron
-import frb.axeron.api.core.AxeronSettings
-import frb.axeron.api.core.Starter
 import frb.axeron.manager.R
 
 /**
@@ -31,7 +26,6 @@ class KeepAliveService : Service() {
         private const val NOTIFICATION_ID = 0x7A11
         private const val ACTION_START = "frb.axeron.manager.action.KEEP_ALIVE_START"
         private const val ACTION_STOP = "frb.axeron.manager.action.KEEP_ALIVE_STOP"
-        private const val CHECK_INTERVAL_MS = 5 * 60 * 1000L
 
         /** 判断保活前台服务当前是否处于运行状态。 */
         fun isRunning(context: Context): Boolean {
@@ -64,38 +58,27 @@ class KeepAliveService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private val handler = Handler(Looper.getMainLooper())
-    private val keepAliveCheckRunnable = object : Runnable {
-        override fun run() {
-            checkAndRestartServer()
-            handler.postDelayed(this, CHECK_INTERVAL_MS)
-        }
-    }
-
     override fun onCreate() {
         super.onCreate()
         createChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
-        handler.postDelayed(keepAliveCheckRunnable, CHECK_INTERVAL_MS)
+        // 保活加固：若本应用是 Device Owner，则利用 DO 特权降低被系统冻结/清理的概率。
+        // 失败不影响常规保活（前台服务 + START_STICKY 仍生效）。
+        applyDeviceOwnerHardening()
     }
 
+    /** 以 Device Owner 身份做一次保活加固（非 DO 时静默跳过）。 */
+    private fun applyDeviceOwnerHardening() {
+        runCatching {
+            if (!frb.axeron.manager.owner.DeviceOwnerAdbActivator.isOwner(this)) return
+            val r = frb.axeron.manager.owner.DeviceOwnerKeepAlive.apply(this)
+            Log.i("KeepAliveService", "DO hardening: $r")
+        }.onFailure { Log.w("KeepAliveService", "DO hardening failed", it) }
+    }
     override fun onDestroy() {
-        handler.removeCallbacks(keepAliveCheckRunnable)
         super.onDestroy()
     }
 
-    private fun checkAndRestartServer() {
-        // 仅当用户在设置里开启「模块进程保活」时才执行模块/server 检查与重启
-        if (!AxeronSettings.getEnableModuleKeepAlive()) return
-        runCatching {
-            if (!Axeron.pingBinder()) {
-                Log.w("KeepAliveService", "Axeron server disconnected, keep-alive restart")
-                Axeron.newProcess(Starter.internalCommand)
-            }
-        }.onFailure { e ->
-            Log.e("KeepAliveService", "keep-alive check failed", e)
-        }
-    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {

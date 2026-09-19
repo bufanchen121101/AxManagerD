@@ -46,9 +46,12 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -71,6 +74,7 @@ import frb.axeron.manager.ui.component.AxSnackBarHost
 import frb.axeron.manager.ui.component.SearchAppBar
 import frb.axeron.manager.ui.component.SettingsItem
 import frb.axeron.manager.ui.component.rememberLoadingDialog
+import frb.axeron.manager.features.runtime.RuntimeModuleService
 import frb.axeron.manager.ui.screen.FlashIt
 import frb.axeron.manager.ui.util.LocalSnackbarHost
 import frb.axeron.manager.ui.viewmodel.PluginViewModel
@@ -107,6 +111,19 @@ fun PluginScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlo
 
     val listState = rememberLazyListState()
     var showFab by remember { mutableStateOf(true) }
+
+    // 分区：0 = shell 模块（普通插件），1 = 运行时模块
+    var section by rememberSaveable { mutableIntStateOf(0) }
+    val sections = listOf("shell模块", "运行时模块")
+
+    // 进入页面 / 切到运行时模块分区时，确保服务在跑并重扫一次目录。
+    val runtimeContext = LocalContext.current
+    LaunchedEffect(section) {
+        if (section == 1) {
+            runCatching { RuntimeModuleService.start(runtimeContext) }
+            runCatching { RuntimeModuleService.rescan(runtimeContext) }
+        }
+    }
 
     LaunchedEffect(listState) {
         var lastIndex = listState.firstVisibleItemIndex
@@ -145,38 +162,57 @@ fun PluginScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlo
 
     Scaffold(
         topBar = {
-            SearchAppBar(
-                title = {
-                    Text(
-                        text = stringResource(R.string.plugin),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                },
-                searchLabel = stringResource(R.string.search_label_plugin),
-                searchText = pluginViewModel.search,
-                onSearchTextChange = { pluginViewModel.search = it },
-                onClearClick = { pluginViewModel.search = "" },
-                scrollBehavior = scrollBehavior,
-                action = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { navigator.navigate(AIMainScreenDestination) }) {
-                            Text(
-                                text = "AI",
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                SearchAppBar(
+                    title = {
+                        Text(
+                            text = stringResource(R.string.plugin),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    },
+                    searchLabel = stringResource(R.string.search_label_plugin),
+                    searchText = pluginViewModel.search,
+                    onSearchTextChange = { pluginViewModel.search = it },
+                    onClearClick = { pluginViewModel.search = "" },
+                    scrollBehavior = scrollBehavior,
+                    action = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { navigator.navigate(AIMainScreenDestination) }) {
+                                Text(
+                                    text = "AI",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    showExtraDialog = true
+                                })
+                            {
+                                Icon(Icons.Outlined.MoreVert, null)
+                            }
                         }
-                        IconButton(
-                            onClick = {
-                                showExtraDialog = true
-                            })
-                        {
-                            Icon(Icons.Outlined.MoreVert, null)
+                    }
+                )
+                // 分区切换：shell 模块 / 运行时模块
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    sections.forEachIndexed { index, label ->
+                        SegmentedButton(
+                            selected = section == index,
+                            onClick = { section = index },
+                            shape = SegmentedButtonDefaults.itemShape(index, sections.size),
+                            icon = {},
+                        ) {
+                            Text(label)
                         }
                     }
                 }
-            )
+            }
         },
         floatingActionButton = {
             AnimatedVisibility(
@@ -184,32 +220,41 @@ fun PluginScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlo
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
             ) {
+                // 用 rememberUpdatedState 固定「当前分区」的最新值：
+                // rememberLauncherForActivityResult 的回调闭包可能捕获注册时的旧 section，
+                // 导致在运行时模块分区安装却落到 plugins/。这里显式读取最新值。
+                val currentSection by rememberUpdatedState(section)
                 val selectZipLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.StartActivityForResult()
                 ) { result ->
                     if (result.resultCode != RESULT_OK) {
                         return@rememberLauncherForActivityResult
                     }
+                    val runtimeTarget = currentSection == 1
                     val data = result.data ?: return@rememberLauncherForActivityResult
                     val clipData = data.clipData
-
                     val installers = mutableListOf<PluginInstaller>()
                     if (clipData != null) {
                         for (i in 0 until clipData.itemCount) {
                             clipData.getItemAt(i)?.uri?.let {
-                                installers.add(PluginInstaller(it))
+                                installers.add(
+                                    PluginInstaller(it, runtimeModule = runtimeTarget)
+                                )
                             }
                         }
                     } else {
                         data.data?.let {
-                            installers.add(PluginInstaller(it))
+                            installers.add(
+                                PluginInstaller(it, runtimeModule = runtimeTarget)
+                            )
                         }
                     }
 
                     if (installers.isEmpty()) return@rememberLauncherForActivityResult
 
+                    // 冗余传递安装目标（不依赖 Parcel 往返）
+                    pluginViewModel.updateInstallRuntimeTarget(runtimeTarget)
                     pluginViewModel.updateZipUris(installers)
-
                     navigator.navigate(FlashScreenDestination(FlashIt.FlashPlugins(installers)))
                     pluginViewModel.clearZipUris()
                     pluginViewModel.markNeedRefresh()
@@ -277,35 +322,46 @@ fun PluginScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlo
         },
         snackbarHost = { AxSnackBarHost(hostState = snackBarHost) }
     ) { paddingValues ->
-        PluginList(
-            navigator = navigator,
-            settings = settingsViewModel,
-            viewModel = pluginViewModel,
-            modifier = Modifier.padding(paddingValues),
-            onInstallModule = {
-                navigator.navigate(
-                    FlashScreenDestination(
-                        FlashIt.FlashPlugins(
-                            listOf(
-                                PluginInstaller(it)
+        if (section == 0) {
+            PluginList(
+                navigator = navigator,
+                settings = settingsViewModel,
+                viewModel = pluginViewModel,
+                modifier = Modifier.padding(paddingValues),
+                onInstallModule = {
+                    // shell 分区内的「下载后自动安装」入口：显式把安装目标设为 shell，
+                    // 避免残留的 installRuntimeTarget 把模块误装进 runtime_plugins/。
+                    pluginViewModel.updateInstallRuntimeTarget(false)
+                    navigator.navigate(
+                        FlashScreenDestination(
+                            FlashIt.FlashPlugins(
+                                listOf(
+                                    PluginInstaller(it)
+                                )
                             )
                         )
                     )
-                )
-            },
-            onClickModule = { plugin ->
-                if (plugin.hasWebUi) {
-                    webUILauncher.launch(
-                        Intent(context, WebUIActivity::class.java).apply {
-                            putExtra("id", plugin.prop.id)
-                        }
-                    )
-                }
-            },
-            context = context,
-            snackBarHost = snackBarHost,
-            listState = listState
-        )
+                },
+                onClickModule = { plugin ->
+                    if (plugin.hasWebUi) {
+                        webUILauncher.launch(
+                            Intent(context, WebUIActivity::class.java).apply {
+                                // 必须传目录名 dirId，不能传 prop.id：
+                                // 服务端 getPluginById 把入参当作 plugins/<dir> 的目录名，
+                                // 传 prop.id（如 com.demo.xx）会查不到并返回 null，
+                                // 导致 WebUIActivity 空指针崩溃。
+                                putExtra("id", plugin.dirId)
+                            }
+                        )
+                    }
+                },
+                context = context,
+                snackBarHost = snackBarHost,
+                listState = listState
+            )
+        } else {
+            RuntimeModulePanel(modifier = Modifier.padding(paddingValues))
+        }
     }
 }
 

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Dangerous
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -29,7 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
-import com.ramcosta.composedestinations.generated.destinations.ChatScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.AiReferenceScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.CloudModelScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.DangerCodeScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.WhitelistScreenDestination
@@ -81,7 +82,8 @@ fun AIMainScreen(navigator: DestinationsNavigator) {
             SettingsItem(
                 iconVector = Icons.Filled.PowerSettingsNew,
                 label = "AI 引擎",
-                description = "AI 分析/对话功能总开关。关闭后所有分析将被跳过。",
+                description = "总开关。开启＝采用本定制版（AxManagerD）运行方式，执行模块前做 AI/规则拦截分析；" +
+                    "关闭＝回退到原始未修改的 AxManager 运行方式（不拦截、不分析）。",
                 checked = AIConfigStore.aiMasterEnabled,
                 onSwitchChange = { AIConfigStore.setAiMasterEnabled(it) },
             )
@@ -113,33 +115,34 @@ fun AIMainScreen(navigator: DestinationsNavigator) {
                 description = "自定义危险规则代码的导入与导出",
                 onClick = { navigator.navigate(DangerCodeScreenDestination) },
             )
+
+            // ============ 5. AI 参考文档（底层提示词 / 参考代码库 / 危险代码库） ============
+            SettingsItem(
+                iconVector = Icons.Filled.MenuBook,
+                label = "AI 参考文档",
+                description = "集中查阅：AI 底层提示词、内置参考代码库（规则）与危险代码库",
+                onClick = { navigator.navigate(AiReferenceScreenDestination) },
+            )
         }
     }
 }
 
 /**
- * 云端 AI 板块：官方默认 AI + 自定义 API 配置 + 对话 整合在一个板块内。
+ * 云端 AI 板块：官方默认 AI + 自定义 API 配置。
+ *
+ * 注意：云端对话入口已【合并到「云端模型配置」界面内】（唯一入口），
+ * 此处不再重复提供，避免两个入口造成困惑。
  */
 @Composable
 private fun CloudAiSection(navigator: DestinationsNavigator) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionHeader("云端 AI")
 
-        // 对话入口
-        SettingsItem(
-            iconVector = Icons.Filled.Chat,
-            label = "云端对话",
-            description = "与云端 AI 模型对话",
-            onClick = {
-                navigator.navigate(ChatScreenDestination(modelType = "cloud"))
-            },
-        )
-
-        // 配置入口（官方默认 AI + 自定义 API）
+        // 配置入口（官方默认 AI + 自定义 API + 云端对话）
         SettingsItem(
             iconVector = Icons.Filled.Cloud,
             label = "云端模型配置",
-            description = "官方默认 AI / 自定义 API 地址、Key、模型",
+            description = "官方默认 AI / 自定义 API 地址、Key、模型（含「云端对话」入口）",
             onClick = { navigator.navigate(CloudModelScreenDestination) },
         )
     }

@@ -53,6 +53,17 @@ object AIChatService {
             !AIConfigStore.cloudEndpoint.isNullOrBlank()
     }
 
+    /** 最近一次云端调用的失败原因（用于在 UI 上给出可诊断提示，避免只说"API 有问题"）。 */
+    @Volatile
+    var lastError: String? = null
+        private set
+
+    private fun fail(msg: String): String? {
+        lastError = msg
+        Log.e(TAG, msg)
+        return null
+    }
+
     /**
      * 解析当前生效的云端配置（endpoint, apiKey, model, provider）。
      * 官方默认 AI 开启时返回英伟达 nemotron 固定配置；否则返回用户自定义配置。
@@ -173,6 +184,7 @@ object AIChatService {
         onDelta: (String) -> Unit,
         modelOverride: String? = null,
     ): String? = withContext(Dispatchers.IO) {
+        lastError = null
         try {
             val cfg = resolveCloudConfig()
             val endpoint = cfg.endpoint
@@ -180,15 +192,30 @@ object AIChatService {
             val model = modelOverride?.takeIf { it.isNotBlank() } ?: cfg.model
 
             if (endpoint.isBlank() || apiKey.isBlank() || model.isBlank()) {
-                return@withContext null
+                return@withContext fail("云端配置不完整（网址/Key/模型有空项）")
+            }
+
+            // —— 上下文裁剪（修复「官方免费模型只能对话一次」）——
+            // 原因：官方 nemotron 为 reasoning 模型，system 提示词很长，且多轮对话会把
+            // 全部历史（含很长的 AI 回复）原样重发，token 迅速累积，第二轮起极易超限/
+            // 触发服务端限流而失败。这里对官方模型做保守裁剪：短 system + 仅保留最近 N 轮。
+            val isOfficial = AIConfigStore.useOfficialAi
+            val systemToSend = if (isOfficial) system.take(1200) else system
+            val maxHistory = if (isOfficial) 6 else 20
+            val trimmedHistory = if (history.size > maxHistory) {
+                history.takeLast(maxHistory)
+            } else {
+                history
             }
 
             val messages = JSONArray()
-            messages.put(JSONObject().put("role", "system").put("content", system))
-            history.forEach { h ->
-                messages.put(JSONObject().put("role", h.role).put("content", h.content))
+            messages.put(JSONObject().put("role", "system").put("content", systemToSend))
+            trimmedHistory.forEach { h ->
+                // 单条历史过长也裁剪，避免 reasoning 模型输入爆炸
+                val content = if (isOfficial) h.content.take(2000) else h.content
+                messages.put(JSONObject().put("role", h.role).put("content", content))
             }
-            messages.put(JSONObject().put("role", "user").put("content", prompt))
+            messages.put(JSONObject().put("role", "user").put("content", prompt.take(6000)))
 
             val body = JSONObject()
                 .put("model", model)
@@ -204,16 +231,20 @@ object AIChatService {
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
 
-            val response = axeronApp.okhttpClient.newCall(request).execute()
+            // 官方免费服务首响可能很慢（reasoning 模型），用更宽松的超时客户端。
+            val client = axeronApp.okhttpClient.newBuilder()
+                .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(180, java.util.concurrent.TimeUnit.SECONDS)
+                .callTimeout(180, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+
+            val response = client.newCall(request).execute()
             response.use { resp ->
                 if (!resp.isSuccessful) {
-                    Log.e(TAG, "chatStream HTTP ${resp.code} model=$model")
-                    return@withContext null
+                    val errBody = runCatching { resp.body?.string() }.getOrNull().orEmpty()
+                    return@withContext fail("云端返回 HTTP ${resp.code}：${errBody.take(300)}")
                 }
-                val source = resp.body?.source() ?: run {
-                    Log.e(TAG, "chatStream 空响应 body")
-                    return@withContext null
-                }
+                val source = resp.body?.source() ?: return@withContext fail("云端响应为空")
                 val sb = StringBuilder()
                 while (!source.exhausted()) {
                     val line = source.readUtf8Line() ?: break
@@ -224,11 +255,13 @@ object AIChatService {
                     sb.append(delta)
                     onDelta(delta)
                 }
-                sb.toString().ifEmpty { null }
+                if (sb.isEmpty()) {
+                    return@withContext fail("云端未返回任何内容（可能被限流或模型不可用）")
+                }
+                sb.toString()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "chatStream 异常", e)
-            null
+            fail("云端调用异常：${e.message ?: e.javaClass.simpleName}")
         }
     }
 

@@ -9,13 +9,40 @@ plugins {
 
 android {
     namespace = "frb.axeron.manager"
-
     defaultConfig {
-        applicationId = "frb.axeron.manager"
         // 只保留 arm64-v8a（现代 vivo 设备均为 64 位），砍掉 x86/x86_64/armeabi-v7a
         // 三份冗余 native 库（busybox/adb/rish/axeron 等 .so），显著减小 APK 体积。
         ndk {
             abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    // 双发行版：main = 正常 AxManager UI 主包；manages = 免 root 独立服务端壳。
+    //
+    // 为什么要有 manages：axeron_server 进程的 dex/assets 来自安装的 APK，
+    // 其 ensureScripts() 会用「自己 APK 内 assets/scripts/functions.sh」覆盖设备上的脚本。
+    // 若该 APK 里是旧脚本（无 install_plugin 第 4 参数 RUNTIME 分支），
+    // 运行时模块就会被装进 plugins/ 而不是 runtime_plugins/（BUG-7）。
+    // manages 用同一份源码构建，因此其 assets 自动携带最新 functions.sh。
+    flavorDimensions += "edition"
+    productFlavors {
+        // 注意：flavor 名不能叫 "main"——AGP 内部会用 flavor+buildType 拼 variant 名，
+        // 与保留的 src/main sourceSet 撞车，配置阶段直接报
+        // "Multiple entries with same key: main=[] and main=[]"。
+        // 故 UI 主包 flavor 命名为 official（applicationId 与产物名均与改造前一致）。
+        create("official") {
+            dimension = "edition"
+            applicationId = "frb.axeron.manager"
+        }
+        create("manages") {
+            dimension = "edition"
+            applicationId = "frb.axerond.manages"
+            // 覆盖安装：设备上旧 frb.axerond.manages 是 versionCode=14800（1.4.8.r349）。
+            // 若沿用全局 versionCode=8，install -r 会报 VERSION_DOWNGRADE，必须卸载。
+            // 这里给 manages flavor 单独指定 ≥14800 的 versionCode，实现直接覆盖安装。
+            // versionName 与原值保持一致，避免部分厂商对 versionName 降级做额外校验。
+            versionCode = 15000
+            versionName = "1.4.8.r349"
         }
     }
 
@@ -37,7 +64,11 @@ android {
     applicationVariants.all {
         outputs.all {
             val outputImpl = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            outputImpl.outputFileName = "AxManager_v${versionName}_${versionCode}-${buildType.name}.apk"
+            // 双 flavor 的 versionName/versionCode 完全相同（都由根 gradle 统一注入），
+            // 若不加后缀，official 与 manages 的 APK 会同名，CI 收集到同一 artifacts/ 目录时互相覆盖。
+            // 这里只给「非 official」的 flavor 追加后缀：official 产物名保持原样，不影响既有下载习惯。
+            val flavorSuffix = if (!flavorName.isNullOrEmpty() && flavorName != "official") "_${flavorName}" else ""
+            outputImpl.outputFileName = "AxManager_v${versionName}_${versionCode}${flavorSuffix}-${buildType.name}.apk"
 
             val outDir = File(rootDir, "out")
             val mappingPath = File(outDir, "mapping").absolutePath

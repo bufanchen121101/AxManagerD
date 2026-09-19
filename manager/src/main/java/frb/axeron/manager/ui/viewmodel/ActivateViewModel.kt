@@ -28,6 +28,7 @@ import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.core.Starter
 import frb.axeron.manager.AxeronApplication
 import frb.axeron.manager.adb.AdbStarter
+import frb.axeron.manager.owner.DeviceOwnerAdbActivator
 import frb.axeron.manager.owner.DeviceOwnerState
 import frb.axeron.manager.adb.AdbStarter.stopTcp
 import rikka.shizuku.Shizuku
@@ -156,15 +157,81 @@ class ActivateViewModel : ViewModel() {
 
     /** 刷新 Device Owner / Profile Owner 状态。 */
     fun refreshOwnerState() {
-        isDeviceOwner = DeviceOwnerState.isDeviceOwner
-        isProfileOwner = DeviceOwnerState.isProfileOwner
+        val context = AxeronApplication.axeronApp
+        // 关键修复：不再读 DeviceOwnerState 的静态缓存（进程未重启时会长期停留在 false），
+        // 而是直接向系统 DevicePolicyManager 实时查询，保证「已激活设备所有者」立即正确显示。
+        val (owner, profileOwner) = runCatching {
+            DeviceOwnerState.queryOwnerFlags(context)
+        }.getOrDefault(false to false)
+        isDeviceOwner = owner
+        isProfileOwner = profileOwner
         isDhizukuGranted = runCatching {
             // 必须先 init 建立到 Dhizuku server 的 binder，否则 isPermissionGranted() 会因
             // requireServer() 无 binder 抛 IllegalStateException，被兜底为 false，导致
             // 「已授权却显示未获得」的 bug。
-            com.rosan.dhizuku.api.Dhizuku.init(AxeronApplication.axeronApp) &&
+            com.rosan.dhizuku.api.Dhizuku.init(context) &&
                 com.rosan.dhizuku.api.Dhizuku.isPermissionGranted()
         }.getOrDefault(false)
+    }
+
+    /** 移除设备所有者（解除 Device Owner）所需的命令，作为应用内解除失败时的兜底。 */
+    val removeOwnerCommand: String
+        get() = DeviceOwnerState.buildRemoveOwnerCommand()
+
+    /**
+     * 是否应显示「移除设备所有者」操作入口。
+     * 只要当前是 Device Owner / Profile Owner，就允许执行解除。
+     */
+    val canRemoveOwner: Boolean
+        get() = isDeviceOwner || isProfileOwner
+
+    /** 解除进行中标志，用于 UI 禁用按钮 / 显示进度。 */
+    var isDeactivating by mutableStateOf(false)
+        private set
+
+    /** 最近一次解除操作的错误信息（成功时为 null）。 */
+    var deactivateError by mutableStateOf<String?>(null)
+        private set
+
+    /** 最近一次解除操作是否成功（用于 Toast 提示）。 */
+    var deactivateSuccess by mutableStateOf(false)
+        private set
+
+    /**
+     * 应用内主动解除设备所有者 / 工作资料所有者身份。
+     *
+     * 参照 Dhizuku 官方实现（HomePage.DeactivateWidget），直接调用 DPM 的
+     * clearProfileOwner + clearDeviceOwnerApp，无需 adb / root。
+     *
+     * @param onDone 解除流程结束后的回调：(success, errorMessage)
+     */
+    fun deactivateOwner(onDone: ((Boolean, String?) -> Unit)? = null) {
+        if (isDeactivating) return
+        isDeactivating = true
+        deactivateError = null
+        deactivateSuccess = false
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = AxeronApplication.axeronApp
+            val result = runCatching {
+                DeviceOwnerState.deactivateOwner(context)
+            }.getOrElse { t ->
+                DeviceOwnerState.DeactivateResult(false, t.message ?: t.toString())
+            }
+            viewModelScope.launch(Dispatchers.Main) {
+                // 无论成功与否都刷新一次真实状态，保证界面与系统一致
+                refreshOwnerState()
+                isDeactivating = false
+                deactivateSuccess = result.success
+                deactivateError = result.error
+                onDone?.invoke(result.success, result.error)
+            }
+        }
+    }
+
+    /** 清除解除操作的提示状态（Toast 消费后调用）。 */
+    fun clearDeactivateResult() {
+        deactivateSuccess = false
+        deactivateError = null
     }
 
     /**
@@ -190,11 +257,6 @@ class ActivateViewModel : ViewModel() {
     /** 设备所有者激活指令。 */
     val deviceOwnerCommand: String
         get() = "adb shell dpm set-device-owner " +
-                "${DeviceOwnerState.admin.packageName}/.owner.DeviceOwnerReceiver"
-
-    /** 资料所有者（Profile Owner）激活指令，适用于不支持设备所有者的机型。 */
-    val profileOwnerCommand: String
-        get() = "adb shell dpm set-profile-owner " +
                 "${DeviceOwnerState.admin.packageName}/.owner.DeviceOwnerReceiver"
 
     var isNotificationEnabled by mutableStateOf(false)
@@ -416,6 +478,94 @@ class ActivateViewModel : ViewModel() {
             resultChannel.trySend(it)
         }
         resultChannel.receive()
+    }
+
+    /**
+     * 【设备所有者激活】用 Device Owner 权限开启 ADB 并回连激活 AxManager。
+     *
+     * 完整链路（参考 Shevery 的 Dhizuku 提权链，但不需要 Dhizuku 用户服务）：
+     *   ① 校验本应用已是 Device Owner / Profile Owner；
+     *   ② 以 DO 身份 setGlobalSetting 打开 adb_enabled（Android 11+ 同时开 adb_wifi_enabled）；
+     *   ③ setprop service.adb.tcp.port + 重启 adbd，让 adbd 监听 127.0.0.1；
+     *   ④ 用 [AdbStarter.startAdbClient] 回连本机端口，握手后执行 Starter.internalAdbCommand
+     *      拿到 shell 身份，完成激活（与「USB/TCP 调试激活」同一条回连路径）。
+     *
+     * 必须在 IO 线程执行（内部有 socket 探测与 adbd 重启等待）。
+     */
+    suspend fun startAdbByDeviceOwner(context: Context): AdbStateInfo = withContext(Dispatchers.IO) {
+        if (tryActivate) return@withContext AdbStateInfo.Process("Trying to activate")
+        setTryToActivate(true)
+        resetStatus()
+
+        // ① 身份校验（失败原因直接透传给 UI 做提示）
+        if (!DeviceOwnerAdbActivator.isOwner(context)) {
+            setTryToActivate(false)
+            return@withContext AdbStateInfo.Failed("Device Owner not active")
+        }
+
+        // ②③ 开 ADB + 让 adbd 监听 TCP
+        val bind = DeviceOwnerAdbActivator.enableAdbAndBindTcp(context)
+        if (!bind.success || bind.port <= 0) {
+            setTryToActivate(false)
+            return@withContext AdbStateInfo.Failed(
+                bind.message.ifBlank { "Failed to enable ADB via Device Owner" }
+            )
+        }
+
+        // ④ 回连 127.0.0.1:<port> 完成激活（复用现成的 ADB 客户端握手）
+        val resultChannel = kotlinx.coroutines.channels.Channel<AdbStateInfo>(1)
+        val job = launch {
+            AdbStarter.startAdbClient(context, bind.port) {
+                resultChannel.trySend(it)
+            }
+        }
+
+        val result = withTimeoutOrNull(20000) {
+            resultChannel.receive()
+        } ?: AdbStateInfo.Failed("Timeout waiting for connection")
+
+        job.cancel()
+
+        // 记录本次激活方式为「设备所有者」，供「开机自动激活」在重启后走 DO 分支。
+        // 注意：AdbStarter.startAdbClient 成功时会写入 LaunchMethod.ADB，故此处必须在其之后覆盖。
+        if (result is AdbStateInfo.Success) {
+            AxeronSettings.setLastLaunchMode(AxeronSettings.LaunchMethod.DEVICE_OWNER)
+        }
+        result
+    }
+
+    /**
+     * Connect using the persisted fixed port (Device Owner Auto Start).
+     *
+     * Used by the Activate screen's "Port Auto Start" button: after a reboot the
+     * Device Owner keeps wireless debugging on, so we just reuse the saved port
+     * and hand it to the ADB client (which issues `tcpip:<port>` if needed).
+     */
+    suspend fun startAdbByFixedPort(context: Context): AdbStateInfo = withContext(Dispatchers.IO) {
+        if (tryActivate) return@withContext AdbStateInfo.Process("Trying to activate")
+        val fixedPort = AxeronSettings.getBootStartPort()
+        if (fixedPort !in 1..65535) {
+            return@withContext AdbStateInfo.Failed("No fixed port saved")
+        }
+        setTryToActivate(true)
+        resetStatus()
+
+        val resultChannel = kotlinx.coroutines.channels.Channel<AdbStateInfo>(1)
+        val job = launch {
+            AdbStarter.startAdbClient(context, fixedPort, forceTcpPort = fixedPort) {
+                resultChannel.trySend(it)
+            }
+        }
+        val result = withTimeoutOrNull(20000) {
+            resultChannel.receive()
+        } ?: AdbStateInfo.Failed("Timeout waiting for connection")
+
+        job.cancel()
+        if (result is AdbStateInfo.Success) {
+            AxeronSettings.setLastLaunchMode(AxeronSettings.LaunchMethod.DEVICE_OWNER)
+        }
+        setTryToActivate(false)
+        result
     }
 
     suspend fun stopAdbTcp(

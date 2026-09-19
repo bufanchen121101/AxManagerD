@@ -191,11 +191,15 @@ fun ChatScreen(
                                 },
                             )
                             if (full == null && messages[aiIndex].content.isBlank()) {
-                                // 失败且无内容
+                                // 失败且无内容：给出可诊断原因（而非笼统的"API 有问题"）
+                                val reason = AIChatService.lastError
+                                    ?: "调用失败，请检查云端配置（网址/Key/模型）"
                                 messages = messages.toMutableList().also {
                                     it[aiIndex] = ChatMessage(
                                         ChatRole.AI,
-                                        "调用失败，请检查云端配置（网址/Key/模型）",
+                                        "调用失败：$reason\n\n若使用官方免费 AI 多次失败，可尝试：" +
+                                            "①稍等片刻再试（免费服务可能限流）；" +
+                                            "②在「云端模型配置」中改用自定义 API。",
                                     )
                                 }
                             }

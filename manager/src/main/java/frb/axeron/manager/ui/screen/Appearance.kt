@@ -19,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.BlurOn
+import frb.axeron.manager.ui.theme.LiquidGlassSettings
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -98,6 +100,7 @@ fun AppearanceScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             val context = LocalContext.current
+    var glassEnabled by remember { mutableStateOf(LiquidGlassSettings.isEnabled(context)) }
             val prefs = AxeronSettings.getPreferences()
             var currentAppLocale by remember {
                 mutableStateOf(
@@ -321,6 +324,25 @@ fun AppearanceScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
                 }
             )
 
+            // —— 液态玻璃（Liquid Glass）——
+            // 开启后：底部导航栏呈现真正的液态玻璃质感
+            // （AGSL RuntimeShader 实时折射 / 色散 / 边缘光，需要 Android 13+）。
+            // 注意：本节「底栏玻璃」与「按压反馈」均只在 Android 13 (API 33) 及以上
+            // 有完整效果；低版本自动降级为基础半透明外观。
+            SettingsItem(
+                iconVector = Icons.Filled.BlurOn,
+                label = stringResource(R.string.liquid_glass_title),
+                // 对照 iOS 26「Liquid Glass」：半透明 + 背景折射 + 边缘高光 + 色散。
+                // API 33 以下不支持 RuntimeShader，只有半透明底色，故在此显式说明。
+                description = stringResource(R.string.liquid_glass_desc) +
+                    "\n" + stringResource(R.string.liquid_glass_requires_13),
+                checked = glassEnabled,
+                onSwitchChange = {
+                    glassEnabled = it
+                    LiquidGlassSettings.setEnabled(context, it)
+                }
+            )
+
             SettingsItem(
                 iconVector = Icons.Filled.Palette,
                 label = stringResource(R.string.color_palette),
@@ -349,8 +371,8 @@ fun AppearanceScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
                     )
                 }
             }
-        }
 
+        }
         if (showColorPicker) {
             PaletteDialog(
                 initialColor = currentColor,

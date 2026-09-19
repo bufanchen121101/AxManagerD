@@ -648,8 +648,8 @@ fun StatusPermissionTile(
     val fullyActivated = activateViewModel.isFullyActivated
     val shizukuActive = activateViewModel.isShizukuActive
     val dhizukuGranted = activateViewModel.isDhizukuGranted
-    // 每次进入/恢复首页时刷新授权状态，确保在外部 Dhizuku / Shizuku 应用中
-    // 授予或撤销权限后返回 AxManager 能立即同步，避免状态残留。
+    // Refresh permission state whenever the home screen enters/resumes, so that
+    // granting or revoking in the external Dhizuku / Shizuku app is reflected.
     LaunchedEffect(Unit) {
         activateViewModel.refreshAllStates()
     }
@@ -693,7 +693,7 @@ fun StatusPermissionTile(
                 fontWeight = if (fullyActivated) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (fullyActivated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
             )
-            // —— Shizuku / Dhizuku 独立状态指示（避免「已完全激活 vs 未激活」矛盾）——
+            // Shizuku indicator (independent of the owner identity below).
             Spacer(Modifier.height(8.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -713,23 +713,33 @@ fun StatusPermissionTile(
                     color = if (shizukuActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            // Mutual-exclusive privilege row: Device Owner > Dhizuku > none.
+            // When AxManager itself is the owner, do NOT also show the Dhizuku line.
             Spacer(Modifier.height(2.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                val ownerActive =
+                    activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner
+                val active = ownerActive || dhizukuGranted
                 Icon(
                     modifier = Modifier.size(14.dp),
-                    imageVector = if (dhizukuGranted) Icons.Filled.CheckCircle else Icons.Filled.Security,
+                    imageVector = if (active) Icons.Filled.CheckCircle else Icons.Filled.Security,
                     contentDescription = null,
-                    tint = if (dhizukuGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
                     text = stringResource(
-                        if (dhizukuGranted) R.string.dhizuku_granted else R.string.dhizuku_not_granted
+                        when {
+                            activateViewModel.isDeviceOwner -> R.string.device_owner_active
+                            activateViewModel.isProfileOwner -> R.string.profile_owner_active
+                            dhizukuGranted -> R.string.dhizuku_granted
+                            else -> R.string.device_owner_not_active
+                        }
                     ),
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (dhizukuGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(Modifier.weight(1f))
@@ -755,7 +765,6 @@ fun StatusPermissionTile(
         }
     }
 }
-
 @Composable
 fun UpdateCard() {
     val latestVersionInfo = LatestVersionInfo()
@@ -1010,18 +1019,26 @@ fun PermissionStatusCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                val ownerActive =
+                    activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner
+                val active = ownerActive || dhizukuGranted
                 Icon(
                     modifier = Modifier.size(16.dp),
-                    imageVector = if (dhizukuGranted) Icons.Filled.CheckCircle else Icons.Filled.Cancel,
+                    imageVector = if (active) Icons.Filled.CheckCircle else Icons.Filled.Cancel,
                     contentDescription = null,
-                    tint = if (dhizukuGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
                     text = stringResource(
-                        if (dhizukuGranted) R.string.dhizuku_granted else R.string.dhizuku_not_granted
+                        when {
+                            activateViewModel.isDeviceOwner -> R.string.device_owner_active
+                            activateViewModel.isProfileOwner -> R.string.profile_owner_active
+                            dhizukuGranted -> R.string.dhizuku_granted
+                            else -> R.string.device_owner_not_active
+                        }
                     ),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (dhizukuGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(Modifier.weight(1f))

@@ -160,10 +160,14 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
         commandText = text
     }
 
-    // 最近一次执行过的命令快照，供终端 AI 助手获取上下文（只读）
+    /**
+     * 只读快照：最近一次执行的命令全文（供终端 AI 助手作为上下文）。
+     *
+     * 与 [savedCommand] 的区别：savedCommand 会被 onProcessFinished 还原清空，
+     * 此处保存一份独立副本，不受执行流程影响。新增隔离方法，不改动既有逻辑。
+     */
     private var lastCommandSnapshot: String = ""
 
-    /** 获取最近一次执行的命令（只读），用于终端 AI 助手上下文。 */
     fun snapshotLastCommand(): String = lastCommandSnapshot
 
     fun clear() {
@@ -230,7 +234,7 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
 
-        lastCommandSnapshot = cmd
+        lastCommandSnapshot = cmd // 供终端 AI 助手读取上下文
         session.runCommand(cmd, isCompatModeEnabled)
     }
 
@@ -243,7 +247,7 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
 
-        lastCommandSnapshot = cmd
+        lastCommandSnapshot = cmd // 供终端 AI 助手读取上下文
         runDhizukuInternal(cmd)
     }
 

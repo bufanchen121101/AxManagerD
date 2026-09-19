@@ -91,7 +91,9 @@ fun createWebUIShortcut(context: Context, plugin: PluginInfo) {
             .setIntent(
                 Intent(context, WebUIActivity::class.java).apply {
                     action = Intent.ACTION_VIEW
-                    putExtra("id", plugin.prop.id)
+                    // 与服务端 getPluginById 对齐：入参是 plugins/<dir> 的目录名 dirId，
+                    // 传 prop.id 会查不到并返回 null，导致 WebUIActivity 崩溃。
+                    putExtra("id", plugin.dirId)
                 }
             )
             .build()

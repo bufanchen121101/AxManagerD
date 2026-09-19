@@ -2,6 +2,7 @@ package frb.axeron.manager.ui.component
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -61,6 +62,14 @@ fun SettingsItem(
     onSwitchChange: ((checked: Boolean) -> Unit)? = null,
     content: (@Composable (enabled: Boolean, checked: Boolean) -> Unit)? = null
 ) {
+    val clickAction: (() -> Unit)? =
+        if (onClick != null || onCheckedClick != null) {
+            {
+                onClick?.invoke()
+                onCheckedClick?.invoke(checked)
+            }
+        } else null
+
     ElevatedCard(
         modifier = when (type) {
             SettingsItemType.PARENT -> Modifier
@@ -81,92 +90,101 @@ fun SettingsItem(
             SettingsItemType.CHILD -> CardDefaults.elevatedCardElevation(defaultElevation = 0.dp)
         },
         enabled = enabled,
-        onClick = {
-            if (onClick != null) {
-                onClick()
-            }
-            if (onCheckedClick != null) {
-                onCheckedClick(checked)
-            }
-        }
+        onClick = { clickAction?.invoke() }
     ) {
-        Column {
-            Row(
-                modifier = when {
-                    label == null && description == null -> Modifier.height(IntrinsicSize.Min)
-                    else -> Modifier
-                        .padding(all = 16.dp)
-                        .height(IntrinsicSize.Min)
-                },
-                verticalAlignment = Alignment.CenterVertically
-            )
-            {
-                when {
-                    iconVector != null -> {
-                        Icon(
-                            modifier = Modifier.size(24.scaleDp),
-                            imageVector = iconVector,
-                            contentDescription = null,
-                            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.size(16.dp))
-                    }
+        SettingsItemBody(
+            type = type,
+            enabled = enabled,
+            label = label,
+            description = description,
+            iconVector = iconVector,
+            iconPainter = iconPainter,
+            checked = checked,
+            onSwitchChange = onSwitchChange,
+            content = content,
+            handleClick = false
+        )
+    }
+}
 
-                    iconPainter != null -> {
-                        Icon(
-                            modifier = Modifier.size(24.scaleDp),
-                            painter = iconPainter,
-                            contentDescription = null,
-                            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.size(16.dp))
-                    }
-                }
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    if (label != null) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    if (description != null) {
-                        Text(
-                            text = description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
+/** 设置项内容体，供普通卡片与液态玻璃两种外壳复用。 */
+@Composable
+private fun SettingsItemBody(
+    type: SettingsItemType,
+    enabled: Boolean,
+    label: String?,
+    description: String?,
+    iconVector: ImageVector?,
+    iconPainter: Painter?,
+    checked: Boolean,
+    onSwitchChange: ((Boolean) -> Unit)?,
+    content: (@Composable (enabled: Boolean, checked: Boolean) -> Unit)?,
+    handleClick: Boolean
+) {
+    Column {
+        Row(
+            modifier = when {
+                label == null && description == null -> Modifier.height(IntrinsicSize.Min)
+                else -> Modifier
+                    .padding(all = 16.dp)
+                    .height(IntrinsicSize.Min)
+            },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            when {
+                iconVector != null -> {
+                    Icon(
+                        modifier = Modifier.size(24.scaleDp),
+                        imageVector = iconVector,
+                        contentDescription = null,
+                        tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.size(16.dp))
                 }
 
-                if (onSwitchChange != null) {
-                    if (onCheckedClick != null) {
-                        Spacer(Modifier.width(12.dp))
-                        VerticalDivider(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .width(DividerDefaults.Thickness)
-                                .padding(vertical = 8.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant
-                        )
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Switch(
-                        enabled = enabled,
-                        checked = checked,
-                        onCheckedChange = onSwitchChange
+                iconPainter != null -> {
+                    Icon(
+                        modifier = Modifier.size(24.scaleDp),
+                        painter = iconPainter,
+                        contentDescription = null,
+                        tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.size(16.dp))
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                if (label != null) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Bold
                     )
                 }
-
+                if (description != null) {
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
 
-            if (content != null) {
-                content(enabled, checked)
+            if (onSwitchChange != null) {
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    enabled = enabled,
+                    checked = checked,
+                    onCheckedChange = onSwitchChange
+                )
             }
+        }
+
+        if (content != null) {
+            content(enabled, checked)
         }
     }
 }

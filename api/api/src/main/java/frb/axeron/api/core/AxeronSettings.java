@@ -34,7 +34,17 @@ public class AxeronSettings {
     public static final String LANGUAGE = "language";
     public static final String ENABLE_START_ON_BOOT = "enable_start_on_boot";
     public static final String ENABLE_KEEP_ALIVE = "enable_keep_alive";
+    /** v1.6.1：开机自动启动（无线调试预热）。独立于 enable_start_on_boot 的总开关。 */
+    public static final String BOOT_START_SERVICE = "boot_start_service";
+    /** v1.6.2：设备所有者自启动使用的固定 ADB 端口（开启开关时生成并持久化）。 */
+    public static final String BOOT_START_PORT = "boot_start_port";
     public static final String ENABLE_MODULE_KEEP_ALIVE = "enable_module_keep_alive";
+
+    /** 设备所有者保活加固总开关（电池白名单等）。 */
+    public static final String ENABLE_DO_KEEP_ALIVE = "enable_do_keep_alive";
+
+    /** 禁止卸载本应用（DO 持久策略，需总开关已开）。 */
+    public static final String ENABLE_DO_UNINSTALL_BLOCK = "enable_do_uninstall_block";
 
     private static SharedPreferences sPreferences;
 
@@ -173,12 +183,52 @@ public class AxeronSettings {
     public static void setEnableKeepAlive(boolean enable) {
         getPreferences().edit().putBoolean(ENABLE_KEEP_ALIVE, enable).apply();
     }
+    // BOOT START (v1.6.1 wireless-debugging prewarm)
+    public static boolean getBootStartService() {
+        return getPreferences().getBoolean(BOOT_START_SERVICE, false);
+    }
+
+    public static void setBootStartService(boolean enable) {
+        getPreferences().edit().putBoolean(BOOT_START_SERVICE, enable).apply();
+    }
+
+    // BOOT START PORT (fixed ADB TCP port for device-owner auto start)
+    public static int getBootStartPort() {
+        return getPreferences().getInt(BOOT_START_PORT, -1);
+    }
+
+    public static void setBootStartPort(int port) {
+        getPreferences().edit().putInt(BOOT_START_PORT, port).apply();
+    }
+
+    public static void clearBootStartPort() {
+        getPreferences().edit().remove(BOOT_START_PORT).apply();
+    }
+
     // MODULE KEEP ALIVE (module process keep-alive)
     public static boolean getEnableModuleKeepAlive() {
         return getPreferences().getBoolean(ENABLE_MODULE_KEEP_ALIVE, false);
     }
     public static void setEnableModuleKeepAlive(boolean enable) {
         getPreferences().edit().putBoolean(ENABLE_MODULE_KEEP_ALIVE, enable).apply();
+    }
+
+    // DEVICE OWNER KEEP ALIVE (DO-only hardening; no-op on non-DO devices)
+    public static boolean getEnableDoKeepAlive() {
+        return getPreferences().getBoolean(ENABLE_DO_KEEP_ALIVE, false);
+    }
+
+    public static void setEnableDoKeepAlive(boolean enable) {
+        getPreferences().edit().putBoolean(ENABLE_DO_KEEP_ALIVE, enable).apply();
+    }
+
+    // DO UNINSTALL BLOCK (persistent policy; must provide an in-app way to release)
+    public static boolean getEnableDoUninstallBlock() {
+        return getPreferences().getBoolean(ENABLE_DO_UNINSTALL_BLOCK, false);
+    }
+
+    public static void setEnableDoUninstallBlock(boolean enable) {
+        getPreferences().edit().putBoolean(ENABLE_DO_UNINSTALL_BLOCK, enable).apply();
     }
 
     //PRIMARY COLOR
@@ -208,11 +258,13 @@ public class AxeronSettings {
             LaunchMethod.UNKNOWN,
             LaunchMethod.ROOT,
             LaunchMethod.ADB,
+            LaunchMethod.DEVICE_OWNER,
     })
     @Retention(SOURCE)
     public @interface LaunchMethod {
         int UNKNOWN = -1;
         int ROOT = 0;
         int ADB = 1;
+        int DEVICE_OWNER = 2;
     }
 }

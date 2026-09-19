@@ -140,6 +140,7 @@ install_plugin() {
   local AUTO_ENABLE=$1
   local COMPAT=$2
   local BACKUP=$3
+  local RUNTIME=$4
   rm -rf "$TMPDIR"
   mkdir -p "$TMPDIR"
   cd "$TMPDIR" || exit
@@ -152,6 +153,8 @@ install_plugin() {
   # 备份安装使用独立目录，避免与默认安装（plugins/）冲突
   local MODROOT="$AXERONDIR/plugins"
   [ "$BACKUP" = "true" ] && MODROOT="$AXERONDIR/plugins_backup"
+  # 运行时模块装到独立目录，与普通插件完全隔离
+  [ "$RUNTIME" = "true" ] && MODROOT="$AXERONDIR/runtime_plugins"
   local MODROOT_UPDATE="$AXERONDIR/plugins_update"
   MODID=$(grep_prop id "$TMPPROP")
   MODNAME=$(grep_prop name "$TMPPROP")
