@@ -381,4 +381,3 @@ private fun ModuleListItem(
         },
     )
 }
-}
