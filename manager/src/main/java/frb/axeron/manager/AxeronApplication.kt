@@ -90,7 +90,9 @@ open class AxeronApplication : Engine() {
         // Overlay 授权链路自检（排查「点击无反应 / 不弹窗」用）：
         // 打印 App 侧解析出的 axeron 路径，并实测一次 shell 执行 + 目录可见性。
         // 日志落到 /sdcard/AxManagerD/logs/overlay.log，无需 adb 即可取。
-        Thread {
+        // 注意：installedModuleIds / execProcessSafeWithTimeout 都是 suspend 函数，
+        // 必须放在协程里调用（普通 Thread 会编译报错）。
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching {
                 frb.axeron.manager.util.OverlayLog.i("========== App 启动自检 ==========")
                 val om = frb.axeron.manager.features.overlay.OverlayManager
@@ -113,6 +115,6 @@ open class AxeronApplication : Engine() {
             }.onFailure {
                 frb.axeron.manager.util.OverlayLog.e("启动自检异常", it as? Throwable)
             }
-        }.start()
+        }
     }
 }
