@@ -99,9 +99,11 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
     /** 全量刷新：全局开关 + 免责 + 模块列表 + 授权状态。 */
     fun refresh() {
         viewModelScope.launch {
+            val t = OverlayLog.begin("vm.refresh")
             isRefreshing = true
             enabled = OverlayPermissionStore.isEnabled(app)
             disclaimerAccepted = OverlayPermissionStore.isDisclaimerAccepted(app)
+            OverlayLog.i("refresh: enabled=$enabled disclaimer=$disclaimerAccepted")
 
             // App 启动后 SP 与 shell 域 global.json 可能不一致（例如文件被手工改动），
             // 这里做一次反向校准：以 shell 域为准补齐 SP（只在磁盘上明确为 true 时才覆盖）。
@@ -120,6 +122,7 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
             val list = withContext(Dispatchers.IO) { loadRows() }
             rows = list
             isRefreshing = false
+            OverlayLog.end("vm.refresh", t, "rows=${list.size}")
         }
     }
 
@@ -204,7 +207,9 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
      */
     fun setModuleGranted(moduleId: String, granted: Boolean) {
         viewModelScope.launch {
+            val t = OverlayLog.begin("vm.setModuleGranted", "id=$moduleId granted=$granted")
             val current = rows.firstOrNull { it.moduleId == moduleId }
+            OverlayLog.i("setModuleGranted: 当前行=${current?.let { "mode=${it.mode} kind=${it.kind} reason=${it.reason}" } ?: "未找到(rows=${rows.size})"}")
             if (granted) {
                 val err = OverlayPermissionStore.putGrant(
                     app, moduleId, OverlayPermissionStore.GrantMode.ALWAYS,
@@ -216,6 +221,9 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
             }
             // 局部刷新该行，避免整页闪烁
             rows = loadRows()
+            val after = rows.firstOrNull { it.moduleId == moduleId }
+            OverlayLog.end("vm.setModuleGranted", t,
+                "刷新后 granted=${after?.granted} mode=${after?.mode} rows=${rows.size}")
         }
     }
 

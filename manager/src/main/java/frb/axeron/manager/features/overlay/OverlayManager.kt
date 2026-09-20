@@ -2,6 +2,7 @@ package frb.axeron.manager.features.overlay
 
 import frb.axeron.api.Axeron
 import frb.axeron.api.AxeronPluginService
+import frb.axeron.manager.util.OverlayLog
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.PathHelper
 import java.io.File
@@ -37,6 +38,25 @@ object OverlayManager {
         Axeron.getAxeronInfo().isRoot(),
         AxeronApiConstant.folder.PARENT
     ).absolutePath
+
+    /**
+     * 打印当前路径解析结果（排查「App 侧路径与 shell 侧不一致」类问题）。
+     *
+     * 已知风险：`axoverlay` 脚本里硬编码
+     * `/data/user_de/0/com.android.shell/axeron`，而这里走
+     * [PathHelper.getWorkingPath]；若两者不一致，就会出现
+     * 「模块申请的 pending 写在 A 处，App 去 B 处找 → 永远扫不到 → 不弹窗」。
+     */
+    fun logPaths() {
+        runCatching {
+            val root = axeronRoot()
+            val isRoot = runCatching { Axeron.getAxeronInfo().isRoot() }.getOrNull()
+            OverlayLog.i(
+                "路径解析: isRoot=$isRoot | axeronRoot=$root | perm=${permDir()} | " +
+                    "runtime=${runtimeRoot()} | shell=${shellRoot()}"
+            )
+        }.onFailure { OverlayLog.e("logPaths 失败", it) }
+    }
 
     /** perm 目录。 */
     fun permDir(): String = "${axeronRoot()}/${AxeronApiConstant.folder.PERM}"
@@ -81,14 +101,20 @@ object OverlayManager {
 
     /** 以 shell 身份执行单行命令，返回 (exitCode, stdout, stderr)。 */
     private suspend fun sh(command: String): Triple<Int, String, String> {
+        val t = OverlayLog.begin("sh", command.take(200))
         return try {
             val r = AxeronPluginService.execProcessSafeWithTimeout(
                 cmd = arrayOf("/system/bin/sh", "-c", command),
                 env = Axeron.getEnvironment(),
                 timeoutMs = TIMEOUT_MS,
             )
+            OverlayLog.end("sh", t, "exit=${r.exitCode} out=${r.stdout.trim().take(120)}")
+            if (r.exitCode != 0) {
+                OverlayLog.w("sh 非零退出: cmd=${command.take(200)} err=${r.stderr.trim().take(200)}")
+            }
             Triple(r.exitCode, r.stdout, r.stderr)
         } catch (e: Throwable) {
+            OverlayLog.e("sh 抛异常: cmd=${command.take(200)}", e)
             Triple(-1, "", e.toString())
         }
     }
@@ -181,16 +207,13 @@ object OverlayManager {
         if (!isSafeRel(relPath)) return "非法路径"
         val dst = "${overlayDir(moduleId)}/$relPath"
         val dir = dst.substringBeforeLast('/')
-        // 用 heredoc 传内容，避免引号/换行转义问题；内容长度不设限（仅受授权层约束）。
-        val cmd = buildString {
-            append("mkdir -p ")
-            append(q(dir))
-            append(" && cat > ")
-            append(q(dst))
-            append(" <<'AXOVERLAY_EOF'\n")
-            append(content)
-            append("\nAXOVERLAY_EOF\n")
-        }
+        // 真机实测：heredoc 在 `sh -c "<多行字符串>"` 下静默失败（写 0 字节）。
+        // 因此改用 base64 单行管道：内容完全可控，无需任何转义/多行语义。
+        val b64 = android.util.Base64.encodeToString(
+            content.toByteArray(Charsets.UTF_8),
+            android.util.Base64.NO_WRAP
+        )
+        val cmd = "mkdir -p ${q(dir)} && printf '%s' '$b64' | base64 -d > ${q(dst)}"
         val (code, _, err) = sh(cmd)
         if (code != 0) return err.trim().ifEmpty { "写入失败 (exit $code)" }
         sh("chmod 644 ${q(dst)}")

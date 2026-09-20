@@ -218,15 +218,11 @@ request)
     now="$(date +%s 2>/dev/null || echo 0)"
     # 转义双引号，避免破坏 JSON。
     esc_reason="$(printf '%s' "${REASON}" | sed 's/"/\\"/g')"
-    cat > "${PENDING_JSON}.tmp" <<EOF
-{
-  "id": "${MODULE_ID}",
-  "reason": "${esc_reason}",
-  "requestedAt": ${now},
-  "requestedCaps": ["assets_read", "assets_write"]
-}
-EOF
-    mv "${PENDING_JSON}.tmp" "${PENDING_JSON}"
+    # 真机实测：本机 /system/bin/sh(mksh) 下 heredoc 会因无法创建临时文件而静默失败
+    # （写出 0 字节文件）→ App 扫不到 pending → 不弹窗。改用 base64 单行管道。
+    JSON="{\"id\":\"${MODULE_ID}\",\"reason\":\"${esc_reason}\",\"requestedAt\":${now},\"requestedCaps\":[\"assets_read\",\"assets_write\"]}"
+    B64="$(printf '%s' "${JSON}" | base64 -w0 2>/dev/null || printf '%s' "${JSON}" | base64)"
+    printf '%s' "${B64}" | base64 -d > "${PENDING_JSON}"
     chmod 644 "${PENDING_JSON}" 2>/dev/null
     echo "requested"
     ;;

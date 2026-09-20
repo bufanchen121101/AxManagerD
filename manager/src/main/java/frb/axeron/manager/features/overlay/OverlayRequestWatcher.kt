@@ -68,9 +68,10 @@ object OverlayRequestWatcher {
                     env = Axeron.getEnvironment(),
                     timeoutMs = TIMEOUT_MS,
                 )
+                OverlayLog.d("scan pending: dir=$dir exit=${r.exitCode} out=${r.stdout.trim().replace("\n", ",")}")
                 if (r.exitCode == 0) r.stdout else ""
             }.getOrElse {
-                OverlayLog.w("scan pending failed: $it")
+                OverlayLog.w("scan pending failed: dir=$dir err=$it")
                 ""
             }
 

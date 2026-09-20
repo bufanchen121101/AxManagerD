@@ -129,17 +129,8 @@ object OverlayPermissionStore {
         }
         val dir = OverlayManager.permDir()
         val file = "$dir/global.json"
-        // 注意：heredoc 结束符必须独占一行，因此前面补 '\n'。
-        // 若不加，$json 结尾与结束符会在同一行，导致 "here document unclosed"
-        // 进而写出 0 字节文件（授权/开关状态全部读不到）。
-        val cmd = "mkdir -p '$dir' && cat > '$file' <<'AXOVERLAY_EOF'\n$json\nAXOVERLAY_EOF\n"
-        runCatching {
-            AxeronPluginService.execProcessSafeWithTimeout(
-                cmd = arrayOf("/system/bin/sh", "-c", cmd),
-                env = Axeron.getEnvironment(),
-                timeoutMs = TIMEOUT_MS,
-            )
-        }.onFailure { OverlayLog.w("syncGlobalJson failed: $it") }
+        // 真机实测：heredoc 在 `sh -c` 下静默失败（写 0 字节），改用 base64 单行写入。
+        writeFileViaShell(file, json)
     }
 
     /**
@@ -271,6 +262,8 @@ object OverlayPermissionStore {
         val file = "$dir/$moduleId.json"
         val now = System.currentTimeMillis() / 1000L
 
+        OverlayLog.i("putGrant 开始: id=$moduleId mode=$mode file=$file")
+
         if (mode == GrantMode.DENIED) {
             // 拒绝 = 删除授权文件（同时清掉 pending）
             runCatching {
@@ -304,39 +297,77 @@ object OverlayPermissionStore {
         }
         val json = gson.toJson(obj) + "\n"
 
-        // 注意：heredoc 结束符必须独占一行（见 syncGlobalJson 同名注释）。
-        val cmd = "mkdir -p '$dir' && cat > '$file' <<'AXOVERLAY_EOF'\n$json\nAXOVERLAY_EOF\n"
-        val r = runCatching {
-            AxeronPluginService.execProcessSafeWithTimeout(
-                cmd = arrayOf("/system/bin/sh", "-c", cmd),
-                env = Axeron.getEnvironment(),
-                timeoutMs = TIMEOUT_MS,
-            )
-        }.getOrNull()
-
-        if (r == null || r.exitCode != 0) {
-            val msg = r?.stderr?.trim().orEmpty().ifEmpty { "写入授权失败" }
-            OverlayLog.w("putGrant failed: $msg")
-            return@withContext msg
+        // 真机实测：heredoc 在 `sh -c` 下静默失败（写 0 字节），改用 base64 单行写入。
+        return@withContext writeFileViaShell(file, json).also { err ->
+            if (err == null) {
+                // 授权成功后清掉 pending
+                runCatching {
+                    AxeronPluginService.execProcessSafeWithTimeout(
+                        cmd = arrayOf("/system/bin/sh", "-c", "rm -f '${OverlayManager.permDir()}/pending/$moduleId.json'"),
+                        env = Axeron.getEnvironment(),
+                        timeoutMs = TIMEOUT_MS,
+                    )
+                }
+            }
         }
-
-        // 授权成功后清掉 pending
-        runCatching {
-            AxeronPluginService.execProcessSafeWithTimeout(
-                cmd = arrayOf(
-                    "/system/bin/sh", "-c",
-                    "rm -f '${OverlayManager.permDir()}/pending/$moduleId.json'"
-                ),
-                env = Axeron.getEnvironment(),
-                timeoutMs = TIMEOUT_MS,
-            )
-        }
-        null
     }
 
     /** 撤销授权。 */
     suspend fun revoke(context: Context, moduleId: String): String? =
         putGrant(context, moduleId, GrantMode.DENIED)
+
+    // -----------------------------------------------------------------------
+    // 底层写文件（真机必需：禁止 heredoc）
+    // -----------------------------------------------------------------------
+
+    /**
+     * 把 [content] 写到 shell 域 [path]（自动 mkdir 父目录）。
+     *
+     * **为什么不用 heredoc**：真机 `/system/bin/sh`(mksh) 在
+     * `sh -c "<含真换行的多行字符串>"` 调用下，heredoc 会静默失败
+     * （实测 exit=1 且写出 0 字节文件），导致授权状态读不回来。
+     *
+     * 因此这里改为 **base64 单行管道**：内容先 base64 编码（只含
+     * `A-Za-z0-9+/=`，**不含任何需要转义的字符**），再用
+     * `printf '%s' '<b64>' | base64 -d > '<path>'` 写入。
+     * 已实测在真机 sh -c 下稳定写出正确字节。
+     *
+     * @return null 表示成功，否则为错误信息
+     */
+    private suspend fun writeFileViaShell(path: String, content: String): String? =
+        withContext(Dispatchers.IO) {
+            val dir = path.substringBeforeLast('/')
+            val b64 = android.util.Base64.encodeToString(
+                content.toByteArray(Charsets.UTF_8),
+                android.util.Base64.NO_WRAP
+            )
+            // 单行命令；b64 与 path 都用单引号包裹，因两者均不含单引号，安全。
+            val cmd = "mkdir -p '$dir' && printf '%s' '$b64' | base64 -d > '$path'"
+            val r = runCatching {
+                AxeronPluginService.execProcessSafeWithTimeout(
+                    cmd = arrayOf("/system/bin/sh", "-c", cmd),
+                    env = Axeron.getEnvironment(),
+                    timeoutMs = TIMEOUT_MS,
+                )
+            }.getOrNull()
+            if (r == null || r.exitCode != 0) {
+                val msg = r?.stderr?.trim().orEmpty().ifEmpty { "写入失败(exit=${r?.exitCode})" }
+                OverlayLog.w("writeFileViaShell 失败: path=$path exit=${r?.exitCode} msg=$msg")
+                return@withContext msg
+            }
+            // 回读校验：确认字节数 > 0（防止再次出现「写了但 0 字节」）
+            val verify = runCatching {
+                AxeronPluginService.execProcessSafeWithTimeout(
+                    cmd = arrayOf("/system/bin/sh", "-c", "wc -c < '$path' 2>/dev/null"),
+                    env = Axeron.getEnvironment(),
+                    timeoutMs = TIMEOUT_MS,
+                )
+            }.getOrNull()
+            val size = verify?.stdout?.trim()?.toLongOrNull() ?: -1L
+            OverlayLog.i("writeFileViaShell 成功: path=$path 字节=$size (期望=${content.toByteArray(Charsets.UTF_8).size})")
+            if (size <= 0L) return@withContext "写入校验失败：文件为空"
+            null
+        }
 
     // -----------------------------------------------------------------------
     // 内部
