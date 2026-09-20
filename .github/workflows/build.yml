@@ -71,14 +71,33 @@ jobs:
           sed -i '/maven.aliyun.com/d' settings.gradle.kts
           echo '--- settings.gradle.kts pluginManagement ---'
           sed -n '1,30p' settings.gradle.kts
-      # 让 Gradle 知道 runner 上 Temurin 21 的位置（某些插件声明了
-      # toolchain {languageVersion=21, vendor=Oracle}，vendor 不匹配会直接失败）。
-      - name: Point Gradle to installed JDK 21
+      # 关键修复：某些 Gradle 插件在二进制里写死了
+      # toolchain {languageVersion=21, vendor=Oracle}。Gradle 8.x 的 VendorSpec
+      # 对 vendor 是**字面匹配**，runner 上只有 Temurin（IMPLEMENTOR="Eclipse
+      # Adoptium"）→ 报 "Cannot find a Java installation ... vendor=Oracle"。
+      # 这里不改项目代码，而是在 runner 上构造一个「vendor 报告为 Oracle」的
+      # JDK 目录（符号链接 + 覆盖 release 的 IMPLEMENTOR 字段）。
+      - name: Fake an "Oracle" JDK 21 (vendor match workaround)
         run: |
+          set -e
+          FAKE=/opt/fake-oracle-jdk21
+          sudo rm -rf "$FAKE"
+          sudo mkdir -p "$FAKE"
+          for d in "$JAVA_HOME"/*; do
+            b=$(basename "$d")
+            [ "$b" = "release" ] && continue
+            sudo ln -s "$d" "$FAKE/$b"
+          done
+          sudo sed \
+            -e 's/^IMPLEMENTOR=.*/IMPLEMENTOR="Oracle"/' \
+            -e 's/^IMPLEMENTOR_VERSION=.*/IMPLEMENTOR_VERSION="Oracle JDK"/' \
+            "$JAVA_HOME/release" | sudo tee "$FAKE/release" >/dev/null
+          sudo chmod 755 "$FAKE"
+          cat "$FAKE/release" | head -3
+          "$FAKE/bin/java" -version 2>&1 || true
           mkdir -p ~/.gradle
-          echo "JAVA_HOME=$JAVA_HOME"
-          "$JAVA_HOME/bin/java" -version
-          echo "org.gradle.java.installations.paths=$JAVA_HOME" >> ~/.gradle/gradle.properties
+          echo "org.gradle.java.installations.paths=$FAKE,$JAVA_HOME" >> ~/.gradle/gradle.properties
+          echo "org.gradle.java.installations.auto-detect=true" >> ~/.gradle/gradle.properties
       # 一次 Gradle 调用同时构建两个 flavor：省掉一次冷启动 + 配置阶段（约 2-3 分钟）
       - name: Build release APKs (R8 enabled)
         run: |

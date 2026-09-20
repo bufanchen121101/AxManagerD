@@ -53,31 +53,48 @@ jobs:
         run: chmod +x gradlew
       - name: Use official maven repos
         run: sed -i '/maven.aliyun.com/d' settings.gradle.kts
-      # 让 Gradle 知道 runner 上 Temurin 21 的位置：
-      # 某些插件声明了 toolchain {languageVersion=21, vendor=Oracle}，
-      # 在 vendor 不匹配时会直接构建失败（Cannot find a Java installation）。
-      # 这里把 JAVA_HOME 追加到用户级 gradle.properties 的
-      # org.gradle.java.installations.paths，让 Gradle 能定位到已装 JDK 21。
-      - name: Point Gradle to installed JDK 21
-        run: |
-          mkdir -p ~/.gradle
-          echo "JAVA_HOME=$JAVA_HOME"
-          "$JAVA_HOME/bin/java" -version
-          echo "org.gradle.java.installations.paths=$JAVA_HOME" >> ~/.gradle/gradle.properties
-          cat ~/.gradle/gradle.properties
-      # 诊断：打印 runner 上所有可用 JDK 及其 vendor 字符串，辅助定位
-      # "Cannot find a Java installation matching {vendor=Oracle}" 的来源。
+      # 诊断：打印可用 JDK 及其 vendor 字符串。
       - name: Diagnose available JDKs
         run: |
           echo "=== java -version ==="
           java -version 2>&1 || true
           echo "=== JAVA_HOME=$JAVA_HOME ==="
-          echo "=== /usr/lib/jvm ==="
-          ls -la /usr/lib/jvm 2>/dev/null || true
-          echo "=== JAVA_HOME/release ==="
           cat "$JAVA_HOME/release" 2>/dev/null || true
-          echo "=== toolchains cache ==="
-          ls -la ~/.gradle/jdks 2>/dev/null || true
+      # 关键修复：某些 Gradle 插件（如 rikka-tools-refine）在二进制里写死了
+      # toolchain {languageVersion=21, vendor=Oracle}。Gradle 8.x 的 VendorSpec
+      # 在 vendor 上是**字面匹配**，runner 上只有 Temurin（IMPLEMENTOR="Eclipse
+      # Adoptium"）→ 报 "Cannot find a Java installation ... vendor=Oracle"。
+      #
+      # 这里不改项目代码，而是在 runner 上构造一个「vendor 报告为 Oracle」的
+      # JDK 目录（符号链接 + 覆盖 release 文件里的 IMPLEMENTOR 字段），
+      # 再通过 org.gradle.java.installations.paths 告知 Gradle。
+      - name: Fake an "Oracle" JDK 21 (vendor match workaround)
+        run: |
+          set -e
+          FAKE=/opt/fake-oracle-jdk21
+          sudo rm -rf "$FAKE"
+          sudo mkdir -p "$FAKE"
+          # 用符号链接镜像真实 JDK（bin/lib/...），保证实际可用
+          for d in "$JAVA_HOME"/*; do
+            b=$(basename "$d")
+            [ "$b" = "release" ] && continue
+            sudo ln -s "$d" "$FAKE/$b"
+          done
+          # 改写 release 文件：把 IMPLEMENTOR 换成 Oracle，
+          # 并补上 Gradle 解析 vendor 时读取的字段。
+          sudo sed \
+            -e 's/^IMPLEMENTOR=.*/IMPLEMENTOR="Oracle"/' \
+            -e 's/^IMPLEMENTOR_VERSION=.*/IMPLEMENTOR_VERSION="Oracle JDK"/' \
+            "$JAVA_HOME/release" | sudo tee "$FAKE/release" >/dev/null
+          sudo chmod 755 "$FAKE"
+          echo "--- fake release ---"
+          cat "$FAKE/release" | head -6
+          echo "--- java smoke test ---"
+          "$FAKE/bin/java" -version 2>&1 || true
+          mkdir -p ~/.gradle
+          echo "org.gradle.java.installations.paths=$FAKE,$JAVA_HOME" >> ~/.gradle/gradle.properties
+          echo "org.gradle.java.installations.auto-detect=true" >> ~/.gradle/gradle.properties
+          cat ~/.gradle/gradle.properties
       # 只编 Kotlin：跳过 R8 / dex / 资源打包 / 签名，编译错误仍会暴露
       - name: Verify Kotlin compile (official)
         run: |
