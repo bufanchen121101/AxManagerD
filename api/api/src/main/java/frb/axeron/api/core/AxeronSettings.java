@@ -40,6 +40,16 @@ public class AxeronSettings {
     public static final String BOOT_START_PORT = "boot_start_port";
     public static final String ENABLE_MODULE_KEEP_ALIVE = "enable_module_keep_alive";
 
+    /**
+     * 模块核心文件修改（Overlay）总开关。
+     *
+     * 该开关由 manager 层的 OverlayPermissionStore 同时写入：
+     *  - manager 自己的 SharedPreferences（overlay_settings/overlay_enabled）
+     *  - 本 settings（用于 api/server 层在 shell/server 进程内读取）
+     * 只有此处为 true 时，运行时模块的 overlay 才会被 ensureScripts 优先采用。
+     */
+    public static final String ENABLE_MODULE_OVERLAY = "enable_module_overlay";
+
     /** 设备所有者保活加固总开关（电池白名单等）。 */
     public static final String ENABLE_DO_KEEP_ALIVE = "enable_do_keep_alive";
 
@@ -211,6 +221,23 @@ public class AxeronSettings {
     }
     public static void setEnableModuleKeepAlive(boolean enable) {
         getPreferences().edit().putBoolean(ENABLE_MODULE_KEEP_ALIVE, enable).apply();
+    }
+
+    // MODULE OVERLAY (allow modules to override core files)
+
+    /**
+     * 模块核心文件修改（Overlay）总开关。
+     *
+     * 说明：真正的权限判定/授权持久化在 manager 层的 OverlayPermissionStore，
+     * 这里只提供一个 api/server 层（shell 进程）可读取的镜像值，供
+     * [AxeronPluginService.ensureScripts] 决定是否允许 overlay 覆盖核心脚本。
+     */
+    public static boolean getEnableModuleOverlay() {
+        return getPreferences().getBoolean(ENABLE_MODULE_OVERLAY, false);
+    }
+
+    public static void setEnableModuleOverlay(boolean enable) {
+        getPreferences().edit().putBoolean(ENABLE_MODULE_OVERLAY, enable).apply();
     }
 
     // DEVICE OWNER KEEP ALIVE (DO-only hardening; no-op on non-DO devices)

@@ -81,6 +81,7 @@ import com.ramcosta.composedestinations.generated.destinations.AppearanceScreenD
 import com.ramcosta.composedestinations.generated.destinations.DangerCodeScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.DeveloperScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.OverlayPermissionScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.SettingsEditorScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.adb.util.AdbEnvironment
@@ -91,8 +92,10 @@ import frb.axeron.manager.ui.component.SettingsItem
 import frb.axeron.manager.ui.component.SettingsItemType
 import frb.axeron.manager.ui.component.rememberConfirmDialog
 import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
+import frb.axeron.manager.features.overlay.OverlayPermissionStore
 import frb.axeron.manager.features.keepalive.KeepAliveService
 import frb.axeron.manager.owner.LockscreenOrganization
+import frb.axeron.manager.ui.icon.AxeronIcons
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.PathHelper
 import kotlinx.coroutines.launch
@@ -115,6 +118,22 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
 
     // 锁屏组织名称开关状态（初始值从偏好读取，避免每次重组重置）
     var orgEnabled by remember { mutableStateOf(LockscreenOrganization.isEnabled()) }
+
+    // 「允许模块修改核心文件」总开关状态（放在设置页最顶部，用户要求「很重要 → 靠上」）。
+    var overlayEnabled by remember { mutableStateOf(OverlayPermissionStore.isEnabled(settingsContext)) }
+    val lifecycleOwner = androidx.lifecycle.compose.rememberLifecycleOwner()
+    DisposableEffect(Unit) {
+        val observer = object : androidx.lifecycle.DefaultLifecycleObserver {
+            override fun onResume(owner: androidx.lifecycle.LifecycleOwner) {
+                // 从授权页返回时同步开关状态（两处入口共享同一份 SP）
+                overlayEnabled = OverlayPermissionStore.isEnabled(settingsContext)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     DeveloperInfo(
         showDevDialog
@@ -160,6 +179,32 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 .padding(top = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+
+            // ===== 模块核心文件修改权限（用户要求：很重要 → 放在设置页最顶部） =====
+            // 第 1 项：全局总开关
+            SettingsItem(
+                iconVector = AxeronIcons.AxeronMark,
+                label = stringResource(R.string.overlay_global_switch),
+                description = stringResource(R.string.overlay_global_switch_desc),
+                checked = overlayEnabled,
+                onSwitchChange = { enabled ->
+                    overlayEnabled = enabled
+                    scope.launch {
+                        OverlayPermissionStore.setEnabled(settingsContext, enabled)
+                    }
+                }
+            )
+
+            // 第 2 项：权限管理入口
+            SettingsItem(
+                iconVector = AxeronIcons.AxeronMark,
+                label = stringResource(R.string.overlay_perm_manage),
+                description = stringResource(R.string.overlay_perm_manage_desc),
+                onClick = {
+                    navigator.navigate(OverlayPermissionScreenDestination)
+                }
+            )
+            // ===== 顶部两项结束 =====
 
             AnimatedVisibility(visible = axeronRunning) {
                 val lifecycleOwner = rememberLifecycleOwner()

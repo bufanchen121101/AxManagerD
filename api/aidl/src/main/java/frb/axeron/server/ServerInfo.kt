@@ -25,7 +25,7 @@ data class ServerInfo(
             -1 -> Mode.NOT_ACTIVATED
             0 -> Mode.ROOT
             2000 -> Mode.SHELL
-            else -> Mode.ROOT
+            else -> Mode.USER
         }
     }
 }

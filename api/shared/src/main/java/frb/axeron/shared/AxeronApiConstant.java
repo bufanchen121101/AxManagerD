@@ -27,7 +27,12 @@ public class AxeronApiConstant {
         String BINARY = "bin/";
         String EXTERNAL_BINARY = "xbin/";
         String ZIP = "zip/";
+        /** 模块核心文件 Overlay：权限数据目录（pending/ granted/ global.json）。 */
+        String PERM = "perm/";
+        /** 模块核心文件 Overlay：模块覆盖层根目录名前缀。 */
+        String OVERLAY = "overlay/";
         String PARENT_PLUGIN = PARENT + PLUGIN;
+        String PARENT_PERM = PARENT + PERM;
         String PARENT_CACHE = PARENT + CACHE;
         String PARENT_LOG = PARENT + LOG;
         String PARENT_BINARY = PARENT + BINARY;

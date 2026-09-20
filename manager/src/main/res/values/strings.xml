@@ -657,4 +657,36 @@
     <string name="boot_start_autostart_title">Allow auto start</string>
     <string name="boot_start_autostart_desc">Some system skins block boot broadcasts. Open the auto-start list and allow AxManager.</string>
     <string name="boot_start_autostart_action">Open auto-start settings</string>
+
+    <!-- Core file modification permission (Overlay) -->
+    <string name="overlay_global_switch">Allow modules to modify core files</string>
+    <string name="overlay_global_switch_desc">When off, no module can modify, regardless of per-module grants</string>
+    <string name="overlay_perm_manage">Core File Modification Permissions</string>
+    <string name="overlay_perm_manage_desc">Manage per-module grants for core file modification</string>
+    <string name="overlay_warning_card">⚠️ Dangerous Operation</string>
+    <string name="overlay_warning_body">Granted modules can replace core files, possibly causing failures or data loss. Only grant modules you trust.</string>
+    <string name="overlay_disclaimer_title">Disclaimer</string>
+    <string name="overlay_disclaimer_body">This feature lets runtime modules modify the app\'s core files (all of assets, including executables such as lspatch.jar).\n\nOnce enabled:\n· A module may replace any resource inside the app\n· Unknown code may be injected\n· The app may crash or lose data\n· System stability may be affected\n\nOnly grant modules you fully trust. You bear all consequences of granting.</string>
+    <string name="overlay_disclaimer_accept">I have read and understand the risks</string>
+    <string name="overlay_disclaimer_continue">Agree and Continue</string>
+    <string name="overlay_disclaimer_review">Review disclaimer</string>
+    <string name="overlay_request_title">Module requests core file modification</string>
+    <string name="overlay_request_reason">Reason</string>
+    <string name="overlay_request_warning">⚠️ This module will be able to replace any file under assets, including executables like lspatch.jar</string>
+    <string name="overlay_deny">Deny</string>
+    <string name="overlay_allow_once">Allow Once</string>
+    <string name="overlay_allow_always">Allow Always</string>
+    <string name="overlay_module_requested">Requested</string>
+    <string name="overlay_module_not_requested">Not requested</string>
+    <string name="overlay_module_empty">No runtime modules installed</string>
+    <string name="overlay_section_modules">Installed modules</string>
+    <string name="overlay_section_global">Global switch</string>
+    <string name="overlay_grant_mode_always">Always allowed</string>
+    <string name="overlay_grant_mode_once">Once</string>
+    <string name="overlay_grant_mode_denied">Denied</string>
+    <string name="overlay_revoke">Revoke</string>
+    <string name="overlay_reason_prefix">Reason: %s</string>
+    <string name="overlay_need_disclaimer">Please read and accept the disclaimer first</string>
+    <string name="overlay_need_global_switch">Please enable the global switch first</string>
+    <string name="overlay_axeron_not_running">Axeron is not running; cannot manage module permissions</string>
 </resources>

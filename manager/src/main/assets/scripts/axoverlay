@@ -1,0 +1,281 @@
+#!/system/bin/sh
+#
+# axoverlay —— 模块核心文件 Overlay CLI（AxManagerD）
+#
+# 用途：运行时模块通过本命令读写自己的 overlay 覆盖层，
+#       覆盖层内容优先于 App 的 assets 原始文件。
+#
+# 目录约定（均位于 shell 数据目录）：
+#   ${AXERON_ROOT}/perm/pending/<id>.json   模块申请
+#   ${AXERON_ROOT}/perm/granted/<id>.json   用户授权结果
+#   ${AXERON_ROOT}/perm/global.json         全局开关 + 免责确认
+#   ${AXERON_ROOT}/runtime_plugins/<id>/overlay/   模块覆盖层
+#
+# 子命令：
+#   info                      输出能力/授权/路径信息
+#   check                     检查是否已授权（exit 0=已授权）
+#   request --reason="..."    发起授权申请（写 pending）
+#   put <relpath>             从 stdin 写覆盖文件
+#   get <relpath>             读覆盖文件到 stdout
+#   rm  <relpath>             删除覆盖文件
+#   ls  [dir]                 列出覆盖层内容
+#   clear                     清空本模块覆盖层
+#
+# 模块 id 解析顺序：环境变量 AX_MODULE_ID > 目录名（$PWD 命中 runtime_plugins/<id>）
+#
+
+set -u
+
+# ---------------------------------------------------------------------------
+# 环境与路径
+# ---------------------------------------------------------------------------
+
+# 兼容 Root / Shizuku 两种模式（与 PathHelper 判定一致）。
+if [ -d "/data/user_de/0/android/axeron" ]; then
+    AXERON_ROOT="/data/user_de/0/android/axeron"
+else
+    AXERON_ROOT="/data/user_de/0/com.android.shell/axeron"
+fi
+
+PERM_DIR="${AXERON_ROOT}/perm"
+PENDING_DIR="${PERM_DIR}/pending"
+GRANTED_DIR="${PERM_DIR}/granted"
+GLOBAL_JSON="${PERM_DIR}/global.json"
+RUNTIME_ROOT="${AXERON_ROOT}/runtime_plugins"
+
+# ---------------------------------------------------------------------------
+# 工具函数
+# ---------------------------------------------------------------------------
+
+die() {
+    echo "axoverlay: $1" >&2
+    exit "${2:-1}"
+}
+
+usage() {
+    cat >&2 <<'EOF'
+用法: axoverlay <子命令> [参数]
+
+  info                      输出能力/授权/路径信息
+  check                     检查是否已授权 (exit 0=已授权)
+  request --reason="..."    发起授权申请
+  put <relpath>             从 stdin 写入覆盖文件
+  get <relpath>             读取覆盖文件到 stdout
+  rm  <relpath>             删除覆盖文件
+  ls  [dir]                 列出覆盖层内容
+  clear                     清空本模块覆盖层
+EOF
+    exit 2
+}
+
+# 解析模块 id。
+resolve_module_id() {
+    if [ -n "${AX_MODULE_ID:-}" ]; then
+        echo "${AX_MODULE_ID}"
+        return 0
+    fi
+    # 从当前工作目录推断 runtime_plugins/<id>
+    case "${PWD:-}" in
+        "${RUNTIME_ROOT}"/*)
+            rest="${PWD#"${RUNTIME_ROOT}"/}"
+            echo "${rest%%/*}"
+            return 0
+            ;;
+    esac
+    # 回退：调用方脚本所在目录（$0 可能位于模块目录内）
+    case "${0:-}" in
+        "${RUNTIME_ROOT}"/*)
+            rest="${0#"${RUNTIME_ROOT}"/}"
+            echo "${rest%%/*}"
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+MODULE_ID="$(resolve_module_id)" || die "无法确定模块 id（请设置 AX_MODULE_ID 或在模块目录内执行）"
+
+OVERLAY_DIR="${RUNTIME_ROOT}/${MODULE_ID}/overlay"
+PENDING_JSON="${PENDING_DIR}/${MODULE_ID}.json"
+GRANTED_JSON="${GRANTED_DIR}/${MODULE_ID}.json"
+
+# JSON 里取字符串字段（无 python/jq 依赖，用 sed 粗解析）。
+json_get() {
+    # $1=file $2=key
+    [ -f "$1" ] || return 1
+    sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -n1
+}
+
+# JSON 里取布尔字段。
+json_get_bool() {
+    [ -f "$1" ] || echo "false"
+    sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$1" | head -n1
+}
+
+# 读取全局开关（文件不存在视为关闭）。
+global_enabled() {
+    [ "$(json_get_bool "${GLOBAL_JSON}" enabled)" = "true" ] && echo "true" || echo "false"
+}
+
+global_disclaimer() {
+    [ "$(json_get_bool "${GLOBAL_JSON}" disclaimerAccepted)" = "true" ] && echo "true" || echo "false"
+}
+
+# 授权判定：返回 0 表示允许写入。
+is_granted() {
+    [ "$(global_enabled)" = "true" ] || return 1
+    [ "$(global_disclaimer)" = "true" ] || return 1
+    [ -f "${GRANTED_JSON}" ] || return 1
+    local mode
+    mode="$(json_get "${GRANTED_JSON}" mode)"
+    local expires
+    expires="$(sed -n 's/.*"expiresAt"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "${GRANTED_JSON}" | head -n1)"
+    [ -z "${expires}" ] && expires=0
+    if [ "${mode}" = "once" ] && [ "${expires}" != "0" ]; then
+        now="$(date +%s 2>/dev/null || echo 0)"
+        if [ "${now}" -ge "${expires}" ] 2>/dev/null; then
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# 规范化相对路径：拒绝绝对路径与 .. 穿越。
+# 注意：必须在当前 shell 内调用（不用 $(...)），否则 die 的 exit 只退出子 shell。
+# 调用后结果写入全局变量 REL。
+normalize_rel() {
+    REL="$1"
+    case "${REL}" in
+        "") die "缺少路径参数" ;;
+        /*) die "路径必须是相对于 overlay 根目录的相对路径" ;;
+    esac
+    case "${REL}" in
+        *..*) die "路径不允许包含 '..'" ;;
+    esac
+    return 0
+}
+
+ensure_dirs() {
+    mkdir -p "${PENDING_DIR}" "${GRANTED_DIR}" 2>/dev/null
+}
+
+SUB="${1:-}"
+[ -n "${SUB}" ] || usage
+shift 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 子命令
+# ---------------------------------------------------------------------------
+
+case "${SUB}" in
+
+info)
+    echo "moduleId   : ${MODULE_ID}"
+    echo "axeronRoot : ${AXERON_ROOT}"
+    echo "overlayDir : ${OVERLAY_DIR}"
+    echo "globalOn   : $(global_enabled)"
+    echo "disclaimer : $(global_disclaimer)"
+    echo "granted    : $(is_granted && echo true || echo false)"
+    if [ -f "${GRANTED_JSON}" ]; then
+        echo "grantMode  : $(json_get "${GRANTED_JSON}" mode)"
+        echo "grantReason: $(json_get "${GRANTED_JSON}" reason)"
+    fi
+    if [ -d "${OVERLAY_DIR}" ]; then
+        cnt="$(find "${OVERLAY_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')"
+        size="$(du -sk "${OVERLAY_DIR}" 2>/dev/null | cut -f1)"
+        echo "files      : ${cnt:-0}"
+        echo "sizeKB     : ${size:-0}"
+    else
+        echo "files      : 0"
+        echo "sizeKB     : 0"
+    fi
+    ;;
+
+check)
+    if is_granted; then
+        echo "granted"
+        exit 0
+    fi
+    echo "denied" >&2
+    exit 1
+    ;;
+
+request)
+    REASON=""
+    for arg in "$@"; do
+        case "${arg}" in
+            --reason=*) REASON="${arg#--reason=}" ;;
+        esac
+    done
+    [ -n "${REASON}" ] || die "request 需要 --reason=\"...\""
+    ensure_dirs
+    now="$(date +%s 2>/dev/null || echo 0)"
+    # 转义双引号，避免破坏 JSON。
+    esc_reason="$(printf '%s' "${REASON}" | sed 's/"/\\"/g')"
+    cat > "${PENDING_JSON}.tmp" <<EOF
+{
+  "id": "${MODULE_ID}",
+  "reason": "${esc_reason}",
+  "requestedAt": ${now},
+  "requestedCaps": ["assets_read", "assets_write"]
+}
+EOF
+    mv "${PENDING_JSON}.tmp" "${PENDING_JSON}"
+    chmod 644 "${PENDING_JSON}" 2>/dev/null
+    echo "requested"
+    ;;
+
+put)
+    normalize_rel "${1:-}"
+    is_granted || die "未授权：请在设置中开启「允许模块修改核心文件」并授权本模块"
+    DST="${OVERLAY_DIR}/${REL}"
+    mkdir -p "$(dirname "${DST}")" || die "无法创建目录: $(dirname "${DST}")"
+    cat > "${DST}" || die "写入失败: ${DST}"
+    chmod 644 "${DST}" 2>/dev/null
+    echo "ok ${REL}"
+    ;;
+
+get)
+    normalize_rel "${1:-}"
+    SRC="${OVERLAY_DIR}/${REL}"
+    [ -f "${SRC}" ] || die "无覆盖: ${REL}" 1
+    cat "${SRC}"
+    ;;
+
+rm)
+    normalize_rel "${1:-}"
+    is_granted || die "未授权：无法删除覆盖文件"
+    SRC="${OVERLAY_DIR}/${REL}"
+    [ -e "${SRC}" ] || die "不存在: ${REL}" 1
+    rm -f "${SRC}"
+    # 清理空目录（不触碰 overlay 根）
+    d="$(dirname "${SRC}")"
+    while [ "${d}" != "${OVERLAY_DIR}" ] && [ "${d}" != "/" ]; do
+        rmdir "${d}" 2>/dev/null || break
+        d="$(dirname "${d}")"
+    done
+    echo "removed ${REL}"
+    ;;
+
+ls)
+    DIR="${1:-}"
+    [ -d "${OVERLAY_DIR}" ] || exit 0
+    if [ -n "${DIR}" ]; then
+        find "${OVERLAY_DIR}/${DIR}" -type f 2>/dev/null | sed "s|^${OVERLAY_DIR}/||"
+    else
+        find "${OVERLAY_DIR}" -type f 2>/dev/null | sed "s|^${OVERLAY_DIR}/||"
+    fi
+    ;;
+
+clear)
+    is_granted || die "未授权：无法清空覆盖层"
+    [ -d "${OVERLAY_DIR}" ] || { echo "cleared"; exit 0; }
+    # 只删除 overlay/<id>/ 下的内容，绝不动 axeron 根目录。
+    find "${OVERLAY_DIR}" -mindepth 1 -delete 2>/dev/null
+    echo "cleared"
+    ;;
+
+*)
+    usage
+    ;;
+esac

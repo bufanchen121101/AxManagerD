@@ -890,7 +890,43 @@ object AxeronPluginService {
             false
         }
     }
+    /**
+     * 在「模块核心文件 Overlay」允许时，把某模块放在
+     * `$PLUGINDIR/<id>/overlay/assets/scripts/<filename>` 的内容作为脚本来源。
+     *
+     * 设计要点（第一期）：
+     *  - 仅当全局总开关 [AxeronSettings.getEnableModuleOverlay] 为 true 时启用；
+     *  - 模块授权（grant 文件）由 axoverlay / OverlayPermissionStore 维护，
+     *    这里只做「总开关 + 文件存在」判定，避免在 api 层重复实现权限模型；
+     *  - 多个模块同时覆盖同一脚本时，按模块目录名排序取第一个命中的，
+     *    **保证结果稳定、可复现**（冲突策略留待第二期做显式优先级）。
+     *
+     * @return overlay 内的绝对路径；未命中返回 null。
+     */
+    private suspend fun findOverlayScript(filename: String): String? = withContext(Dispatchers.IO) {
+        if (!AxeronSettings.getEnableModuleOverlay()) return@withContext null
 
+        val fs = axFS ?: return@withContext null
+        if (!fs.exists(PLUGINDIR)) return@withContext null
+
+        val moduleDirs = runCatching { fs.getDirectories(PLUGINDIR) }.getOrNull()
+            ?: return@withContext null
+
+        moduleDirs
+            .filter { it.isDirectory }
+            .sortedBy { it.name }
+            .forEach { dir ->
+                // 已标记 remove 的模块不参与
+                if (fs.exists(File(dir.path, "remove").absolutePath)) return@forEach
+
+                val candidate = File(dir.path, "overlay/assets/scripts/$filename")
+                if (fs.exists(candidate.absolutePath)) {
+                    Log.i(TAG, "overlay hit: ${candidate.absolutePath}")
+                    return@withContext candidate.absolutePath
+                }
+            }
+        null
+    }
 
     private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {
         val fs = axFS ?: return@withContext false
@@ -904,6 +940,39 @@ object AxeronPluginService {
 
         for (filename in files) {
             val dstFile = File(binDir, filename)
+
+            // ---- 模块 overlay 优先（第一期新增）----
+            // 若某运行时模块被授权覆盖核心脚本，则用它的 overlay 文件作为来源，
+            // 直接免去从 APK assets 解压的步骤。授权判定 = 总开关 + grant 文件，
+            // 由 manager 层维护；此处仅消费结果。
+            val overlayPath = findOverlayScript(filename)
+
+            if (overlayPath != null) {
+                val needUpdate = run {
+                    val hashCmd =
+                        "src=\$($BUSYBOX sha256sum $overlayPath | $BUSYBOX cut -d' ' -f1); " +
+                            "cur=\$([ -f ${dstFile.absolutePath} ] && $BUSYBOX sha256sum ${dstFile.absolutePath} | $BUSYBOX cut -d' ' -f1 || echo NONE); " +
+                            "[ \"\$src\" = \"\$cur\" ] && echo SAME || echo DIFF"
+                    val r = execWithIO(hashCmd, hideStderr = true)
+                    r.out.trim() != "SAME"
+                }
+                if (!needUpdate) {
+                    Log.i(TAG, "$filename overlay unchanged, skip")
+                    continue
+                }
+                Log.i(TAG, "$filename overlay changed, updating from $overlayPath")
+                fs.delete(dstFile.absolutePath)
+
+                val copyCmd =
+                    "cp $overlayPath ${dstFile.absolutePath} && chmod 755 ${dstFile.absolutePath}"
+                execWithIO(copyCmd)
+
+                if (isProbablyText(dstFile)) {
+                    execWithIO("$BUSYBOX dos2unix ${dstFile.absolutePath}")
+                }
+                continue
+            }
+            // ---- overlay 优先结束 ----
 
             // 用 sha256 比对 APK 内 asset 与设备上已释放文件内容：
             // 内容一致则跳过；不一致（含旧版本残留）则删除后重新解压，保证脚本更新能生效。
