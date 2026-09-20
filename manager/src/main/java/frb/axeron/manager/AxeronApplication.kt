@@ -94,30 +94,32 @@ open class AxeronApplication : Engine() {
         // 打印 App 侧解析出的 axeron 路径，并实测一次 shell 执行 + 目录可见性。
         // 日志落到 /sdcard/AxManagerD/logs/overlay.log，无需 adb 即可取。
         // 注意：installedModuleIds / execProcessSafeWithTimeout 都是 suspend 函数，
-        // 必须放在协程里调用（普通 Thread 会编译报错）。
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        // 必须在协程上下文里调用。这里用 runBlocking 包一层（已在后台、非主线程）。
+        Thread {
             runCatching {
-                frb.axeron.manager.util.OverlayLog.i("========== App 启动自检 ==========")
-                val om = frb.axeron.manager.features.overlay.OverlayManager
-                om.logPaths()
-                // 实测 shell 链路是否可用（能执行 /bin/sh 并拿到输出）
-                val probe = frb.axeron.api.AxeronPluginService.execProcessSafeWithTimeout(
-                    cmd = arrayOf("/system/bin/sh", "-c", "id; echo '--- perm ---'; ls -la '${om.permDir()}' 2>&1"),
-                    env = frb.axeron.api.Axeron.getEnvironment(),
-                    timeoutMs = 5_000L,
-                )
-                frb.axeron.manager.util.OverlayLog.i(
-                    "shell 自检: exit=${probe.exitCode} out=${probe.stdout.trim()} err=${probe.stderr.trim()}"
-                )
-                // 模块枚举自检
-                val runtime = om.installedModuleIds(frb.axeron.manager.features.overlay.OverlayManager.ModuleKind.RUNTIME)
-                val shell = om.installedModuleIds(frb.axeron.manager.features.overlay.OverlayManager.ModuleKind.SHELL)
-                frb.axeron.manager.util.OverlayLog.i("模块枚举: runtime=$runtime | shell=$shell")
-                frb.axeron.manager.util.OverlayLog.i("日志文件: ${frb.axeron.manager.util.OverlayLog.logFilePath()}")
-                frb.axeron.manager.util.OverlayLog.i("========== 自检结束 ==========")
+                kotlinx.coroutines.runBlocking {
+                    frb.axeron.manager.util.OverlayLog.i("========== App 启动自检 ==========")
+                    val om = frb.axeron.manager.features.overlay.OverlayManager
+                    om.logPaths()
+                    // 实测 shell 链路是否可用（能执行 /bin/sh 并拿到输出）
+                    val probe = frb.axeron.api.AxeronPluginService.execProcessSafeWithTimeout(
+                        cmd = arrayOf("/system/bin/sh", "-c", "id; echo '--- perm ---'; ls -la '${om.permDir()}' 2>&1"),
+                        env = frb.axeron.api.Axeron.getEnvironment(),
+                        timeoutMs = 5_000L,
+                    )
+                    frb.axeron.manager.util.OverlayLog.i(
+                        "shell 自检: exit=${probe.exitCode} out=${probe.stdout.trim()} err=${probe.stderr.trim()}"
+                    )
+                    // 模块枚举自检
+                    val runtime = om.installedModuleIds(frb.axeron.manager.features.overlay.OverlayManager.ModuleKind.RUNTIME)
+                    val shell = om.installedModuleIds(frb.axeron.manager.features.overlay.OverlayManager.ModuleKind.SHELL)
+                    frb.axeron.manager.util.OverlayLog.i("模块枚举: runtime=$runtime | shell=$shell")
+                    frb.axeron.manager.util.OverlayLog.i("日志文件: ${frb.axeron.manager.util.OverlayLog.logFilePath()}")
+                    frb.axeron.manager.util.OverlayLog.i("========== 自检结束 ==========")
+                }
             }.onFailure {
                 frb.axeron.manager.util.OverlayLog.e("启动自检异常", it as? Throwable)
             }
-        }
+        }.start()
     }
 }
