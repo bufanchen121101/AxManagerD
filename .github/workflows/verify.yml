@@ -60,30 +60,30 @@ jobs:
           java -version 2>&1 || true
           echo "=== JAVA_HOME=$JAVA_HOME ==="
           cat "$JAVA_HOME/release" 2>/dev/null || true
-      # 关键修复：某些 Gradle 插件在二进制里写死了
+      # 关键修复：某些 Gradle 插件（dev.rikka.tools.refine）在二进制里写死了
       # toolchain {languageVersion=21, vendor=Oracle}。Gradle 8.x 对 vendor 是
-      # 字面匹配，而 runner 上 Temurin 的 release 里 IMPLEMENTOR="Eclipse Adoptium"
-      # → 报 "Cannot find a Java installation ... vendor=Oracle"。
+      # **字面匹配**，runner 上是 Temurin（java.vendor="Eclipse Adoptium"）→
+      # 报 "Cannot find a Java installation ... vendor=Oracle"。
       #
-      # 说明：JDK 把 java.vendor 设为只读属性，JAVA_TOOL_OPTIONS/-D 无法覆盖
-      # （实测无效）。Gradle 的 toolchain 探测实际读取的是 <JDK>/release 文件的
-      # IMPLEMENTOR 字段，因此这里就地改写该文件为 Oracle。
-      - name: Force JDK vendor to Oracle (toolchain match workaround)
+      # 实测结论：改 <JDK>/release 的 IMPLEMENTOR、以及 JAVA_TOOL_OPTIONS
+      # -Djava.vendor=Oracle 都无效（Gradle 走的是 JVM 只读属性）。
+      # 因此这里直接下载 Oracle 官方 JDK 21（免登录直链），供 Gradle 使用。
+      - name: Install Oracle JDK 21 (vendor match)
         run: |
           set -e
-          # 找出 runner 上所有 JDK 安装目录，逐个改写 release
-          for jdk in "$JAVA_HOME" /usr/lib/jvm/* /opt/hostedtoolcache/Java_*/*/*; do
-            [ -f "$jdk/release" ] || continue
-            [ -x "$jdk/bin/java" ] || continue
-            echo ">> patching $jdk/release"
-            sudo sed -i \
-              -e 's/^IMPLEMENTOR=.*/IMPLEMENTOR="Oracle"/' \
-              -e 's/^IMPLEMENTOR_VERSION=.*/IMPLEMENTOR_VERSION="Oracle JDK"/' \
-              "$jdk/release" || true
-            grep -E '^(IMPLEMENTOR|JAVA_VERSION)=' "$jdk/release" || true
-          done
-          echo "--- sanity ---"
-          java -version 2>&1 | head -1 || true
+          URL="https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz"
+          echo "downloading $URL"
+          curl -fsSL --retry 3 --max-time 300 -o /tmp/oracle-jdk21.tar.gz "$URL"
+          ls -l /tmp/oracle-jdk21.tar.gz
+          sudo mkdir -p /opt/oracle-jdk
+          sudo tar -xzf /tmp/oracle-jdk21.tar.gz -C /opt/oracle-jdk --strip-components=1
+          ORACLE_HOME=$(find /opt/oracle-jdk -maxdepth 2 -name release -printf '%h\n' | head -1)
+          echo "ORACLE_HOME=$ORACLE_HOME"
+          grep -E '^(IMPLEMENTOR|JAVA_VERSION)=' "$ORACLE_HOME/release" || true
+          "$ORACLE_HOME/bin/java" -version 2>&1 || true
+          echo "JAVA_HOME=$ORACLE_HOME" >> $GITHUB_ENV
+          echo "ORG_GRADLE_PROJECT_java.home=$ORACLE_HOME" >> $GITHUB_ENV
+          echo "$ORACLE_HOME/bin" >> $GITHUB_PATH
       # 只编 Kotlin：跳过 R8 / dex / 资源打包 / 签名，编译错误仍会暴露
       - name: Verify Kotlin compile (official)
         run: |
