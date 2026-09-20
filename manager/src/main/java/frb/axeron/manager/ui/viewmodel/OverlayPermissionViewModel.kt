@@ -19,7 +19,7 @@ import kotlinx.coroutines.withContext
  *
  * 数据来源分两处：
  *  - 模块列表：shell 域 `runtime_plugins/` 扫描（经 [OverlayManager]）
- *  - 授权状态：shell 域 `perm/granted/*.json`（经 [OverlayPermissionStore]）
+ *  - 授权状态：shell 域 `perm/granted/` 下的 json（经 [OverlayPermissionStore]）
  *  - 全局开关 / 免责：App SP（[OverlayPermissionStore] 内部双写 global.json）
  *
  * 列表刻意包含「所有已安装模块」，无论其是否申请过授权 ——
