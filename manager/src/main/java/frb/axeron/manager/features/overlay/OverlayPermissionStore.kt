@@ -215,12 +215,19 @@ object OverlayPermissionStore {
             if (r.exitCode == 0) r.stdout else ""
         }.getOrDefault("")
 
-        names.lineSequence()
+        // 注意：mapNotNull 的 lambda 不是 suspend 上下文，不能在里面调用
+        // suspend 的 getGrant()。改为先取出 id 列表，再在协程内显式循环。
+        val ids = names.lineSequence()
             .map { it.trim() }
             .filter { it.endsWith(".json") }
             .map { it.removeSuffix(".json") }
-            .mapNotNull { id -> getGrant(context, id) }
             .toList()
+
+        val result = mutableListOf<Grant>()
+        for (id in ids) {
+            getGrant(context, id)?.let { result.add(it) }
+        }
+        result
     }
 
     /** 读取模块的申请记录（pending）。 */

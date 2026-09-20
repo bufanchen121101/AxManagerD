@@ -193,19 +193,22 @@ object OverlayManager {
         val dir = runtimeRoot()
         val (code, out, _) = sh("ls -1 ${q(dir)} 2>/dev/null")
         if (code != 0) return emptyList()
-        return out.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .filter { id ->
-                val d = "$dir/$id"
-                val (c1, _, _) = sh("test -d ${q(d)} && echo Y")
-                if (c1 != 0) return@filter false
-                // 跳过已标记 remove 的模块（视为已卸载）
-                val (c2, o2, _) = sh("test -f ${q("$d/remove")} && echo R")
-                !(c2 == 0 && o2.contains("R"))
-            }
-            .sorted()
-            .toList()
+        // 注意：这里必须在协程内用普通循环逐项判定。
+        // Sequence/List 的 filter lambda 不是 suspend 上下文，直接调用 suspend 函数
+        // 会报 "Suspension functions can only be called within coroutine body"。
+        val result = mutableListOf<String>()
+        for (raw in out.lineSequence()) {
+            val id = raw.trim()
+            if (id.isEmpty()) continue
+            val d = "$dir/$id"
+            val (c1, _, _) = sh("test -d ${q(d)} && echo Y")
+            if (c1 != 0) continue
+            // 跳过已标记 remove 的模块（视为已卸载）
+            val (c2, o2, _) = sh("test -f ${q("$d/remove")} && echo R")
+            if (c2 == 0 && o2.contains("R")) continue
+            result.add(id)
+        }
+        return result.sorted()
     }
 
     // -----------------------------------------------------------------------

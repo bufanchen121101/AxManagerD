@@ -111,19 +111,25 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
             .getOrDefault(emptyList())
             .associateBy { it.moduleId }
 
-        return ids.map { id ->
+        // 注意：map 的 lambda 不是 suspend 上下文，不能调用 suspend 的
+        // getPending()/OverlayManager.list()。改为显式循环。
+        val result = mutableListOf<ModuleRow>()
+        for (id in ids) {
             val grant = grants[id]
             val pending = runCatching { OverlayPermissionStore.getPending(app, id) }.getOrNull()
             val files = runCatching { OverlayManager.list(id).size }.getOrDefault(0)
-            ModuleRow(
-                moduleId = id,
-                label = id,
-                requested = pending != null,
-                reason = pending?.first ?: grant?.reason.orEmpty(),
-                mode = grant?.mode,
-                overlayFiles = files,
+            result.add(
+                ModuleRow(
+                    moduleId = id,
+                    label = id,
+                    requested = pending != null,
+                    reason = pending?.first ?: grant?.reason.orEmpty(),
+                    mode = grant?.mode,
+                    overlayFiles = files,
+                )
             )
         }
+        return result
     }
 
     // -----------------------------------------------------------------------
