@@ -53,6 +53,31 @@ jobs:
         run: chmod +x gradlew
       - name: Use official maven repos
         run: sed -i '/maven.aliyun.com/d' settings.gradle.kts
+      # 让 Gradle 知道 runner 上 Temurin 21 的位置：
+      # 某些插件声明了 toolchain {languageVersion=21, vendor=Oracle}，
+      # 在 vendor 不匹配时会直接构建失败（Cannot find a Java installation）。
+      # 这里把 JAVA_HOME 追加到用户级 gradle.properties 的
+      # org.gradle.java.installations.paths，让 Gradle 能定位到已装 JDK 21。
+      - name: Point Gradle to installed JDK 21
+        run: |
+          mkdir -p ~/.gradle
+          echo "JAVA_HOME=$JAVA_HOME"
+          "$JAVA_HOME/bin/java" -version
+          echo "org.gradle.java.installations.paths=$JAVA_HOME" >> ~/.gradle/gradle.properties
+          cat ~/.gradle/gradle.properties
+      # 诊断：打印 runner 上所有可用 JDK 及其 vendor 字符串，辅助定位
+      # "Cannot find a Java installation matching {vendor=Oracle}" 的来源。
+      - name: Diagnose available JDKs
+        run: |
+          echo "=== java -version ==="
+          java -version 2>&1 || true
+          echo "=== JAVA_HOME=$JAVA_HOME ==="
+          echo "=== /usr/lib/jvm ==="
+          ls -la /usr/lib/jvm 2>/dev/null || true
+          echo "=== JAVA_HOME/release ==="
+          cat "$JAVA_HOME/release" 2>/dev/null || true
+          echo "=== toolchains cache ==="
+          ls -la ~/.gradle/jdks 2>/dev/null || true
       # 只编 Kotlin：跳过 R8 / dex / 资源打包 / 签名，编译错误仍会暴露
       - name: Verify Kotlin compile (official)
         run: |

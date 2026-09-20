@@ -71,6 +71,14 @@ jobs:
           sed -i '/maven.aliyun.com/d' settings.gradle.kts
           echo '--- settings.gradle.kts pluginManagement ---'
           sed -n '1,30p' settings.gradle.kts
+      # 让 Gradle 知道 runner 上 Temurin 21 的位置（某些插件声明了
+      # toolchain {languageVersion=21, vendor=Oracle}，vendor 不匹配会直接失败）。
+      - name: Point Gradle to installed JDK 21
+        run: |
+          mkdir -p ~/.gradle
+          echo "JAVA_HOME=$JAVA_HOME"
+          "$JAVA_HOME/bin/java" -version
+          echo "org.gradle.java.installations.paths=$JAVA_HOME" >> ~/.gradle/gradle.properties
       # 一次 Gradle 调用同时构建两个 flavor：省掉一次冷启动 + 配置阶段（约 2-3 分钟）
       - name: Build release APKs (R8 enabled)
         run: |
