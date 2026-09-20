@@ -44,6 +44,8 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
         val overlayFiles: Int,
         /** 模块声明的能力标签（第二期，见 RuntimeModuleCapabilities）。 */
         val caps: List<String> = emptyList(),
+        /** 模块类型（第二期：授权页分「Shell 模块 / 运行时模块」两部分）。 */
+        val kind: OverlayManager.ModuleKind = OverlayManager.ModuleKind.RUNTIME,
     ) {
         val granted: Boolean
             get() = mode == OverlayPermissionStore.GrantMode.ALWAYS ||
@@ -76,6 +78,16 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
         else rows.filter {
             it.moduleId.contains(q, true) || it.label.contains(q, true)
         }
+    }
+
+    /** Shell 模块（第二期：授权页第一部分）。 */
+    val shellRows by derivedStateOf {
+        filteredRows.filter { it.kind == OverlayManager.ModuleKind.SHELL }
+    }
+
+    /** 运行时模块（第二期：授权页第二部分）。 */
+    val runtimeRows by derivedStateOf {
+        filteredRows.filter { it.kind == OverlayManager.ModuleKind.RUNTIME }
     }
 
     private val app: Application get() = getApplication()
@@ -112,8 +124,16 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
     }
 
     private suspend fun loadRows(): List<ModuleRow> {
-        val ids = runCatching { OverlayManager.installedModuleIds() }.getOrDefault(emptyList())
-        if (ids.isEmpty()) return emptyList()
+        // 第二期：同时装载两类模块（Shell 模块 + 运行时模块），
+        // 授权页按 kind 分两部分渲染。
+        val runtimeIds = runCatching {
+            OverlayManager.installedModuleIds(OverlayManager.ModuleKind.RUNTIME)
+        }.getOrDefault(emptyList())
+        val shellIds = runCatching {
+            OverlayManager.installedModuleIds(OverlayManager.ModuleKind.SHELL)
+        }.getOrDefault(emptyList())
+
+        if (runtimeIds.isEmpty() && shellIds.isEmpty()) return emptyList()
 
         val grants = runCatching { OverlayPermissionStore.allGrants(app) }
             .getOrDefault(emptyList())
@@ -122,13 +142,17 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
         // 注意：map 的 lambda 不是 suspend 上下文，不能调用 suspend 的
         // getPending()/OverlayManager.list()。改为显式循环。
         val result = mutableListOf<ModuleRow>()
-        for (id in ids) {
+        val jobs = buildList {
+            runtimeIds.forEach { add(it to OverlayManager.ModuleKind.RUNTIME) }
+            shellIds.forEach { add(it to OverlayManager.ModuleKind.SHELL) }
+        }
+        for ((id, kind) in jobs) {
             val grant = grants[id]
             val pending = runCatching { OverlayPermissionStore.getPending(app, id) }.getOrNull()
-            val files = runCatching { OverlayManager.list(id).size }.getOrDefault(0)
+            val files = runCatching { OverlayManager.list(id, kind).size }.getOrDefault(0)
             // 第二期：能力标签。readCaps 走 shell 读 module.prop，失败静默为空。
             val caps = runCatching {
-                val propDir = java.io.File(OverlayManager.moduleDir(id))
+                val propDir = java.io.File(OverlayManager.moduleDir(id, kind))
                 RuntimeModuleCapabilities.labels(RuntimeModuleCapabilities.fromDir(propDir))
             }.getOrDefault(emptyList())
             result.add(
@@ -140,6 +164,7 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
                     mode = grant?.mode,
                     overlayFiles = files,
                     caps = caps,
+                    kind = kind,
                 )
             )
         }
@@ -238,8 +263,10 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
     /** 清空某模块的覆盖层文件（不影响授权）。 */
     fun clearOverlay(moduleId: String) {
         viewModelScope.launch {
+            val kind = rows.firstOrNull { it.moduleId == moduleId }?.kind
+                ?: OverlayManager.ModuleKind.RUNTIME
             withContext(Dispatchers.IO) {
-                OverlayManager.clear(moduleId)
+                OverlayManager.clear(moduleId, kind)
             }
             rows = loadRows()
         }
