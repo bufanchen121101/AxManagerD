@@ -48,6 +48,45 @@ object AxeronIcons {
      */
     val AxeronMark: ImageVector by lazy { build() }
 
+    /**
+     * 「允许模块修改核心文件」用的盾牌图标（24dp viewport，标准 Material 尺寸）。
+     *
+     * 与 [AxeronMark]（512 viewport + group scale，视觉占比偏小）不同，
+     * 本图标按 Material 规范绘制，因此两者并排时大小一致、不会重样。
+     */
+    val AxeronShield: ImageVector by lazy { buildShield() }
+
+    /** 盾牌 pathData（24x24 viewport，标准 Material icon 坐标）。 */
+    private const val SHIELD_PATH_DATA =
+        "M12,1L3,5v6c0,5.55 3.84,10.74 9,12 5.16,-1.26 9,-6.45 9,-12V5l-9,-4z"
+
+    /** 盾牌内勾（"已验证/已授权"语义）。 */
+    private const val SHIELD_CHECK_PATH_DATA =
+        "M10.5,15.5l-3.2,-3.2 1.06,-1.06 2.14,2.14 4.24,-4.24 1.06,1.06z"
+
+    private fun buildShield(): ImageVector = ImageVector.Builder(
+        name = "AxeronShield",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).run {
+        addPath(
+            pathData = PathParser().parsePathString(SHIELD_PATH_DATA).toNodes(),
+            pathFillType = PathFillType.NonZero,
+            name = "shield",
+            fill = SolidColor(DEFAULT_TINT)
+        )
+        // 勾用 EvenOdd 挖空，形成镂空效果（不依赖外层 tint 对比）
+        addPath(
+            pathData = PathParser().parsePathString(SHIELD_CHECK_PATH_DATA).toNodes(),
+            pathFillType = PathFillType.EvenOdd,
+            name = "check",
+            fill = SolidColor(Color.Black)
+        )
+        build()
+    }
+
     private fun build(): ImageVector = ImageVector.Builder(
         name = NAME,
         defaultWidth = 24.dp,

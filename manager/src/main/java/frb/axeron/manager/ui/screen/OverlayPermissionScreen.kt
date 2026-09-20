@@ -155,7 +155,9 @@ fun OverlayPermissionScreen(
             )
         },
     ) { paddingValues ->
-        val list = vm.filteredRows
+        val shellRows = vm.shellRows
+        val runtimeRows = vm.runtimeRows
+        val empty = shellRows.isEmpty() && runtimeRows.isEmpty()
 
         LazyColumn(
             modifier = Modifier
@@ -235,16 +237,10 @@ fun OverlayPermissionScreen(
                     },
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                Text(
-                    text = stringResource(R.string.overlay_section_modules),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(start = 20.dp, bottom = 4.dp),
-                )
             }
 
-            // ---- 模块列表 ----
-            if (list.isEmpty()) {
+            // ---- 模块列表（第二期：分「Shell 模块 / 运行时模块」两部分） ----
+            if (empty) {
                 item(key = "empty") {
                     Column(
                         modifier = Modifier
@@ -261,90 +257,128 @@ fun OverlayPermissionScreen(
                     }
                 }
             } else {
-                items(list, key = { it.moduleId }) { row ->
-                    ListItem(
-                        modifier = Modifier.padding(end = 6.dp, top = 6.dp),
-                        headlineContent = {
-                            Text(
-                                text = row.label,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        },
-                        supportingContent = {
-                            Column {
-                                Text(
-                                    text = row.moduleId,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                val status = buildString {
-                                    append(
-                                        stringResource(
-                                            if (row.requested) R.string.overlay_module_requested
-                                            else R.string.overlay_module_not_requested
-                                        )
-                                    )
-                                    row.mode?.let { mode ->
-                                        append(" · ")
-                                        append(
-                                            stringResource(
-                                                when (mode) {
-                                                    OverlayPermissionStore.GrantMode.ALWAYS ->
-                                                        R.string.overlay_grant_mode_always
-                                                    OverlayPermissionStore.GrantMode.ONCE ->
-                                                        R.string.overlay_grant_mode_once
-                                                    OverlayPermissionStore.GrantMode.DENIED ->
-                                                        R.string.overlay_grant_mode_denied
-                                                }
-                                            )
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = status,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (row.granted) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                )
-                                if (row.reason.isNotEmpty()) {
-                                    Text(
-                                        text = stringResource(R.string.overlay_reason_prefix, row.reason),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                if (row.caps.isNotEmpty()) {
-                                    Text(
-                                        text = row.caps.joinToString(" · "),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        },
-                        trailingContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Switch(
-                                    checked = row.granted,
-                                    onCheckedChange = { vm.setModuleGranted(row.moduleId, it) },
-                                )
-                                if (row.overlayFiles > 0) {
-                                    IconButton(onClick = { vm.clearOverlay(row.moduleId) }) {
-                                        Icon(
-                                            imageVector = Icons.Filled.DeleteSweep,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.error,
-                                        )
-                                    }
-                                }
-                            }
-                        },
-                    )
+                // 第一部分：Shell 模块
+                if (shellRows.isNotEmpty()) {
+                    item(key = "header_shell") {
+                        SectionHeader(stringResource(R.string.overlay_section_shell))
+                    }
+                    items(shellRows, key = { "shell_${it.moduleId}" }) { row ->
+                        ModuleListItem(row = row, vm = vm)
+                    }
+                }
+
+                // 第二部分：运行时模块
+                if (runtimeRows.isNotEmpty()) {
+                    item(key = "header_runtime") {
+                        SectionHeader(stringResource(R.string.overlay_section_runtime))
+                    }
+                    items(runtimeRows, key = { "runtime_${it.moduleId}" }) { row ->
+                        ModuleListItem(row = row, vm = vm)
+                    }
                 }
             }
         }
     }
+}
+
+/** 分组标题（Shell 模块 / 运行时模块）。 */
+@Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
+    )
+}
+
+/** 单个模块行（两类模块共用，避免重复代码）。 */
+@Composable
+private fun ModuleListItem(
+    row: OverlayPermissionViewModel.ModuleRow,
+    vm: OverlayPermissionViewModel,
+) {
+    ListItem(
+        modifier = Modifier.padding(end = 6.dp, top = 6.dp),
+        headlineContent = {
+            Text(
+                text = row.label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        supportingContent = {
+            Column {
+                Text(
+                    text = row.moduleId,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                val status = buildString {
+                    append(
+                        stringResource(
+                            if (row.requested) R.string.overlay_module_requested
+                            else R.string.overlay_module_not_requested
+                        )
+                    )
+                    row.mode?.let { mode ->
+                        append(" · ")
+                        append(
+                            stringResource(
+                                when (mode) {
+                                    OverlayPermissionStore.GrantMode.ALWAYS ->
+                                        R.string.overlay_grant_mode_always
+                                    OverlayPermissionStore.GrantMode.ONCE ->
+                                        R.string.overlay_grant_mode_once
+                                    OverlayPermissionStore.GrantMode.DENIED ->
+                                        R.string.overlay_grant_mode_denied
+                                }
+                            )
+                        )
+                    }
+                }
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (row.granted) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                if (row.reason.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.overlay_reason_prefix, row.reason),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (row.caps.isNotEmpty()) {
+                    Text(
+                        text = row.caps.joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = row.granted,
+                    onCheckedChange = { vm.setModuleGranted(row.moduleId, it) },
+                )
+                if (row.overlayFiles > 0) {
+                    IconButton(onClick = { vm.clearOverlay(row.moduleId) }) {
+                        Icon(
+                            imageVector = Icons.Filled.DeleteSweep,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        },
+    )
+}
 }

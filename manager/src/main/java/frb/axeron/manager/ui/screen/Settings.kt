@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.Adb
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Coffee
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -42,6 +44,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
@@ -98,7 +101,9 @@ import frb.axeron.manager.owner.LockscreenOrganization
 import frb.axeron.manager.ui.icon.AxeronIcons
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.PathHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Destination<RootGraph>
@@ -118,6 +123,17 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
 
     // 锁屏组织名称开关状态（初始值从偏好读取，避免每次重组重置）
     var orgEnabled by remember { mutableStateOf(LockscreenOrganization.isEnabled()) }
+
+    // 备份与还原
+    var showBackupDialog by remember { mutableStateOf(false) }
+    var backupTime by remember {
+        mutableStateOf(frb.axeron.manager.features.backup.BackupManager.lastBackupTime(settingsContext))
+    }
+    val backupDesc = if (backupTime.isEmpty()) {
+        stringResource(R.string.backup_desc_none)
+    } else {
+        stringResource(R.string.backup_desc_last, backupTime)
+    }
 
     // 「允许模块修改核心文件」总开关状态（放在设置页最顶部，用户要求「很重要 → 靠上」）。
     var overlayEnabled by remember { mutableStateOf(OverlayPermissionStore.isEnabled(settingsContext)) }
@@ -139,6 +155,66 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
         showDevDialog
     ) {
         showDevDialog = false
+    }
+
+    // 备份与还原对话框
+    if (showBackupDialog) {
+        AlertDialog(
+            onDismissRequest = { showBackupDialog = false },
+            title = { Text(stringResource(R.string.backup_manage)) },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(
+                            R.string.backup_desc_last,
+                            backupTime.ifEmpty { stringResource(R.string.backup_desc_none) }
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.backup_path_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            frb.axeron.manager.features.backup.BackupManager
+                                .backup(settingsContext, reason = "手动备份")
+                        }
+                        backupTime = frb.axeron.manager.features.backup.BackupManager
+                            .lastBackupTime(settingsContext)
+                        Toast.makeText(
+                            settingsContext,
+                            if (ok) R.string.backup_done else R.string.backup_failed,
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }) { Text(stringResource(R.string.backup_now)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        val f = withContext(Dispatchers.IO) {
+                            frb.axeron.manager.features.backup.BackupManager.restore(settingsContext)
+                        }
+                        Toast.makeText(
+                            settingsContext,
+                            if (f != null) {
+                                settingsContext.getString(R.string.backup_restored, f.absolutePath)
+                            } else {
+                                settingsContext.getString(R.string.backup_restore_none)
+                            },
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }) { Text(stringResource(R.string.backup_restore)) }
+            },
+        )
     }
 
     Scaffold(
@@ -181,9 +257,9 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
         ) {
 
             // ===== 模块核心文件修改权限（用户要求：很重要 → 放在设置页最顶部） =====
-            // 第 1 项：全局总开关
+            // 第 1 项：全局总开关（盾牌图标：语义为「安全总控」）
             SettingsItem(
-                iconVector = AxeronIcons.AxeronMark,
+                iconVector = AxeronIcons.AxeronShield,
                 label = stringResource(R.string.overlay_global_switch),
                 description = stringResource(R.string.overlay_global_switch_desc),
                 checked = overlayEnabled,
@@ -195,9 +271,9 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 }
             )
 
-            // 第 2 项：权限管理入口
+            // 第 2 项：权限管理入口（列表管理图标，与第 1 项区分）
             SettingsItem(
-                iconVector = AxeronIcons.AxeronMark,
+                iconVector = Icons.AutoMirrored.Outlined.ListAlt,
                 label = stringResource(R.string.overlay_perm_manage),
                 description = stringResource(R.string.overlay_perm_manage_desc),
                 onClick = {
@@ -205,6 +281,14 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 }
             )
             // ===== 顶部两项结束 =====
+
+            // 第 3 项：备份与还原（首次启动已自动备份一份到手机存储）
+            SettingsItem(
+                iconVector = Icons.Filled.Save,
+                label = stringResource(R.string.backup_manage),
+                description = backupDesc,
+                onClick = { showBackupDialog = true }
+            )
 
             AnimatedVisibility(visible = axeronRunning) {
                 val lifecycleOwner = rememberLifecycleOwner()

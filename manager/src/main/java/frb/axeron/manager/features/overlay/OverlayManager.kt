@@ -44,11 +44,36 @@ object OverlayManager {
     /** 运行时模块根目录（与 RuntimeModuleRegistry.RUNTIME_PLUGIN_FOLDER 一致）。 */
     fun runtimeRoot(): String = "${axeronRoot()}/runtime_plugins"
 
-    /** 某模块的目录。 */
+    /** Shell 模块根目录（普通插件目录，与 AxeronApiConstant.PLUGIN 一致）。 */
+    fun shellRoot(): String = "${axeronRoot()}/plugins"
+
+    /**
+     * 某模块的目录。
+     *
+     * 第二期起支持两类模块，目录不同：
+     *  - 运行时模块 -> `runtime_plugins/<id>`
+     *  - Shell 模块 -> `plugins/<id>`
+     *
+     * 默认按运行时模块解析（保持第一期行为不变）；
+     * 需要显式区分时请用 [moduleDir]。
+     */
     fun moduleDir(moduleId: String): String = "${runtimeRoot()}/$moduleId"
+
+    /** 显式指定模块类型的目录解析。 */
+    fun moduleDir(moduleId: String, kind: ModuleKind): String = when (kind) {
+        ModuleKind.RUNTIME -> "${runtimeRoot()}/$moduleId"
+        ModuleKind.SHELL -> "${shellRoot()}/$moduleId"
+    }
+
+    /** 模块类型（第二期新增：授权页分「Shell 模块 / 运行时模块」两部分）。 */
+    enum class ModuleKind { RUNTIME, SHELL }
 
     /** 某模块的覆盖层目录。 */
     fun overlayDir(moduleId: String): String = "${moduleDir(moduleId)}/$OVERLAY_DIR_NAME"
+
+    /** 显式指定模块类型的覆盖层目录（第二期）。 */
+    fun overlayDir(moduleId: String, kind: ModuleKind): String =
+        "${moduleDir(moduleId, kind)}/$OVERLAY_DIR_NAME"
 
     // -----------------------------------------------------------------------
     // 底层 shell 执行
@@ -75,8 +100,16 @@ object OverlayManager {
     // 读能力
     // -----------------------------------------------------------------------
 
-    /** 该模块是否对该相对路径有覆盖。 */
-    suspend fun has(moduleId: String, relPath: String): Boolean {
+    /**
+     * 该模块是否对该相对路径有覆盖。
+     *
+     * 兼容旧签名：默认按运行时模块解析。
+     */
+    suspend fun has(moduleId: String, relPath: String): Boolean =
+        has(moduleId, relPath, ModuleKind.RUNTIME)
+
+    /** 第二期：显式指定模块类型的覆盖判定。 */
+    suspend fun has(moduleId: String, relPath: String, kind: ModuleKind): Boolean {
         if (!isSafeRel(relPath)) return false
         val p = overlayDir(moduleId) + "/" + relPath
         val (code, out, _) = sh("test -f ${q(p)} && echo YES")
@@ -108,8 +141,13 @@ object OverlayManager {
     }
 
     /** 列出该模块覆盖层内所有文件（相对路径）。 */
-    suspend fun list(moduleId: String): List<String> {
-        val dir = overlayDir(moduleId)
+    suspend fun list(moduleId: String): List<String> = list(moduleId, ModuleKind.RUNTIME)
+
+    /**
+     * 列出指定类型模块覆盖层内的所有文件（第二期）。
+     */
+    suspend fun list(moduleId: String, kind: ModuleKind): List<String> {
+        val dir = overlayDir(moduleId, kind)
         val (code, out, _) = sh("test -d ${q(dir)} && find ${q(dir)} -type f")
         if (code != 0) return emptyList()
         val prefix = "$dir/"
@@ -172,8 +210,11 @@ object OverlayManager {
     }
 
     /** 清空该模块的整个覆盖层。@return null 成功，否则错误信息。 */
-    suspend fun clear(moduleId: String): String? {
-        val dir = overlayDir(moduleId)
+    suspend fun clear(moduleId: String): String? = clear(moduleId, ModuleKind.RUNTIME)
+
+    /** 清空指定类型模块的整个覆盖层（第二期）。 */
+    suspend fun clear(moduleId: String, kind: ModuleKind): String? {
+        val dir = overlayDir(moduleId, kind)
         val (code, _, err) = sh("test -d ${q(dir)} && find ${q(dir)} -mindepth 1 -delete || true")
         if (code != 0) return err.trim().ifEmpty { "清空失败 (exit $code)" }
         return null
@@ -189,8 +230,21 @@ object OverlayManager {
      * 与 [frb.axeron.manager.features.runtime.registry.RuntimeModuleRegistry] 的判定保持一致：
      * 扫描 `runtime_plugins/` 一级子目录，跳过带 `remove` 标记的目录。
      */
-    suspend fun installedModuleIds(): List<String> {
-        val dir = runtimeRoot()
+    suspend fun installedModuleIds(): List<String> = installedModuleIds(ModuleKind.RUNTIME)
+
+    /**
+     * 列出指定类型的所有模块 id。
+     *
+     * 与 [frb.axeron.manager.features.runtime.registry.RuntimeModuleRegistry] 的判定保持一致：
+     * 扫描对应根目录下的一级子目录，跳过带 `remove` 标记的目录。
+     *
+     * 第二期新增 Shell 模块支持（`plugins/` 目录）。
+     */
+    suspend fun installedModuleIds(kind: ModuleKind): List<String> {
+        val dir = when (kind) {
+            ModuleKind.RUNTIME -> runtimeRoot()
+            ModuleKind.SHELL -> shellRoot()
+        }
         val (code, out, _) = sh("ls -1 ${q(dir)} 2>/dev/null")
         if (code != 0) return emptyList()
         // 注意：这里必须在协程内用普通循环逐项判定。
@@ -209,6 +263,19 @@ object OverlayManager {
             result.add(id)
         }
         return result.sorted()
+    }
+
+    /**
+     * 列出某类型模块的 id 与目录。
+     *
+     * 供授权页分组渲染使用（第二期）。
+     */
+    suspend fun installedModules(kind: ModuleKind): List<Pair<String, String>> {
+        val dir = when (kind) {
+            ModuleKind.RUNTIME -> runtimeRoot()
+            ModuleKind.SHELL -> shellRoot()
+        }
+        return installedModuleIds(kind).map { it to "$dir/$it" }
     }
 
     // -----------------------------------------------------------------------

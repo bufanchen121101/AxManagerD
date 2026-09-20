@@ -79,5 +79,12 @@ open class AxeronApplication : Engine() {
 
         // 注入 AI 命令分析器（方案 A：在 execWithIO/flashPlugin 执行前拦截分析）
         AxeronPluginService.commandAnalyzer = frb.axeron.manager.ai.AIEngineManager
+
+        // 首次启动自动备份一份软件文件到手机存储（/sdcard/AxManagerD/backup/）。
+        // 放后台线程，避免阻塞冷启动；失败静默（只记日志）。
+        Thread {
+            runCatching { frb.axeron.manager.features.backup.BackupManager.ensureFirstBackup(context) }
+                .onFailure { frb.axeron.manager.util.OverlayLog.w("首次备份异常: $it") }
+        }.start()
     }
 }
