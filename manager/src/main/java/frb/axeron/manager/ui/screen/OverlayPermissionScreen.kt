@@ -48,7 +48,6 @@ import frb.axeron.manager.R
 import frb.axeron.manager.features.overlay.OverlayPermissionStore
 import frb.axeron.manager.ui.component.OverlayDisclaimerDialog
 import frb.axeron.manager.ui.component.OverlayDisclaimerReadOnlyDialog
-import frb.axeron.manager.ui.component.OverlayRequestDialog
 import frb.axeron.manager.ui.viewmodel.OverlayPermissionViewModel
 
 /**
@@ -82,15 +81,8 @@ fun OverlayPermissionScreen(
         if (!vm.disclaimerAccepted) showDisclaimer = true
     }
 
-    // 第二期：轮询模块申请。仅在已同意免责且全局开关打开时轮询，
-    // 避免用户还没同意就被弹窗打扰。
-    LaunchedEffect(vm.disclaimerAccepted, vm.enabled) {
-        if (!vm.disclaimerAccepted || !vm.enabled) return@LaunchedEffect
-        while (true) {
-            vm.pollRequest()
-            kotlinx.coroutines.delay(frb.axeron.manager.features.overlay.OverlayRequestWatcher.POLL_INTERVAL_MS)
-        }
-    }
+    // 注意：模块申请弹窗已提升为「全局监听」，挂在 AxActivity（见 GlobalOverlayRequestHost）。
+    // 本页不再自行轮询/弹窗，避免与全局弹窗重复显示。
 
     if (showDisclaimer) {
         OverlayDisclaimerDialog(
@@ -102,15 +94,6 @@ fun OverlayPermissionScreen(
                 showDisclaimer = false
                 navigator.popBackStack()
             }
-        )
-    }
-
-    vm.pendingRequest?.let { req ->
-        OverlayRequestDialog(
-            moduleId = req.moduleId,
-            reason = req.reason,
-            onDecide = { allow, always -> vm.decideRequest(allow, always) },
-            onDismiss = { vm.dismissRequest() },
         )
     }
 

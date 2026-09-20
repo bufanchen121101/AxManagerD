@@ -398,6 +398,10 @@ class AxActivity : ComponentActivity() {
                     pluginViewModel.pluginUpdateCount
                 )
             }
+
+            // 模块授权申请 —— 全局监听（Bug 修复）：
+            // 不依赖用户停留在授权页，只要 App 在前台就持续轮询 pending 目录并弹窗。
+            frb.axeron.manager.ui.component.GlobalOverlayRequestHost()
         }
     }
 

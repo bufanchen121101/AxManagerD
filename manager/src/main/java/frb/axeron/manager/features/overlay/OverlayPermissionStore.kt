@@ -129,7 +129,10 @@ object OverlayPermissionStore {
         }
         val dir = OverlayManager.permDir()
         val file = "$dir/global.json"
-        val cmd = "mkdir -p '$dir' && cat > '$file' <<'AXOVERLAY_EOF'\n$json" + "AXOVERLAY_EOF\n"
+        // 注意：heredoc 结束符必须独占一行，因此前面补 '\n'。
+        // 若不加，$json 结尾与结束符会在同一行，导致 "here document unclosed"
+        // 进而写出 0 字节文件（授权/开关状态全部读不到）。
+        val cmd = "mkdir -p '$dir' && cat > '$file' <<'AXOVERLAY_EOF'\n$json\nAXOVERLAY_EOF\n"
         runCatching {
             AxeronPluginService.execProcessSafeWithTimeout(
                 cmd = arrayOf("/system/bin/sh", "-c", cmd),
@@ -301,7 +304,8 @@ object OverlayPermissionStore {
         }
         val json = gson.toJson(obj) + "\n"
 
-        val cmd = "mkdir -p '$dir' && cat > '$file' <<'AXOVERLAY_EOF'\n$json" + "AXOVERLAY_EOF\n"
+        // 注意：heredoc 结束符必须独占一行（见 syncGlobalJson 同名注释）。
+        val cmd = "mkdir -p '$dir' && cat > '$file' <<'AXOVERLAY_EOF'\n$json\nAXOVERLAY_EOF\n"
         val r = runCatching {
             AxeronPluginService.execProcessSafeWithTimeout(
                 cmd = arrayOf("/system/bin/sh", "-c", cmd),
