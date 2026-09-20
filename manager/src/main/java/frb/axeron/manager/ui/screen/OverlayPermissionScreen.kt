@@ -210,7 +210,7 @@ fun OverlayPermissionScreen(
                         Switch(
                             checked = vm.enabled,
                             enabled = vm.disclaimerAccepted,
-                            onCheckedChange = { vm.setEnabled(it) },
+                            onCheckedChange = { vm.toggleOverlay(it) },
                         )
                     },
                 )

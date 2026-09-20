@@ -150,7 +150,7 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
      * 关闭时会保留各模块的授权记录（只是暂时失效），重新打开即恢复，
      * 避免用户误关后需要逐个重新授权。
      */
-    fun setEnabled(value: Boolean) {
+    fun toggleOverlay(value: Boolean) {
         viewModelScope.launch {
             enabled = value
             OverlayPermissionStore.setEnabled(app, value)
