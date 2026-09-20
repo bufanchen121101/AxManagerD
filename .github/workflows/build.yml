@@ -73,16 +73,28 @@ jobs:
           sed -n '1,30p' settings.gradle.kts
       # 关键修复：某些 Gradle 插件在二进制里写死了
       # toolchain {languageVersion=21, vendor=Oracle}。Gradle 8.x 对 vendor 是
-      # 字面匹配，而 runner 上 Temurin 的 `java.vendor` = "Eclipse Adoptium"
+      # 字面匹配，而 runner 上 Temurin 的 release 里 IMPLEMENTOR="Eclipse Adoptium"
       # → 报 "Cannot find a Java installation ... vendor=Oracle"。
       #
-      # Gradle 探测 toolchain 时会实际启动 JDK 读取 java.vendor 系统属性。
-      # 因此这里通过 JAVA_TOOL_OPTIONS 覆盖该属性（不改项目代码）。
-      - name: Force java.vendor=Oracle for toolchain detection
+      # 说明：JDK 把 java.vendor 设为只读属性，JAVA_TOOL_OPTIONS/-D 无法覆盖
+      # （实测无效）。Gradle 的 toolchain 探测实际读取的是 <JDK>/release 文件
+      # 的 IMPLEMENTOR 字段，因此这里就地改写该文件为 Oracle。
+      - name: Force JDK vendor to Oracle (toolchain match workaround)
         run: |
-          echo "JAVA_TOOL_OPTIONS=-Djava.vendor=Oracle -Djava.vendor.url=http://java.oracle.com/" >> $GITHUB_ENV
-          echo "--- verify override ---"
-          java -XshowSettings:properties -version 2>&1 | grep -E 'java\.vendor' || true
+          set -e
+          # 找出 runner 上所有 JDK 安装目录，逐个改写 release
+          for jdk in "$JAVA_HOME" /usr/lib/jvm/* /opt/hostedtoolcache/Java_*/*/*; do
+            [ -f "$jdk/release" ] || continue
+            [ -x "$jdk/bin/java" ] || continue
+            echo ">> patching $jdk/release"
+            sudo sed -i \
+              -e 's/^IMPLEMENTOR=.*/IMPLEMENTOR="Oracle"/' \
+              -e 's/^IMPLEMENTOR_VERSION=.*/IMPLEMENTOR_VERSION="Oracle JDK"/' \
+              "$jdk/release" || true
+            grep -E '^(IMPLEMENTOR|JAVA_VERSION)=' "$jdk/release" || true
+          done
+          echo "--- sanity ---"
+          java -version 2>&1 | head -1 || true
       # 一次 Gradle 调用同时构建两个 flavor：省掉一次冷启动 + 配置阶段（约 2-3 分钟）
       - name: Build release APKs (R8 enabled)
         run: |
