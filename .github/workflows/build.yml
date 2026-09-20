@@ -52,26 +52,31 @@ jobs:
           echo "SDKMAN=$SDKMAN" >> $GITHUB_ENV
       - name: Restore debug keystore
         run: |
+          set -e
           mkdir -p ~/.android
           KS="$HOME/.android/debug.keystore"
-          # 优先使用仓库 secret 中的团队统一 keystore（保证各次构建签名一致）。
+          # ★ 关键：仓库内固定 keystore，保证每次构建签名完全一致。
+          # 历史教训：曾经用 secrets.DEBUG_KEYSTORE_BASE64 还原，但该 secret
+          # 并不存在（展开为空）→ 触发下面的 keytool -genkeypair 兜底 →
+          # 每次都现场随机生成新密钥 → 签名每次都变，无法覆盖安装。
+          # 现在把 keystore 直接入库（debug 签名，storepass=android 为公开默认值，无泄密风险），
+          # 并**移除随机生成兜底**：文件缺失/不可用直接失败，绝不静默换签名。
+          REPO_KS="keystore/debug.keystore"
+          # 兼容两种来源：secrets（若将来配置了）优先，其次用仓库内文件。
           if [ -n "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > "$KS" || true
+            echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > "$KS"
+          else
+            cp "$REPO_KS" "$KS"
           fi
-          # 校验可用性：旧格式 keystore 在新版 keytool 下会报
-          # "Tag number over 30 is not supported"，此时必须重新生成，
-          # 否则 packageOfficialRelease 会在签名阶段直接失败。
+          # 校验：不可用则直接失败（不再生成新密钥）。
           if ! keytool -list -keystore "$KS" -storepass android -alias androiddebugkey >/dev/null 2>&1; then
-            echo "::warning::keystore 不可用（缺失或格式过旧），重新生成 debug keystore"
-            rm -f "$KS"
-            keytool -genkeypair -v \
-              -keystore "$KS" \
-              -storepass android -keypass android \
-              -alias androiddebugkey \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+            echo "::error::keystore 不可用！拒绝用新密钥构建（会改变签名）。"
+            echo "::error::请检查仓库内 keystore/debug.keystore 是否存在且格式正确。"
+            exit 1
           fi
-          keytool -list -keystore "$KS" -storepass android -alias androiddebugkey | head -3
+          echo "==== keystore 指纹（必须为稳定值）===="
+          keytool -list -v -keystore "$KS" -storepass android -alias androiddebugkey \
+            | grep -E 'Alias name|SHA1:|SHA256:' || true
       - name: Write local.properties
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
