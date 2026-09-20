@@ -53,7 +53,25 @@ jobs:
       - name: Restore debug keystore
         run: |
           mkdir -p ~/.android
-          echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > ~/.android/debug.keystore
+          KS="$HOME/.android/debug.keystore"
+          # 优先使用仓库 secret 中的团队统一 keystore（保证各次构建签名一致）。
+          if [ -n "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > "$KS" || true
+          fi
+          # 校验可用性：旧格式 keystore 在新版 keytool 下会报
+          # "Tag number over 30 is not supported"，此时必须重新生成，
+          # 否则 packageOfficialRelease 会在签名阶段直接失败。
+          if ! keytool -list -keystore "$KS" -storepass android -alias androiddebugkey >/dev/null 2>&1; then
+            echo "::warning::keystore 不可用（缺失或格式过旧），重新生成 debug keystore"
+            rm -f "$KS"
+            keytool -genkeypair -v \
+              -keystore "$KS" \
+              -storepass android -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          keytool -list -keystore "$KS" -storepass android -alias androiddebugkey | head -3
       - name: Write local.properties
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
