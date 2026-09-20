@@ -11,6 +11,9 @@ import frb.axeron.api.AxeronPluginService
 import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.core.Engine
 import frb.axeron.manager.ui.util.createShellBuilder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import me.zhanghai.android.appiconloader.coil.AppIconFetcher
 import me.zhanghai.android.appiconloader.coil.AppIconKeyer
 import okhttp3.Cache
