@@ -64,6 +64,7 @@ usage() {
   rm  <relpath>             删除覆盖文件
   ls  [dir]                 列出覆盖层内容
   clear                     清空本模块覆盖层
+  priority [整数]           查询/设置覆盖冲突优先级（大者胜）
 EOF
     exit 2
 }
@@ -180,6 +181,11 @@ info)
         echo "grantMode  : $(json_get "${GRANTED_JSON}" mode)"
         echo "grantReason: $(json_get "${GRANTED_JSON}" reason)"
     fi
+    if [ -f "${OVERLAY_DIR}/priority" ]; then
+        echo "priority   : $(cat "${OVERLAY_DIR}/priority" 2>/dev/null)"
+    else
+        echo "priority   : 0"
+    fi
     if [ -d "${OVERLAY_DIR}" ]; then
         cnt="$(find "${OVERLAY_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')"
         size="$(du -sk "${OVERLAY_DIR}" 2>/dev/null | cut -f1)"
@@ -273,6 +279,28 @@ clear)
     # 只删除 overlay/<id>/ 下的内容，绝不动 axeron 根目录。
     find "${OVERLAY_DIR}" -mindepth 1 -delete 2>/dev/null
     echo "cleared"
+    ;;
+
+priority)
+    # 设置/查询覆盖冲突优先级（第二期）。
+    # 多个模块覆盖同一文件时，priority 大者胜；相同则按模块目录名升序。
+    VALUE="${1:-}"
+    if [ -z "${VALUE}" ]; then
+        if [ -f "${OVERLAY_DIR}/priority" ]; then
+            cat "${OVERLAY_DIR}/priority"
+        else
+            echo "0"
+        fi
+        exit 0
+    fi
+    is_granted || die "未授权：无法设置优先级"
+    case "${VALUE}" in
+        *[!0-9-]*) die "priority 必须是整数，收到：${VALUE}" ;;
+    esac
+    mkdir -p "${OVERLAY_DIR}" || die "无法创建 overlay 目录"
+    printf '%s\n' "${VALUE}" > "${OVERLAY_DIR}/priority" || die "写入优先级失败"
+    chmod 644 "${OVERLAY_DIR}/priority" 2>/dev/null
+    echo "priority ${VALUE}"
     ;;
 
 *)

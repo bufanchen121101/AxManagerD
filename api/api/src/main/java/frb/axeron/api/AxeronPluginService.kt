@@ -898,8 +898,10 @@ object AxeronPluginService {
      *  - 仅当全局总开关 [AxeronSettings.getEnableModuleOverlay] 为 true 时启用；
      *  - 模块授权（grant 文件）由 axoverlay / OverlayPermissionStore 维护，
      *    这里只做「总开关 + 文件存在」判定，避免在 api 层重复实现权限模型；
-     *  - 多个模块同时覆盖同一脚本时，按模块目录名排序取第一个命中的，
-     *    **保证结果稳定、可复现**（冲突策略留待第二期做显式优先级）。
+     *  - 多个模块同时覆盖同一脚本时，按**显式优先级**决定胜者（第二期）：
+     *    1. 模块 overlay 目录下的 `priority` 文件（整数，越大越优先）；
+     *    2. 未声明 `priority` 时回落到「模块目录名升序」，
+     *       保证结果稳定、可复现（与第一期行为兼容）。
      *
      * @return overlay 内的绝对路径；未命中返回 null。
      */
@@ -912,20 +914,54 @@ object AxeronPluginService {
         val moduleDirs = runCatching { fs.getDirectories(PLUGINDIR) }.getOrNull()
             ?: return@withContext null
 
-        moduleDirs
-            .filter { it.isDirectory }
-            .sortedBy { it.name }
-            .forEach { dir ->
-                // 已标记 remove 的模块不参与
-                if (fs.exists(File(dir.path, "remove").absolutePath)) return@forEach
+        // 收集所有命中的候选（而不是遇到第一个就返回），再按优先级排序取最优。
+        // 这样只在「确实有多个候选」时才会多读几次文件，单候选时开销与第一期一致。
+        val hits = ArrayList<Pair<Int, String>>()
 
-                val candidate = File(dir.path, "overlay/assets/scripts/$filename")
-                if (fs.exists(candidate.absolutePath)) {
-                    Log.i(TAG, "overlay hit: ${candidate.absolutePath}")
-                    return@withContext candidate.absolutePath
-                }
-            }
-        null
+        for (dir in moduleDirs) {
+            if (!dir.isDirectory) continue
+            // 已标记 remove 的模块不参与
+            if (fs.exists(File(dir.path, "remove").absolutePath)) continue
+
+            val candidate = File(dir.path, "overlay/assets/scripts/$filename")
+            if (!fs.exists(candidate.absolutePath)) continue
+
+            hits.add(readOverlayPriority(fs, dir.path) to candidate.absolutePath)
+        }
+
+        if (hits.size <= 1) {
+            return@withContext hits.firstOrNull()?.second
+        }
+
+        // 优先级降序；同优先级时按路径（即模块目录名）升序，保证确定性。
+        val winner = hits.sortedWith(
+            compareByDescending<Pair<Int, String>> { it.first }.thenBy { it.second }
+        ).first()
+
+        Log.i(
+            TAG,
+            "overlay conflict on $filename: ${hits.size} candidates, " +
+                    "winner=${winner.second} (priority=${winner.first})"
+        )
+        winner.second
+    }
+
+    /**
+     * 读取某模块声明的 overlay 优先级。
+     *
+     * 文件位置：`<moduleDir>/overlay/priority`，内容为单个整数。
+     * 缺失/非法时返回 0（与未声明等价）。
+     */
+    private fun readOverlayPriority(fs: AxeronFileService, moduleDir: String): Int {
+        return try {
+            val path = File(moduleDir, "overlay/priority").absolutePath
+            if (!fs.exists(path)) return 0
+            val text = fs.setFileInputStream(path).use { it.readBytes().toString(Charsets.UTF_8) }
+            text.trim().toIntOrNull() ?: 0
+        } catch (e: Throwable) {
+            Log.w(TAG, "readOverlayPriority failed for $moduleDir: $e")
+            0
+        }
     }
 
     private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {

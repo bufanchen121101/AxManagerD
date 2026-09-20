@@ -9,6 +9,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import frb.axeron.manager.features.overlay.OverlayManager
 import frb.axeron.manager.features.overlay.OverlayPermissionStore
+import frb.axeron.manager.features.overlay.OverlayRequestWatcher
+import frb.axeron.manager.features.runtime.registry.RuntimeModuleCapabilities
 import frb.axeron.manager.util.OverlayLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -40,6 +42,8 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
         val mode: OverlayPermissionStore.GrantMode?,
         /** 覆盖层文件数。 */
         val overlayFiles: Int,
+        /** 模块声明的能力标签（第二期，见 RuntimeModuleCapabilities）。 */
+        val caps: List<String> = emptyList(),
     ) {
         val granted: Boolean
             get() = mode == OverlayPermissionStore.GrantMode.ALWAYS ||
@@ -61,6 +65,10 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
         private set
 
     var search by mutableStateOf("")
+
+    /** 当前待用户处理的授权申请（null = 无）。 */
+    var pendingRequest by mutableStateOf<OverlayRequestWatcher.Request?>(null)
+        private set
 
     val filteredRows by derivedStateOf {
         val q = search
@@ -118,6 +126,11 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
             val grant = grants[id]
             val pending = runCatching { OverlayPermissionStore.getPending(app, id) }.getOrNull()
             val files = runCatching { OverlayManager.list(id).size }.getOrDefault(0)
+            // 第二期：能力标签。readCaps 走 shell 读 module.prop，失败静默为空。
+            val caps = runCatching {
+                val propDir = java.io.File(OverlayManager.moduleDir(id))
+                RuntimeModuleCapabilities.labels(RuntimeModuleCapabilities.fromDir(propDir))
+            }.getOrDefault(emptyList())
             result.add(
                 ModuleRow(
                     moduleId = id,
@@ -126,6 +139,7 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
                     reason = pending?.first ?: grant?.reason.orEmpty(),
                     mode = grant?.mode,
                     overlayFiles = files,
+                    caps = caps,
                 )
             )
         }
@@ -182,6 +196,44 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
 
     /** 撤销某模块授权（等同于关闭）。 */
     fun revoke(moduleId: String) = setModuleGranted(moduleId, false)
+
+    // -----------------------------------------------------------------------
+    // 申请弹窗（第二期）
+    // -----------------------------------------------------------------------
+
+    /** 轮询是否有新的模块申请；有则填充 [pendingRequest]。 */
+    fun pollRequest() {
+        viewModelScope.launch {
+            val req = runCatching { OverlayRequestWatcher.peek(app) }.getOrNull()
+            // 已有弹窗在处理时不覆盖，避免用户看到内容跳变
+            if (req != null && pendingRequest == null) {
+                pendingRequest = req
+            }
+        }
+    }
+
+    /** 用户对当前申请做出决定。 */
+    fun decideRequest(allow: Boolean, always: Boolean) {
+        val req = pendingRequest ?: return
+        pendingRequest = null
+        viewModelScope.launch {
+            val err = OverlayRequestWatcher.resolve(
+                app, req.moduleId, allow, always, req.reason
+            )
+            if (err != null) OverlayLog.w("decideRequest(${req.moduleId}) 失败: $err")
+            rows = loadRows()
+            // 立刻检查下一条，支持连续多个申请
+            val next = runCatching { OverlayRequestWatcher.peek(app) }.getOrNull()
+            if (next != null) pendingRequest = next
+        }
+    }
+
+    /** 关闭申请弹窗（等同稍后处理：标记已读，不写授权记录）。 */
+    fun dismissRequest() {
+        val req = pendingRequest ?: return
+        OverlayRequestWatcher.markHandled(req.moduleId)
+        pendingRequest = null
+    }
 
     /** 清空某模块的覆盖层文件（不影响授权）。 */
     fun clearOverlay(moduleId: String) {
