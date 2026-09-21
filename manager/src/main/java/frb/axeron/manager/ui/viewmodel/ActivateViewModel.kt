@@ -693,15 +693,16 @@ class ActivateViewModel : ViewModel() {
             }
             val binder = Shizuku.getBinder()
                 ?: throw IllegalStateException("Shizuku binder 不可用")
+            // AIDL 接口：asInterface 在 binder 可用时返回非空实例
             val service = moe.shizuku.server.IShizukuService.Stub.asInterface(
                 rikka.shizuku.ShizukuBinderWrapper(binder)
-            ) ?: throw IllegalStateException("无法连接 Shizuku 服务")
+            )
 
             val process = service.newProcess(
                 arrayOf("/system/bin/sh", "-c", command),
                 null,
                 null
-            ) ?: throw IllegalStateException("newProcess 返回 null")
+            )
 
             val out = process.inputStream.bufferedReader().use { it.readText() }
             val err = process.errorStream.bufferedReader().use { it.readText() }
