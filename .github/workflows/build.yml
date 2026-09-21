@@ -117,13 +117,15 @@ jobs:
           echo "JAVA_HOME=$ORACLE_HOME" >> $GITHUB_ENV
           echo "ORG_GRADLE_PROJECT_java.home=$ORACLE_HOME" >> $GITHUB_ENV
           echo "$ORACLE_HOME/bin" >> $GITHUB_PATH
-      # 一次 Gradle 调用同时构建两个 flavor：省掉一次冷启动 + 配置阶段（约 2-3 分钟）
+      # 只构建 official flavor（versionName 1.2.0）。
+      # manages flavor（frb.axerond.manages / versionCode 15000 / 1.4.8.r349）保留在
+      # build.gradle.kts 中以便需要时手动构建，但 CI 不再产出，避免 artifacts 里混入 1500 版本。
       - name: Build release APKs (R8 enabled)
         run: |
           # R8 需要更大 CodeCache：覆盖掉 gradle.properties 里
           # CICompilerCount=1 / -TieredCompilation 的省内存组合，
           # 否则 minifyReleaseWithR8 会抛 "Out of space in CodeCache for method handle intrinsic"
-          ./gradlew :manager:assembleOfficialRelease :manager:assembleManagesRelease \
+          ./gradlew :manager:assembleOfficialRelease \
             --console=plain --parallel --build-cache \
             -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -XX:+TieredCompilation -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8"
       - name: Verify signature
