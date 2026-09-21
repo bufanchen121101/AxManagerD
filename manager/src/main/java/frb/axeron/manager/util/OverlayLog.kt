@@ -45,8 +45,8 @@ object OverlayLog {
      *
      * 改为写 App 私有外部目录 `/sdcard/Android/data/frb.axeron.manager/files/AxManagerD/logs`：
      *  - App 无需任何权限即可写（属于自己的外部私有目录）；
-     *  - shell（uid=2000）**可读**该路径（/sdcard/Android/data 下属 sdcardfs，
-     *    shell 域对 Android/data/* 有读权限），因此用户能通过文件管理器/终端取出日志。
+     *  - shell（uid=2000）可读该路径（Android/data 下为 sdcardfs，
+     *    shell 域对其有读权限），因此用户能通过文件管理器/终端取出日志。
      */
     private val logDir: File
         get() = runCatching {
