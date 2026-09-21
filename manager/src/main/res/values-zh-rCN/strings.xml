@@ -706,6 +706,7 @@
     <string name="shizuku_activate_chooser">选择激活方式</string>
     <string name="shizuku_activate_chooser_desc">选择要用 Shizuku 激活的能力：</string>
     <string name="shizuku_activate_owner">激活设备所有者（完整权限）</string>
+    <string name="shizuku_activate_profile_owner">激活资料所有者（单用户）</string>
     <string name="owner_transfer_title">权限转移</string>
     <string name="owner_transfer_desc">将设备所有者身份转移给其他应用。转移后本应用将不再是设备所有者。</string>
     <string name="owner_transfer_no_target">未找到可转移的目标应用</string>

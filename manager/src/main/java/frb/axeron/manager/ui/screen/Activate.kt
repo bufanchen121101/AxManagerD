@@ -1439,6 +1439,29 @@ fun ShizukuActivateChooser(activateViewModel: ActivateViewModel) {
                         )
                         Text(stringResource(R.string.shizuku_activate_owner))
                     }
+
+                    OutlinedButton(
+                        onClick = {
+                            showChooser = false
+                            scope.launch {
+                                loadingDialog.withLoading {
+                                    val r = activateViewModel.activateProfileOwnerViaShizuku()
+                                    val msg = r.getOrElse { it.message ?: it.toString() }
+                                    Toast.makeText(ctx, msg.ifBlank { "OK" }, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.VerifiedUser,
+                            modifier = Modifier
+                                .padding(end = 10.dp)
+                                .size(16.dp),
+                            contentDescription = null
+                        )
+                        Text(stringResource(R.string.shizuku_activate_profile_owner))
+                    }
                 }
             },
             confirmButton = {

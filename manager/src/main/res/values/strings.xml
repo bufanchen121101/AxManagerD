@@ -713,6 +713,7 @@
     <string name="shizuku_activate_chooser">Choose activation</string>
     <string name="shizuku_activate_chooser_desc">Choose what to activate with Shizuku:</string>
     <string name="shizuku_activate_owner">Activate Device Owner (full privileges)</string>
+    <string name="shizuku_activate_profile_owner">Activate Profile Owner (single user)</string>
     <string name="owner_transfer_title">Transfer ownership</string>
     <string name="owner_transfer_desc">Transfer the Device Owner identity to another app. This app will no longer be the Device Owner.</string>
     <string name="owner_transfer_no_target">No eligible target app found</string>

@@ -264,6 +264,7 @@
     <string name="shizuku_activate_chooser">Pilih aktivasi</string>
     <string name="shizuku_activate_chooser_desc">Pilih apa yang akan diaktifkan dengan Shizuku:</string>
     <string name="shizuku_activate_owner">Aktifkan Device Owner (hak penuh)</string>
+    <string name="shizuku_activate_profile_owner">Aktifkan Profile Owner (pengguna tunggal)</string>
     <string name="owner_transfer_title">Transfer kepemilikan</string>
     <string name="owner_transfer_desc">Transfer identitas Device Owner ke aplikasi lain. Aplikasi ini tidak lagi menjadi Device Owner.</string>
     <string name="owner_transfer_no_target">Tidak ada aplikasi tujuan yang memenuhi syarat</string>

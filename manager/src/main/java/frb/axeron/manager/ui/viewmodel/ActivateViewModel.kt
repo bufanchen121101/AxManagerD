@@ -666,6 +666,22 @@ class ActivateViewModel : ViewModel() {
         get() = frb.axeron.manager.owner.DeviceOwnerExtras
             .buildTempDoCommand(AxeronApplication.axeronApp)
 
+    /** 资料所有者（Profile Owner）指令（供复制）。 */
+    val tempProfileOwnerCommand: String
+        get() = frb.axeron.manager.owner.DeviceOwnerExtras
+            .buildTempProfileOwnerCommand(AxeronApplication.axeronApp)
+
+    /** 当前应用是否已是资料所有者。 */
+    var isProfileOwnerActive by mutableStateOf(false)
+        private set
+
+    /** 刷新资料所有者状态。 */
+    fun refreshProfileOwnerState() {
+        val context = AxeronApplication.axeronApp
+        isProfileOwnerActive =
+            frb.axeron.manager.owner.DeviceOwnerExtras.isTempProfileOwnerActive(context)
+    }
+
     /**
      * 用 Shizuku 执行任意 shell 命令（不需要本应用已是 DO）。
      *
@@ -761,6 +777,43 @@ class ActivateViewModel : ViewModel() {
 
             msg.contains("device owner is already set") ->
                 "激活失败：设备所有者已被其他应用占用，一台设备只能有一个"
+
+            msg.contains("Unknown admin") ->
+                "激活失败：设备管理组件未注册，请先卸载重装本应用"
+
+            else -> "激活失败：$msg"
+        }
+        Result.failure(IllegalStateException(friendly))
+    }
+
+    /**
+     * 用 Shizuku 一键激活资料所有者（Profile Owner）。
+     *
+     * 与 [activateDeviceOwnerViaShizuku] 的区别：只作用于当前用户（工作资料），
+     * 且与 Device Owner **互斥**（已是 DO 时会明确报错）。
+     */
+    suspend fun activateProfileOwnerViaShizuku(): Result<String> = withContext(Dispatchers.IO) {
+        val raw: Result<String> = execViaShizuku(tempProfileOwnerCommand)
+        if (raw.isSuccess) {
+            refreshProfileOwnerState()
+            refreshOwnerState()
+            val active = frb.axeron.manager.owner.DeviceOwnerExtras
+                .isTempProfileOwnerActive(AxeronApplication.axeronApp)
+            return@withContext if (active) {
+                Result.success(raw.getOrNull().orEmpty().ifBlank { "已激活资料所有者" })
+            } else {
+                Result.failure(IllegalStateException("命令已执行，但资料所有者未生效"))
+            }
+        }
+
+        val msg = raw.exceptionOrNull()?.message.orEmpty()
+        val friendly = when {
+            msg.contains("already has a device owner") ||
+                    msg.contains("device owner") ->
+                "激活失败：设备已是设备所有者，与资料所有者互斥"
+
+            msg.contains("already some users") ->
+                "激活失败：设备上存在多用户/应用分身，请先关闭或删除后再重试"
 
             msg.contains("Unknown admin") ->
                 "激活失败：设备管理组件未注册，请先卸载重装本应用"

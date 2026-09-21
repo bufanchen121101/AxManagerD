@@ -46,12 +46,28 @@ object DeviceOwnerExtras {
      * 该指令通过 Shizuku（shell 身份）或 ADB 执行均可，授予**完整 DO 权限**。
      * 前置条件（系统强制）：
      *  - 设备上账户数为 0（`dumpsys account` 里 Accounts: 0）；
-     *  - 仅存在 User 0（`pm list users` 只有一项）。
+     *  - 仅存在 User 0（`pm list users` 只有一项）；
+     *  - 当前没有 Profile Owner（两者互斥）。
      * 不满足时 `dpm` 会返回明确错误，由调用方透传给用户。
      */
     fun buildTempDoCommand(context: Context): String {
         val comp = selfComponent(context)
         return "dpm set-device-owner --user 0 ${comp.flattenToShortString()}"
+    }
+
+    /**
+     * 生成「一键激活资料所有者（Profile Owner）」的 shell 指令。
+     *
+     * 与设备所有者的区别：
+     *  - Profile Owner 只作用于当前用户（等价于「工作资料」所有者），
+     *    权限范围小于整机 DO，但同样可调用大部分 DevicePolicyManager 能力；
+     *  - **两者互斥**：已成为 Device Owner 时无法再设 Profile Owner，反之亦然。
+     *
+     * 前置条件：仅存在 User 0，且当前没有 Device Owner。
+     */
+    fun buildTempProfileOwnerCommand(context: Context): String {
+        val comp = selfComponent(context)
+        return "dpm set-profile-owner --user 0 ${comp.flattenToShortString()}"
     }
 
     /**
@@ -190,6 +206,18 @@ object DeviceOwnerExtras {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
             ?: return false
         return runCatching { dpm.isDeviceOwnerApp(context.packageName) }.getOrDefault(false)
+    }
+
+    /**
+     * 当前应用是否已是资料所有者（Profile Owner）。
+     *
+     * 注意：Profile Owner 与 Device Owner 互斥，但 DO 应用通常在自身用户上
+     * 同时满足 `isProfileOwnerApp`，因此 UI 侧建议先判 DO 再判 PO。
+     */
+    fun isTempProfileOwnerActive(context: Context): Boolean {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+            ?: return false
+        return runCatching { dpm.isProfileOwnerApp(context.packageName) }.getOrDefault(false)
     }
 
     /**
