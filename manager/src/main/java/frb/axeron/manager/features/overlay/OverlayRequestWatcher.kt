@@ -62,6 +62,13 @@ object OverlayRequestWatcher {
     suspend fun scan(context: Context, excludeHandled: Boolean = true): List<Request> =
         withContext(Dispatchers.IO) {
             val dir = "${OverlayManager.permDir()}/pending"
+            // binder 不通时 execProcessSafeWithTimeout 会返回 exitCode=-1 且 stderr 有原因，
+            // 这里如实记录，避免像以前那样只留一句 "scan pending failed" 无从定位。
+            val binderOk = runCatching { Axeron.pingBinder() }.getOrDefault(false)
+            if (!binderOk) {
+                OverlayLog.w("scan skip: Axeron binder 不可用（未激活/服务未运行），pending=$dir 无法读取")
+                return@withContext emptyList()
+            }
             val out = runCatching {
                 val r = AxeronPluginService.execProcessSafeWithTimeout(
                     cmd = arrayOf("/system/bin/sh", "-c", "ls -1 '$dir' 2>/dev/null"),

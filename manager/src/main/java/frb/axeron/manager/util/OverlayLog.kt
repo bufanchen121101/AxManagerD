@@ -2,6 +2,7 @@ package frb.axeron.manager.util
 
 import android.os.Environment
 import android.util.Log
+import frb.axeron.api.core.Engine
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -12,8 +13,10 @@ import java.util.Locale
  *
  * 双重输出：
  *  1. logcat（TAG = `AxOverlay`，可 `logcat -s AxOverlay` 过滤）；
- *  2. **落盘文件**（默认 `/sdcard/AxManagerD/logs/overlay.log`）——
+ *  2. **落盘文件**（`/sdcard/Android/data/frb.axeron.manager/files/AxManagerD/logs/overlay.log`）——
  *     便于用户无需 adb 也能直接把日志文件发出来定位问题。
+ *     （早期版本写 /sdcard/AxManagerD/logs，但 App 无 MANAGE_EXTERNAL_STORAGE 时无权在
+ *      /sdcard 根建目录，日志从未生成；详见 [logDir] 注释。）
  *
  * 落盘策略：
  *  - 追加写，不覆盖，单文件超过 [MAX_BYTES] 时滚动成 `.1`（只保留一代）；
@@ -33,9 +36,24 @@ object OverlayLog {
     private val ring = ArrayDeque<String>(RING_CAPACITY)
     private val timeFmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
 
-    /** 落盘目录（外部存储，免权限可见）。 */
+    /**
+     * 落盘目录。
+     *
+     * ★ 修复：原实现写 `Environment.getExternalStorageDirectory()`（即 /sdcard 根），
+     * Android 13 上 App（untrusted_app）没有 MANAGE_EXTERNAL_STORAGE 时
+     * **无权在 /sdcard 根建目录**，导致日志文件从未生成（实测 /sdcard/AxManagerD/logs 不存在）。
+     *
+     * 改为写 App 私有外部目录 `/sdcard/Android/data/frb.axeron.manager/files/AxManagerD/logs`：
+     *  - App 无需任何权限即可写（属于自己的外部私有目录）；
+     *  - shell（uid=2000）**可读**该路径（/sdcard/Android/data 下属 sdcardfs，
+     *    shell 域对 Android/data/* 有读权限），因此用户能通过文件管理器/终端取出日志。
+     */
     private val logDir: File
-        get() = File(Environment.getExternalStorageDirectory(), "AxManagerD/logs")
+        get() = runCatching {
+            File(Engine.application.getExternalFilesDir(null), "AxManagerD/logs")
+        }.getOrElse {
+            File(Environment.getExternalStorageDirectory(), "AxManagerD/logs")
+        }
 
     private val logFile: File
         get() = File(logDir, "overlay.log")

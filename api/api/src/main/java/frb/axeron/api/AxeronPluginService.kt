@@ -590,7 +590,20 @@ object AxeronPluginService {
         onStderr: (String) -> Unit = {}
     ): ExecResult = withContext(Dispatchers.IO) {
 
+        // ★ 同 execProcessSafeWithTimeout：newProcess 可能返回 null，显式兜底防 NPE。
+        if (!runCatching { Axeron.pingBinder() }.getOrDefault(false)) {
+            return@withContext ExecResult(
+                -1,
+                "",
+                "[execProcessSafe] Axeron binder 不可用（未激活/服务未运行）"
+            )
+        }
         val process = Axeron.newProcess(cmd, env, null)
+            ?: return@withContext ExecResult(
+                -1,
+                "",
+                "[execProcessSafe] Axeron.newProcess 返回 null，cmd=${cmd.contentToString()}"
+            )
 
         val stdout = StringBuilder()
         val stderr = StringBuilder()
@@ -652,7 +665,26 @@ object AxeronPluginService {
             return@withContext execProcessSafe(cmd, env, onStdout, onStderr)
         }
 
+        // ★ 关键修复（授权弹窗永不出现的真因）：
+        // Axeron.newProcess() 在 Shizuku/Axeron server binder 不可用时**返回 null**
+        // （Java 侧返回 null，Kotlin 平台类型不报错）。原代码直接解引用，抛
+        // NullPointerException: 'int AxeronNewProcess.waitFor()' on a null object reference，
+        // 该异常被上层 runCatching 吞掉 → OverlayRequestWatcher.scan 每 3 秒失败一次
+        // → pending 永远扫不到 → 弹窗永不出现（表现为「设置里直接就授权了」）。
+        // 这里显式判空并返回可读错误，而不是 NPE。
+        if (!runCatching { Axeron.pingBinder() }.getOrDefault(false)) {
+            return@withContext ExecResult(
+                exitCode = -1,
+                stdout = "",
+                stderr = "[execProcessSafeWithTimeout] Axeron binder 不可用（未激活/服务未运行），无法创建进程"
+            )
+        }
         val process = Axeron.newProcess(cmd, env, null)
+            ?: return@withContext ExecResult(
+                exitCode = -1,
+                stdout = "",
+                stderr = "[execProcessSafeWithTimeout] Axeron.newProcess 返回 null（服务不可用），cmd=${cmd.contentToString()}"
+            )
 
         val stdout = StringBuilder()
         val stderr = StringBuilder()
