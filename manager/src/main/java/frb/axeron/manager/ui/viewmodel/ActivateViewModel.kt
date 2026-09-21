@@ -704,8 +704,16 @@ class ActivateViewModel : ViewModel() {
                 null
             )
 
-            val out = process.inputStream.bufferedReader().use { it.readText() }
-            val err = process.errorStream.bufferedReader().use { it.readText() }
+            // IRemoteProcess 是 AIDL 接口：流以 ParcelFileDescriptor 形式返回，
+            // 需转成 FileInputStream 后再读取（不能用 Java Process 的 inputStream）。
+            val out = process.inputStream.use { pfd ->
+                java.io.FileInputStream(pfd.fileDescriptor)
+                    .bufferedReader().use { it.readText() }
+            }
+            val err = process.errorStream.use { pfd ->
+                java.io.FileInputStream(pfd.fileDescriptor)
+                    .bufferedReader().use { it.readText() }
+            }
             val code = process.waitFor()
             if (code != 0) {
                 throw IllegalStateException(
