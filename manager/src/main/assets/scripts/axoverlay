@@ -9,7 +9,8 @@
 #   ${AXERON_ROOT}/perm/pending/<id>.json   模块申请
 #   ${AXERON_ROOT}/perm/granted/<id>.json   用户授权结果
 #   ${AXERON_ROOT}/perm/global.json         全局开关 + 免责确认
-#   ${AXERON_ROOT}/runtime_plugins/<id>/overlay/   模块覆盖层
+#   ${AXERON_ROOT}/runtime_plugins/<id>/overlay/   运行时模块覆盖层
+#   ${AXERON_ROOT}/plugins/<id>/overlay/           Shell 模块覆盖层
 #
 # 子命令：
 #   info                      输出能力/授权/路径信息
@@ -21,7 +22,8 @@
 #   ls  [dir]                 列出覆盖层内容
 #   clear                     清空本模块覆盖层
 #
-# 模块 id 解析顺序：环境变量 AX_MODULE_ID > 目录名（$PWD 命中 runtime_plugins/<id>）
+# 模块 id 解析顺序：环境变量 AX_MODULE_ID > $PWD > $0，
+# 且同时支持 runtime_plugins/<id>（运行时模块）与 plugins/<id>（Shell 模块）。
 #
 
 set -u
@@ -42,6 +44,9 @@ PENDING_DIR="${PERM_DIR}/pending"
 GRANTED_DIR="${PERM_DIR}/granted"
 GLOBAL_JSON="${PERM_DIR}/global.json"
 RUNTIME_ROOT="${AXERON_ROOT}/runtime_plugins"
+# Shell 模块目录（第二期：授权页分「Shell 模块 / 运行时模块」，
+# 两者模块目录不同，overlay 也各自落在自己目录下，必须都支持）。
+SHELL_ROOT="${AXERON_ROOT}/plugins"
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -69,34 +74,50 @@ EOF
     exit 2
 }
 
-# 解析模块 id。
-resolve_module_id() {
-    if [ -n "${AX_MODULE_ID:-}" ]; then
-        echo "${AX_MODULE_ID}"
-        return 0
-    fi
-    # 从当前工作目录推断 runtime_plugins/<id>
-    case "${PWD:-}" in
-        "${RUNTIME_ROOT}"/*)
-            rest="${PWD#"${RUNTIME_ROOT}"/}"
-            echo "${rest%%/*}"
-            return 0
-            ;;
-    esac
-    # 回退：调用方脚本所在目录（$0 可能位于模块目录内）
-    case "${0:-}" in
-        "${RUNTIME_ROOT}"/*)
-            rest="${0#"${RUNTIME_ROOT}"/}"
-            echo "${rest%%/*}"
+# 解析模块 id。支持两类模块目录：
+#   runtime_plugins/<id>   （运行时模块）
+#   plugins/<id>           （Shell 模块）
+# 结果写入全局变量：MODULE_ID 与该模块的 REAL_ROOT（用于定位 overlay 目录）。
+# 优先级：AX_MODULE_ID 环境变量 > $PWD 推断 > $0 推断。
+MODULE_ID=""
+REAL_ROOT=""
+
+try_root() {
+    # $1=候选根目录  $2=待匹配路径
+    case "$2" in
+        "$1"/*)
+            rest="${2#"$1"/}"
+            MODULE_ID="${rest%%/*}"
+            REAL_ROOT="$1"
             return 0
             ;;
     esac
     return 1
 }
 
-MODULE_ID="$(resolve_module_id)" || die "无法确定模块 id（请设置 AX_MODULE_ID 或在模块目录内执行）"
+resolve_module_id() {
+    if [ -n "${AX_MODULE_ID:-}" ]; then
+        MODULE_ID="${AX_MODULE_ID}"
+        # 环境变量只给了 id；按目录实际存在情况挑选根。
+        if [ -d "${SHELL_ROOT}/${MODULE_ID}" ] && [ ! -d "${RUNTIME_ROOT}/${MODULE_ID}" ]; then
+            REAL_ROOT="${SHELL_ROOT}"
+        else
+            REAL_ROOT="${RUNTIME_ROOT}"
+        fi
+        return 0
+    fi
+    # 从当前工作目录推断
+    try_root "${RUNTIME_ROOT}" "${PWD:-}" && return 0
+    try_root "${SHELL_ROOT}" "${PWD:-}" && return 0
+    # 回退：调用方脚本所在目录
+    try_root "${RUNTIME_ROOT}" "${0:-}" && return 0
+    try_root "${SHELL_ROOT}" "${0:-}" && return 0
+    return 1
+}
 
-OVERLAY_DIR="${RUNTIME_ROOT}/${MODULE_ID}/overlay"
+resolve_module_id || die "无法确定模块 id（请设置 AX_MODULE_ID 或在模块目录内执行）"
+
+OVERLAY_DIR="${REAL_ROOT}/${MODULE_ID}/overlay"
 PENDING_JSON="${PENDING_DIR}/${MODULE_ID}.json"
 GRANTED_JSON="${GRANTED_DIR}/${MODULE_ID}.json"
 
