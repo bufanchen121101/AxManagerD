@@ -648,10 +648,13 @@ fun StatusPermissionTile(
     val fullyActivated = activateViewModel.isFullyActivated
     val shizukuActive = activateViewModel.isShizukuActive
     val dhizukuGranted = activateViewModel.isDhizukuGranted
+    // 临时DO（role holder）状态：重启即失效，但需在界面上如实反映。
+    val tempDoActive = activateViewModel.isTempDoActive
     // Refresh permission state whenever the home screen enters/resumes, so that
     // granting or revoking in the external Dhizuku / Shizuku app is reflected.
     LaunchedEffect(Unit) {
         activateViewModel.refreshAllStates()
+        activateViewModel.refreshTempDoState()
     }
     ElevatedCard(
         modifier = modifier,
@@ -741,6 +744,26 @@ fun StatusPermissionTile(
                     style = MaterialTheme.typography.labelSmall,
                     color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            // 临时DO 指示（role holder）：与 DO 状态独立显示，因为它是重启即失效的临时身份。
+            if (tempDoActive) {
+                Spacer(Modifier.height(2.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        modifier = Modifier.size(14.dp),
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                    Text(
+                        text = stringResource(R.string.temp_do_active_label),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
             }
             Spacer(Modifier.weight(1f))
             Row(

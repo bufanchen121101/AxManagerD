@@ -187,6 +187,8 @@ fun ActivateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
             }
             RootCard(navigator, activateViewModel)
             DeviceOwnerActivateCard(activateViewModel)
+            TempDeviceOwnerCard(activateViewModel)
+            OwnerTransferCard(activateViewModel)
             PermissionSections(activateViewModel)
             ComputerCard()
         }
@@ -614,6 +616,263 @@ fun RootCard(
                     contentDescription = "Start"
                 )
                 Text(stringResource(R.string.start))
+            }
+        }
+    }
+}
+
+/**
+ * 【临时DO】卡片。
+ *
+ * DEVICE_POLICY_MANAGEMENT 角色可通过 shell 授予：
+ *   `cmd role add-role-holder android.app.role.DEVICE_POLICY_MANAGEMENT <package_name>`
+ * 特点：重启后失效，需要重新执行；不具备完整 DO 能力，仅为 role holder。
+ *
+ * 提供两个操作：
+ *  ① 复制指令（供用户在 adb / 终端自行执行）
+ *  ② 用 Shizuku 激活（页面已有 Shizuku 授权入口，无需软件本身已激活）
+ */
+@Composable
+fun TempDeviceOwnerCard(activateViewModel: ActivateViewModel) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val loadingDialog = rememberLoadingDialog()
+    val confirmDialog = rememberConfirmDialog()
+
+    // 进入页面时刷新一次临时 DO 状态
+    LaunchedEffect(Unit) {
+        activateViewModel.refreshTempDoState()
+    }
+
+    val cmd = activateViewModel.tempDoCommand
+    val title = stringResource(R.string.temp_do_title)
+    val copied = stringResource(R.string.copied)
+    val copy = stringResource(R.string.copy)
+    val cancel = stringResource(R.string.cancel)
+
+    ElevatedCard(
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.VerifiedUser,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Spacer(modifier = Modifier.size(20.dp))
+
+            Text(
+                text = stringResource(R.string.temp_do_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.size(12.dp))
+
+            // 状态指示：临时 DO 是否生效
+            Surface(
+                color = if (activateViewModel.isTempDoActive) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                shape = MaterialTheme.shapes.small
+            ) {
+                Text(
+                    text = stringResource(
+                        if (activateViewModel.isTempDoActive) {
+                            R.string.temp_do_active
+                        } else {
+                            R.string.temp_do_inactive
+                        }
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (activateViewModel.isTempDoActive) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.size(16.dp))
+
+            // 指令展示
+            Text(
+                text = cmd,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.size(20.dp))
+
+            // ① 复制指令
+            Button(
+                onClick = {
+                    scope.launch {
+                        val result = confirmDialog.awaitConfirm(
+                            title = title,
+                            content = cmd,
+                            markdown = false,
+                            confirm = copy,
+                            dismiss = cancel
+                        )
+                        if (result == ConfirmResult.Confirmed) {
+                            if (ClipboardUtil.put(ctx, cmd)) {
+                                Toast.makeText(ctx, copied, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = "Copy"
+                )
+                Text(stringResource(R.string.temp_do_copy))
+            }
+
+            Spacer(modifier = Modifier.size(8.dp))
+
+            // ② 用 Shizuku 激活
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        loadingDialog.withLoading {
+                            val r = activateViewModel.enableTempDoViaShizuku()
+                            val msg = r.getOrElse { it.message ?: it.toString() }
+                            Toast.makeText(ctx, msg.ifBlank { "OK" }, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = "Start"
+                )
+                Text(stringResource(R.string.temp_do_activate_by_shizuku))
+            }
+        }
+    }
+}
+
+/**
+ * 【权限转移】卡片（参照 OwnDroid）。
+ *
+ * 仅在当前应用为 Device Owner 时可用：把 DO 身份转移给系统里另一个具备
+ * 设备管理接收器的应用（`dpm.transferOwnership`，Android 9+）。
+ */
+@Composable
+fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // 仅 DO / Profile Owner 才显示该卡片
+    if (!activateViewModel.canRemoveOwner) return
+
+    LaunchedEffect(Unit) {
+        activateViewModel.refreshTransferTargets()
+    }
+
+    val confirmDialog = rememberConfirmDialog()
+    val targets = activateViewModel.transferTargets
+
+    ElevatedCard(
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.Shield,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.owner_transfer_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Spacer(modifier = Modifier.size(20.dp))
+
+            Text(
+                text = stringResource(R.string.owner_transfer_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.size(16.dp))
+
+            if (targets.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.owner_transfer_no_target),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                targets.forEach { t ->
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                val result = confirmDialog.awaitConfirm(
+                                    title = stringResource(R.string.owner_transfer_title),
+                                    content = stringResource(
+                                        R.string.owner_transfer_confirm,
+                                        t.label
+                                    ),
+                                    markdown = false,
+                                    confirm = stringResource(R.string.confirm),
+                                    dismiss = stringResource(R.string.cancel)
+                                )
+                                if (result == ConfirmResult.Confirmed) {
+                                    activateViewModel.transferOwnership(t.receiver) { ok, err ->
+                                        val msg = if (ok) {
+                                            ctx.getString(R.string.owner_transfer_success)
+                                        } else {
+                                            ctx.getString(
+                                                R.string.owner_transfer_failed,
+                                                err.orEmpty()
+                                            )
+                                        }
+                                        Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !activateViewModel.isTransferring,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Text(t.label)
+                    }
+                }
             }
         }
     }

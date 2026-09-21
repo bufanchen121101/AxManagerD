@@ -701,4 +701,19 @@
     <string name="overlay_need_disclaimer">Please read and accept the disclaimer first</string>
     <string name="overlay_need_global_switch">Please enable the global switch first</string>
     <string name="overlay_axeron_not_running">Axeron is not running; cannot manage module permissions</string>
+
+    <!-- 临时DO / 权限转移 -->
+    <string name="temp_do_title">Temporary DO</string>
+    <string name="temp_do_desc">Grants the DEVICE_POLICY_MANAGEMENT role via a shell command. It becomes invalid after a reboot and must be re-applied. It is a role holder, not a full Device Owner.</string>
+    <string name="temp_do_active">Active</string>
+    <string name="temp_do_active_label">Temporary DO active</string>
+    <string name="temp_do_inactive">Not active</string>
+    <string name="temp_do_copy">Copy command</string>
+    <string name="temp_do_activate_by_shizuku">Activate via Shizuku</string>
+    <string name="owner_transfer_title">Transfer ownership</string>
+    <string name="owner_transfer_desc">Transfer the Device Owner identity to another app. This app will no longer be the Device Owner.</string>
+    <string name="owner_transfer_no_target">No eligible target app found</string>
+    <string name="owner_transfer_confirm">Transfer Device Owner to %s?</string>
+    <string name="owner_transfer_success">Ownership transferred</string>
+    <string name="owner_transfer_failed">Transfer failed: %s</string>
 </resources>

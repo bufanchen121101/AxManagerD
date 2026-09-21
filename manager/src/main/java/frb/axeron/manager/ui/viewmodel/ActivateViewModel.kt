@@ -646,4 +646,112 @@ class ActivateViewModel : ViewModel() {
         return nm.areNotificationsEnabled() &&
                 (channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE)
     }
+
+    // =====================================================================
+    // 以下为「资料所有者完善」新增能力，全部为独立追加，不改动既有方法。
+    // =====================================================================
+
+    /** 当前应用是否持有「设备策略管理」角色（临时 DO 是否生效）。 */
+    var isTempDoActive by mutableStateOf(false)
+        private set
+
+    /** 刷新临时 DO 状态。 */
+    fun refreshTempDoState() {
+        val context = AxeronApplication.axeronApp
+        isTempDoActive = frb.axeron.manager.owner.DeviceOwnerExtras.isTempDoActive(context)
+    }
+
+    /** 临时 DO 指令（供复制）。 */
+    val tempDoCommand: String
+        get() = frb.axeron.manager.owner.DeviceOwnerExtras
+            .buildTempDoCommand(AxeronApplication.axeronApp.packageName)
+
+    /**
+     * 用 Shizuku 执行任意 shell 命令（不需要本应用已是 DO）。
+     *
+     * 场景：激活页面在软件尚未激活时理论上没有 ADB 调试权，但页面已有 Shizuku 授权入口；
+     * 用户授予 Shizuku 权限后，即可用 Shizuku 身份执行
+     * `cmd role add-role-holder android.app.role.DEVICE_POLICY_MANAGEMENT <pkg>`
+     * 来授予「临时 DO」。
+     *
+     * 实现说明：使用 Shizuku 官方 API 的 `Shizuku.newProcess(...)`。
+     * 该 API 返回平台类型（binder 不可用时为 null），必须判空后再使用，
+     * 否则会抛 NullPointerException（与本次修复的 axoverlay 弹窗 bug 同源）。
+     *
+     * @return 命令输出（成功）或错误信息（失败）
+     */
+    suspend fun execViaShizuku(command: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!Shizuku.pingBinder()) {
+                throw IllegalStateException("Shizuku 未运行")
+            }
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                throw IllegalStateException("未获得 Shizuku 授权")
+            }
+            val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
+                ?: throw IllegalStateException("Shizuku.newProcess 返回 null")
+            val out = process.inputStream.bufferedReader().use { it.readText() }
+            val err = process.errorStream.bufferedReader().use { it.readText() }
+            val code = process.waitFor()
+            if (code != 0) {
+                throw IllegalStateException(
+                    err.trim().ifBlank { "命令执行失败 (exit=$code)" }
+                )
+            }
+            out.trim()
+        }
+    }
+
+    /** 用 Shizuku 授予「临时 DO」角色。 */
+    suspend fun enableTempDoViaShizuku(): Result<String> = withContext(Dispatchers.IO) {
+        val r = execViaShizuku(tempDoCommand)
+        if (r.isSuccess) refreshTempDoState()
+        r
+    }
+
+    // ---------------------------------------------------------------------
+    // 权限转移（参照 OwnDroid）
+    // ---------------------------------------------------------------------
+
+    /** 可转移的目标列表（当前为空表示系统里没有合适的接收方）。 */
+    var transferTargets by mutableStateOf<List<frb.axeron.manager.owner.DeviceOwnerExtras.TransferTarget>>(emptyList())
+        private set
+
+    var isTransferring by mutableStateOf(false)
+        private set
+
+    /** 刷新可转移目标列表。 */
+    fun refreshTransferTargets() {
+        val context = AxeronApplication.axeronApp
+        transferTargets = runCatching {
+            frb.axeron.manager.owner.DeviceOwnerExtras.queryTransferTargets(context)
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * 将 DO 身份转移给指定目标。
+     *
+     * @param onDone 回调：(success, errorMessage)
+     */
+    fun transferOwnership(
+        target: android.content.ComponentName,
+        onDone: ((Boolean, String?) -> Unit)? = null
+    ) {
+        if (isTransferring) return
+        isTransferring = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = AxeronApplication.axeronApp
+            val result = runCatching {
+                frb.axeron.manager.owner.DeviceOwnerExtras.transferOwnership(context, target)
+            }.getOrElse { t ->
+                frb.axeron.manager.owner.DeviceOwnerExtras
+                    .TransferResult(false, t.message ?: t.toString())
+            }
+            viewModelScope.launch(Dispatchers.Main) {
+                refreshOwnerState()
+                isTransferring = false
+                onDone?.invoke(result.success, result.error)
+            }
+        }
+    }
 }
