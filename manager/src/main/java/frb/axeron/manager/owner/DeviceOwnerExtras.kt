@@ -5,40 +5,64 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.os.Build
 import frb.axeron.server.util.Logger
 
 /**
- * 设备所有者（Device Owner）扩展能力：权限转移 + 临时 DO。
+ * 设备所有者（Device Owner）扩展能力：一键激活 DO + 权限转移。
  *
  * 本文件为独立新增模块，不改动 [DeviceOwnerState] / [DeviceOwnerAdbActivator] 等既有类，
  * 避免污染公共路径。参考实现：
+ *  - 一键激活：`dpm set-device-owner`（shell 身份可执行，需 账户=0 且 仅 User 0）
  *  - 权限转移：OwnDroid `TransferOwnershipViewModel`
- *    （`dpm.transferOwnership(dar, component, null)`，@RequiresApi(28)）
- *  - 临时 DO：Android 角色机制
- *    （`cmd role add-role-holder android.app.role.DEVICE_POLICY_MANAGEMENT <pkg>`，重启失效）
+ *    （`dpm.transferOwnership(admin, component, null)`，@RequiresApi(28)）
+ *
+ * ## 为什么不用 `cmd role add-role-holder`（重要）
+ *
+ * 早期实现曾用
+ * `cmd role add-role-holder android.app.role.DEVICE_POLICY_MANAGEMENT <pkg>`
+ * 来给本应用授予「设备策略管理」角色。真机（vivo / Android 13）实测结论：
+ *  - 该角色的合格持有者是 **`com.google.android.gms`**（GMS 独占的
+ *    Qualification 角色），第三方应用没有资格持有；
+ *  - 执行后必然抛 `RuntimeException: Failed`（Dhizuku 同样被拒）。
+ *
+ * 因此本模块改用 **`dpm set-device-owner`** —— 这是 Android 官方、通用、
+ * 且实测可用的路径，授予的是**完整的 Device Owner 权限**。
  */
 object DeviceOwnerExtras {
 
     private val LOGGER = Logger("DeviceOwnerExtras")
 
-    /** 设备策略管理角色名。shell 侧授予使用的是该完整角色名。 */
-    const val ROLE_DEVICE_POLICY_MANAGEMENT = "android.app.role.DEVICE_POLICY_MANAGEMENT"
+    /** 本应用 DO 管理组件（与 manifest 注册的 receiver 对应）。 */
+    private fun selfComponent(context: Context): ComponentName =
+        ComponentName(context.packageName, DeviceOwnerReceiver::class.java.name)
 
     /**
-     * 生成「临时 DO」的 shell 指令。
+     * 生成「一键激活设备所有者」的 shell 指令。
      *
-     * 该角色可通过 adb / shell 授予，但**重启后失效**，需要重新执行。
-     * 由于是 role holder 而非真正的 Device Owner，能力受限（不具备全部 DO 权限）。
+     * 该指令通过 Shizuku（shell 身份）或 ADB 执行均可，授予**完整 DO 权限**。
+     * 前置条件（系统强制）：
+     *  - 设备上账户数为 0（`dumpsys account` 里 Accounts: 0）；
+     *  - 仅存在 User 0（`pm list users` 只有一项）。
+     * 不满足时 `dpm` 会返回明确错误，由调用方透传给用户。
      */
-    fun buildTempDoCommand(packageName: String): String =
-        "cmd role add-role-holder $ROLE_DEVICE_POLICY_MANAGEMENT $packageName"
+    fun buildTempDoCommand(context: Context): String {
+        val comp = selfComponent(context)
+        return "dpm set-device-owner --user 0 ${comp.flattenToShortString()}"
+    }
 
-    /** 移除「临时 DO」角色持有者的指令。 */
-    fun buildRemoveTempDoCommand(packageName: String): String =
-        "cmd role remove-role-holder $ROLE_DEVICE_POLICY_MANAGEMENT $packageName"
+    /**
+     * 生成「移除设备所有者的设备管理」的 shell 指令。
+     *
+     * 注意：已成 DO 的组件需要先 `clearDeviceOwnerApp` 才能移除。
+     */
+    fun buildRemoveTempDoCommand(context: Context): String {
+        val comp = selfComponent(context)
+        return "dpm remove-active-admin --user 0 ${comp.flattenToShortString()}"
+    }
 
     // ---------------------------------------------------------------------
     // 权限转移（参照 OwnDroid）
@@ -55,7 +79,7 @@ object DeviceOwnerExtras {
      * 枚举可作为 DO 转移目标的设备管理接收器。
      *
      * 参照 OwnDroid `TransferOwnershipModel` 的过滤逻辑：
-     *  - 必须是「可见的」设备管理接收器（`isVisible`）；
+     *  - 必须能被 `DeviceAdminInfo` 正确解析；
      *  - 排除自身包名；
      *  - 排除系统应用（`FLAG_SYSTEM`）。
      */
@@ -85,14 +109,13 @@ object DeviceOwnerExtras {
                 } catch (t: Throwable) {
                     return@mapNotNull null
                 }
-                if (!adminInfo.isVisible) return@mapNotNull null
                 val pkg = adminInfo.packageName ?: return@mapNotNull null
                 // 排除自身
                 if (pkg == selfPkg) return@mapNotNull null
                 val ai = adminInfo.activityInfo ?: return@mapNotNull null
                 val appInfo = ai.applicationInfo ?: return@mapNotNull null
                 // 排除系统应用（与 OwnDroid 一致）
-                if (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0) {
+                if (appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) {
                     return@mapNotNull null
                 }
                 try {
@@ -155,20 +178,24 @@ object DeviceOwnerExtras {
     }
 
     // ---------------------------------------------------------------------
-    // 临时 DO（role holder）
+    // DO 状态查询 / 能力
     // ---------------------------------------------------------------------
 
     /**
-     * 当前应用是否持有「设备策略管理」角色（即临时 DO 是否生效）。
+     * 当前应用是否已是设备所有者（即「一键激活 DO」是否已生效）。
+     *
+     * 直接询问系统 DevicePolicyManager，实时准确，不受进程存活影响。
      */
     fun isTempDoActive(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
-        return runCatching {
-            val rm = context.getSystemService(android.app.role.RoleManager::class.java)
-            rm?.isRoleHeld(ROLE_DEVICE_POLICY_MANAGEMENT) ?: false
-        }.getOrDefault(false)
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+            ?: return false
+        return runCatching { dpm.isDeviceOwnerApp(context.packageName) }.getOrDefault(false)
     }
 
-    /** 临时 DO 是否受当前系统版本支持（Android 10+）。 */
-    fun isTempDoSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+    /**
+     * 一键激活 DO 是否受当前系统版本支持。
+     *
+     * `dpm set-device-owner` 自 Android 5.0（API 21）起可用。
+     */
+    fun isTempDoSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
 }

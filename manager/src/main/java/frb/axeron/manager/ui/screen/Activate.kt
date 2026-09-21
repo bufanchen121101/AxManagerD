@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -622,11 +623,16 @@ fun RootCard(
 }
 
 /**
- * 【临时DO】卡片。
+ * 【一键激活 DO】卡片。
  *
- * DEVICE_POLICY_MANAGEMENT 角色可通过 shell 授予：
- *   `cmd role add-role-holder android.app.role.DEVICE_POLICY_MANAGEMENT <package_name>`
- * 特点：重启后失效，需要重新执行；不具备完整 DO 能力，仅为 role holder。
+ * 通过 shell 指令激活**完整权限**的 Device Owner：
+ *   `dpm set-device-owner --user 0 frb.axeron.manager/.owner.DeviceOwnerReceiver`
+ *
+ * 为什么不用 `cmd role add-role-holder android.app.role.DEVICE_POLICY_MANAGEMENT`：
+ * 该角色是 GMS（com.google.android.gms）独占的 Qualification 角色，第三方应用
+ * 没有资格持有，真机实测必然失败。`dpm set-device-owner` 才是官方通用路径。
+ *
+ * 前置条件：设备账户数为 0 且仅存在 User 0（不满足时 dpm 会返回明确错误）。
  *
  * 提供两个操作：
  *  ① 复制指令（供用户在 adb / 终端自行执行）
@@ -756,7 +762,7 @@ fun TempDeviceOwnerCard(activateViewModel: ActivateViewModel) {
                 onClick = {
                     scope.launch {
                         loadingDialog.withLoading {
-                            val r = activateViewModel.enableTempDoViaShizuku()
+                            val r = activateViewModel.activateDeviceOwnerViaShizuku()
                             val msg = r.getOrElse { it.message ?: it.toString() }
                             Toast.makeText(ctx, msg.ifBlank { "OK" }, Toast.LENGTH_SHORT).show()
                         }
@@ -1356,8 +1362,91 @@ fun ShizukuSection(activateViewModel: ActivateViewModel) {
                         )
                     }
                 }
+
+                // Shizuku 已授权：提供「选择激活方式」入口。
+                // 用户可在此选择用 Shizuku 激活「设备所有者」（完整权限）。
+                Spacer(Modifier.height(12.dp))
+                ShizukuActivateChooser(activateViewModel)
             }
         }
+    }
+}
+
+/**
+ * 【用 Shizuku 激活】选择入口。
+ *
+ * 在 Shizuku 已授权后显示，点击弹出选择对话框，让用户明确选择要用
+ * Shizuku 激活哪一种能力，而不是在多个卡片里各点一次。
+ *
+ * 当前提供：
+ *  - 激活设备所有者（完整权限）：`dpm set-device-owner`
+ */
+@Composable
+fun ShizukuActivateChooser(activateViewModel: ActivateViewModel) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val loadingDialog = rememberLoadingDialog()
+
+    var showChooser by remember { mutableStateOf(false) }
+
+    val chooserTitle = stringResource(R.string.shizuku_activate_chooser)
+    val cancelLabel = stringResource(R.string.cancel)
+
+    Button(
+        onClick = { showChooser = true },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.VerifiedUser,
+            modifier = Modifier
+                .padding(end = 10.dp)
+                .size(16.dp),
+            contentDescription = null
+        )
+        Text(chooserTitle)
+    }
+
+    if (showChooser) {
+        AlertDialog(
+            onDismissRequest = { showChooser = false },
+            title = { Text(chooserTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.shizuku_activate_chooser_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            showChooser = false
+                            scope.launch {
+                                loadingDialog.withLoading {
+                                    val r = activateViewModel.activateDeviceOwnerViaShizuku()
+                                    val msg = r.getOrElse { it.message ?: it.toString() }
+                                    Toast.makeText(ctx, msg.ifBlank { "OK" }, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Shield,
+                            modifier = Modifier
+                                .padding(end = 10.dp)
+                                .size(16.dp),
+                            contentDescription = null
+                        )
+                        Text(stringResource(R.string.shizuku_activate_owner))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showChooser = false }) {
+                    Text(cancelLabel)
+                }
+            }
+        )
     }
 }
 

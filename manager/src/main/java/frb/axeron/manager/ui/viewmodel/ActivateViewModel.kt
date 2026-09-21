@@ -664,7 +664,7 @@ class ActivateViewModel : ViewModel() {
     /** 临时 DO 指令（供复制）。 */
     val tempDoCommand: String
         get() = frb.axeron.manager.owner.DeviceOwnerExtras
-            .buildTempDoCommand(AxeronApplication.axeronApp.packageName)
+            .buildTempDoCommand(AxeronApplication.axeronApp)
 
     /**
      * 用 Shizuku 执行任意 shell 命令（不需要本应用已是 DO）。
@@ -724,11 +724,50 @@ class ActivateViewModel : ViewModel() {
         }
     }
 
-    /** 用 Shizuku 授予「临时 DO」角色。 */
+    /** 用 Shizuku 一键激活完整的 Device Owner 权限。 */
     suspend fun enableTempDoViaShizuku(): Result<String> = withContext(Dispatchers.IO) {
         val r = execViaShizuku(tempDoCommand)
         if (r.isSuccess) refreshTempDoState()
         r
+    }
+
+    /**
+     * 用 Shizuku 一键激活 DO，并把原始输出翻译成友好提示。
+     *
+     * 与 [enableTempDoViaShizuku] 的差异：本方法会识别 `dpm` 的常见失败原因
+     * （账户未清空 / 多用户 / 已有 DO），返回可直接展示给用户的中文说明。
+     */
+    suspend fun activateDeviceOwnerViaShizuku(): Result<String> = withContext(Dispatchers.IO) {
+        val raw: Result<String> = execViaShizuku(tempDoCommand)
+        if (raw.isSuccess) {
+            refreshTempDoState()
+            val active = frb.axeron.manager.owner.DeviceOwnerExtras
+                .isTempDoActive(AxeronApplication.axeronApp)
+            return@withContext if (active) {
+                Result.success(raw.getOrNull().orEmpty().ifBlank { "已激活设备所有者" })
+            } else {
+                Result.failure(IllegalStateException("命令已执行，但设备所有者未生效"))
+            }
+        }
+
+        val msg = raw.exceptionOrNull()?.message.orEmpty()
+        val friendly = when {
+            msg.contains("already some accounts") ||
+                    msg.contains("already several accounts") ->
+                "激活失败：设备上仍有账户，请先在「设置 → 账户」中移除全部账户后重试"
+
+            msg.contains("already some users") ->
+                "激活失败：设备上存在多用户/应用分身，请先关闭或删除后再重试"
+
+            msg.contains("device owner is already set") ->
+                "激活失败：设备所有者已被其他应用占用，一台设备只能有一个"
+
+            msg.contains("Unknown admin") ->
+                "激活失败：设备管理组件未注册，请先卸载重装本应用"
+
+            else -> "激活失败：$msg"
+        }
+        Result.failure(IllegalStateException(friendly))
     }
 
     // ---------------------------------------------------------------------

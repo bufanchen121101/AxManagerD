@@ -696,13 +696,16 @@
     <string name="overlay_axeron_not_running">Axeron 未激活，无法管理模块权限</string>
 
     <!-- 临时DO / 权限转移 -->
-    <string name="temp_do_title">临时DO</string>
-    <string name="temp_do_desc">通过 shell 指令授予 DEVICE_POLICY_MANAGEMENT 角色。重启后失效，需要重新执行；它只是角色持有者，并非完整的设备所有者。</string>
+    <string name="temp_do_title">一键激活设备所有者</string>
+    <string name="temp_do_desc">通过 shell 指令一键激活完整的设备所有者（Device Owner）权限，无需电脑。前置条件：设备上无任何账户，且仅有当前用户。</string>
     <string name="temp_do_active">已生效</string>
-    <string name="temp_do_active_label">临时DO 已生效</string>
+    <string name="temp_do_active_label">设备所有者已激活</string>
     <string name="temp_do_inactive">未生效</string>
     <string name="temp_do_copy">复制指令</string>
     <string name="temp_do_activate_by_shizuku">用 Shizuku 激活</string>
+    <string name="shizuku_activate_chooser">选择激活方式</string>
+    <string name="shizuku_activate_chooser_desc">选择要用 Shizuku 激活的能力：</string>
+    <string name="shizuku_activate_owner">激活设备所有者（完整权限）</string>
     <string name="owner_transfer_title">权限转移</string>
     <string name="owner_transfer_desc">将设备所有者身份转移给其他应用。转移后本应用将不再是设备所有者。</string>
     <string name="owner_transfer_no_target">未找到可转移的目标应用</string>
