@@ -77,7 +77,6 @@ object DeviceOwnerExtras {
 
         val selfPkg = context.packageName
         return receivers.asSequence()
-            .filter { it.isVisible }
             .mapNotNull { ri ->
                 // 与 OwnDroid 对齐：先尝试用 DeviceAdminInfo 解析，
                 // 只有真正合法的设备管理接收器才会被纳入候选。

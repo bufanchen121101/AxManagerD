@@ -674,9 +674,12 @@ class ActivateViewModel : ViewModel() {
      * `cmd role add-role-holder android.app.role.DEVICE_POLICY_MANAGEMENT <pkg>`
      * 来授予「临时 DO」。
      *
-     * 实现说明：使用 Shizuku 官方 API 的 `Shizuku.newProcess(...)`。
-     * 该 API 返回平台类型（binder 不可用时为 null），必须判空后再使用，
-     * 否则会抛 NullPointerException（与本次修复的 axoverlay 弹窗 bug 同源）。
+     * 实现说明：`rikka.shizuku.Shizuku.newProcess` 是 private（编译期不可用），
+     * 因此与项目内 `ShizukuApi` 保持一致，走 binder 直连：
+     *   - `Shizuku.getBinder()` 拿到 Shizuku server 的 binder；
+     *   - 用 `ShizukuBinderWrapper` 包一层，使 `getCallingUid()` 返回 2000(shell)；
+     *   - `moe.shizuku.server.IShizukuService.Stub.asInterface(...)` 后调 `newProcess`。
+     * 注意：`newProcess` 返回的是 AIDL 对象（非 null），但仍做空值兜底。
      *
      * @return 命令输出（成功）或错误信息（失败）
      */
@@ -688,8 +691,18 @@ class ActivateViewModel : ViewModel() {
             if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
                 throw IllegalStateException("未获得 Shizuku 授权")
             }
-            val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
-                ?: throw IllegalStateException("Shizuku.newProcess 返回 null")
+            val binder = Shizuku.getBinder()
+                ?: throw IllegalStateException("Shizuku binder 不可用")
+            val service = moe.shizuku.server.IShizukuService.Stub.asInterface(
+                rikka.shizuku.ShizukuBinderWrapper(binder)
+            ) ?: throw IllegalStateException("无法连接 Shizuku 服务")
+
+            val process = service.newProcess(
+                arrayOf("/system/bin/sh", "-c", command),
+                null,
+                null
+            ) ?: throw IllegalStateException("newProcess 返回 null")
+
             val out = process.inputStream.bufferedReader().use { it.readText() }
             val err = process.errorStream.bufferedReader().use { it.readText() }
             val code = process.waitFor()

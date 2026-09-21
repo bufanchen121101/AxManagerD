@@ -798,6 +798,14 @@ fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
     val confirmDialog = rememberConfirmDialog()
     val targets = activateViewModel.transferTargets
 
+    // 在 @Composable 作用域内预先解析字符串（不能在 onClick 回调里调用 stringResource）
+    val titleStr = stringResource(R.string.owner_transfer_title)
+    val confirmStr = stringResource(R.string.confirm)
+    val dismissStr = stringResource(R.string.cancel)
+    val confirmTemplate = stringResource(R.string.owner_transfer_confirm)
+    val successStr = stringResource(R.string.owner_transfer_success)
+    val failedTemplate = stringResource(R.string.owner_transfer_failed)
+
     ElevatedCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         modifier = Modifier.fillMaxWidth()
@@ -841,24 +849,18 @@ fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
                         onClick = {
                             scope.launch {
                                 val result = confirmDialog.awaitConfirm(
-                                    title = stringResource(R.string.owner_transfer_title),
-                                    content = stringResource(
-                                        R.string.owner_transfer_confirm,
-                                        t.label
-                                    ),
+                                    title = titleStr,
+                                    content = confirmTemplate.format(t.label),
                                     markdown = false,
-                                    confirm = stringResource(R.string.confirm),
-                                    dismiss = stringResource(R.string.cancel)
+                                    confirm = confirmStr,
+                                    dismiss = dismissStr
                                 )
                                 if (result == ConfirmResult.Confirmed) {
                                     activateViewModel.transferOwnership(t.receiver) { ok, err ->
                                         val msg = if (ok) {
-                                            ctx.getString(R.string.owner_transfer_success)
+                                            successStr
                                         } else {
-                                            ctx.getString(
-                                                R.string.owner_transfer_failed,
-                                                err.orEmpty()
-                                            )
+                                            failedTemplate.format(err.orEmpty())
                                         }
                                         Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                                     }
