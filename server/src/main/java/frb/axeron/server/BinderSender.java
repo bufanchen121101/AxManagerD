@@ -69,7 +69,12 @@ public class BinderSender {
                     "Shizuku unavailable, uid %d belongs to manager, send binder directly",
                     uid
             );
-            AxeronService.sendBinderToManager(axeronService.asBinder(), userId);
+            // 【v2.0.2 激活投递修复】投递失败则回滚「一次性」标记，使后续 uid/process 事件
+            // （例如 App 解冻变为 active）可以重新投递，而不是永久放弃。
+            if (!AxeronService.sendBinderToManagerResult(axeronService.asBinder(), userId)) {
+                LOGGER.d("send binder to manager failed, rollback sent-mark for %s", key);
+                resetBinderState(uid, pid);
+            }
             return;
         }
 
@@ -101,10 +106,11 @@ public class BinderSender {
                             == PackageManager.PERMISSION_GRANTED;
 
                     if (granted) {
-                        AxeronService.sendBinderToManager(
-                                axeronService.asBinder(),
-                                userId
-                        );
+                        // 【v2.0.2 激活投递修复】同上：投递失败时回滚「一次性」标记。
+                        if (!AxeronService.sendBinderToManagerResult(axeronService.asBinder(), userId)) {
+                            LOGGER.d("send binder to manager failed, rollback sent-mark for %s", key);
+                            resetBinderState(uid, pid);
+                        }
                         return;
                     }
 
@@ -124,19 +130,33 @@ public class BinderSender {
                     }
 
                 } else if (ArraysKt.contains(pi.requestedPermissions, PERMISSION)) {
-                    AxeronService.sendBinderToUserApp(
-                            shizukuService.asBinder(),
-                            packageName,
-                            userId
-                    );
+                    // 【v2.0.2 激活投递修复】失败同样回滚「一次性」标记。
+                    if (!AxeronService.sendBinderToUserAppResult(shizukuService.asBinder(), packageName, userId)) {
+                        LOGGER.d("send binder to %s failed, rollback sent-mark for %s", packageName, key);
+                        resetBinderState(uid, pid);
+                    }
                     return;
                 }
 
             } catch (Throwable e) {
                 LOGGER.w(e, "sendBinder failed for package %s", packageName);
             }
+            }
         }
-    }
+
+        /**
+         * 【v2.0.2 激活投递修复】回滚「一次性」标记。
+         *
+         * 原实现把 uid:pid（SENT_BINDERS）与 uid（UID_LIST）/ pid（PID_LIST）永久记为
+         * 「已投递」：一旦首次投递失败（典型场景：server 在 App 的 attachApplication 时机
+         * 投递，而 ContentProvider 尚未 publish；或 App 被系统冻结导致 provider 暂时取不到），
+         * 此后 App 即使变为活跃也不会再投递 —— 表现就是「激活提示成功、界面不跳转」。
+         */
+        private static void resetBinderState(int uid, int pid) {
+            SENT_BINDERS.remove(uid + ":" + pid);
+            UidObserver.reset(uid);
+            ProcessObserver.reset(pid);
+        }
 
 
 //    private static void sendBinder(int uid, int pid) {
@@ -222,6 +242,15 @@ public class BinderSender {
 
         private static final Set<Integer> PID_LIST = new HashSet<>();
 
+        /**
+         * 【v2.0.2 激活投递修复】允许该 pid 重新投递（配合 {@link #resetBinderState}）。
+         */
+        static void reset(int pid) {
+            synchronized (PID_LIST) {
+                PID_LIST.remove(pid);
+            }
+        }
+
         @Override
         public void onForegroundActivitiesChanged(int pid, int uid, boolean foregroundActivities) throws RemoteException {
             LOGGER.d("onForegroundActivitiesChanged: pid=%d, uid=%d, foregroundActivities=%s", pid, uid, foregroundActivities ? "true" : "false");
@@ -263,6 +292,15 @@ public class BinderSender {
     private static class UidObserver extends UidObserverAdapter {
 
         private static final Set<Integer> UID_LIST = new HashSet<>();
+
+        /**
+         * 【v2.0.2 激活投递修复】允许该 uid 重新投递（配合 {@link #resetBinderState}）。
+         */
+        static void reset(int uid) {
+            synchronized (UID_LIST) {
+                UID_LIST.remove(uid);
+            }
+        }
 
         @Override
         public void onUidActive(int uid) throws RemoteException {

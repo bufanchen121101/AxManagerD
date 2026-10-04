@@ -118,6 +118,10 @@ open class AxeronService :
             )
         }
 
+        // 【v2.0.2 激活投递修复】provider 取不到时的延迟重试策略：8 次 × 500ms ≈ 4s。
+        private const val MAX_PROVIDER_NULL_RETRY = 8
+        private const val PROVIDER_NULL_RETRY_DELAY_MS = 500L
+
         fun sendBinderToClient(binder: IBinder, userId: Int) {
             try {
                 for (pi in PackageManagerApis.getInstalledPackagesNoThrow(
@@ -126,6 +130,20 @@ open class AxeronService :
                 )) {
                     if (pi == null || pi.requestedPermissions == null)
                         continue
+
+                    // 【v2.0.3 关键修复】manager 的 .server provider 只能接收 Axeron 服务的 binder。
+                    // 这里遍历时携带的是「Shizuku binder」（shizukuService.asBinder()）；若投给
+                    // manager，App 会把它当作 IAxeronService 使用 —— 所有 Axeron API 调用都会报
+                    // "Binder invocation to an incorrect interface"，activateStatus 永远无法变成
+                    // Running（表现为「已连上 ADB 但不跳转」）。manager 的 binder 由
+                    // sendBinderToManager() 单独投递。
+                    if (pi.packageName == MANAGER_APPLICATION_ID) {
+                        LOGGER.i(
+                            "skip shizuku binder to manager %s in user %d",
+                            pi.packageName, userId
+                        )
+                        continue
+                    }
 
                     if ((pi.requestedPermissions as Array<out Any?>).contains(PERMISSION)) {
                         sendBinderToUserApp(binder, pi.packageName, userId)
@@ -153,6 +171,26 @@ open class AxeronService :
             sendBinderToUserApp(binder, MANAGER_APPLICATION_ID, userId)
         }
 
+        /**
+         * 【v2.0.2 激活投递修复】带返回值的 manager 投递入口。
+         *
+         * BinderSender 用它判断是否需要回滚「一次性」标记（SENT_BINDERS / UID_LIST /
+         * PID_LIST）——投递失败时不把该 uid/pid 记为「已送过」，后续 uid/process 事件
+         * （例如 App 从 cached 变 active）才能重新投递。
+         */
+        @JvmStatic
+        fun sendBinderToManagerResult(binder: IBinder, userId: Int): Boolean {
+            return sendBinderToUserAppInternal(binder, MANAGER_APPLICATION_ID, userId, true, 0)
+        }
+
+        /**
+         * 【v2.0.2 激活投递修复】带返回值的普通 App 投递入口（走 .shizuku authority）。
+         */
+        @JvmStatic
+        fun sendBinderToUserAppResult(binder: IBinder, packageName: String, userId: Int): Boolean {
+            return sendBinderToUserAppInternal(binder, packageName, userId, true, 0)
+        }
+
         @JvmStatic
         fun sendBinderToShizukuManager(binder: IBinder, userId: Int) {
             sendBinderToUserApp(binder, SHIZUKU_MANAGER_APPLICATION_ID, userId)
@@ -164,6 +202,25 @@ open class AxeronService :
         }
 
         fun sendBinderToUserApp(binder: IBinder, packageName: String, userId: Int, retry: Boolean) {
+            sendBinderToUserAppInternal(binder, packageName, userId, retry, 0)
+        }
+
+        /**
+         * 【v2.0.2 激活投递修复】[sendBinderToUserApp] 的真实实现，带 attempt 计数与返回值。
+         *
+         * 原实现遇到 `provider == null` 直接 return，而调用方 BinderSender 会把该 uid/pid 记为
+         * 「已投递」（SENT_BINDERS / UID_LIST / PID_LIST），此后永不再送。典型触发场景：
+         *   1) server 在 App 的 attachApplication 时机投递，而 ContentProvider 尚未 publish；
+         *   2) App 被系统冻结（vivo fast_freezer 等），provider 暂时取不到。
+         * 结果就是「激活提示成功、界面不跳转」。这里改为延迟重试，给 provider 就绪留出窗口。
+         */
+        private fun sendBinderToUserAppInternal(
+            binder: IBinder,
+            packageName: String,
+            userId: Int,
+            retry: Boolean,
+            attempt: Int
+        ): Boolean {
             try {
                 DeviceIdleControllerApis.addPowerSaveTempWhitelistApp(
                     packageName, 30 * 1000, userId,
@@ -195,8 +252,17 @@ open class AxeronService :
                 provider =
                     ActivityManagerApis.getContentProviderExternal(name, userId, token, name)
                 if (provider == null) {
-                    LOGGER.e("provider is null %s %d", name, userId)
-                    return
+                    LOGGER.e(
+                        "provider is null %s %d (attempt %d/%d)",
+                        name, userId, attempt, MAX_PROVIDER_NULL_RETRY
+                    )
+                    // 【修复】原实现遇 provider == null 直接 return，调用方会把该 uid/pid 记为
+                    // 「已投递」而永不再送。此处改为延迟重试，覆盖 App 进程刚启动（provider 尚未
+                    // publish）或被系统冻结导致 provider 暂时不可取的窗口。
+                    if (attempt < MAX_PROVIDER_NULL_RETRY) {
+                        scheduleSendBinderRetry(binder, packageName, userId, retry, attempt + 1)
+                    }
+                    return false
                 }
                 if (!provider.asBinder().pingBinder()) {
                     LOGGER.e("provider is dead %s %d", name, userId)
@@ -205,9 +271,9 @@ open class AxeronService :
                         ActivityManagerApis.forceStopPackageNoThrow(packageName, userId)
                         LOGGER.e("kill %s in user %d and try again", packageName, userId)
                         Thread.sleep(1000)
-                        sendBinderToUserApp(binder, packageName, userId, false)
+                        return sendBinderToUserAppInternal(binder, packageName, userId, false, attempt)
                     }
-                    return
+                    return false
                 }
 
                 if (!retry) {
@@ -219,14 +285,42 @@ open class AxeronService :
                 }
                 IContentProviderCompat.call(provider, null, null, name, "sendBinder", null, extra)
                 LOGGER.i("send binder to user app %s in user %d", packageName, userId)
+                return true
             } catch (it: Throwable) {
                 LOGGER.e(it, "failed send binder to user app %s in user %d", packageName, userId)
+                return false
             } finally {
                 try {
                     ActivityManagerApis.removeContentProviderExternal(name, token)
                 } catch (tr: Throwable) {
                     LOGGER.w(tr, "removeContentProviderExternal")
                 }
+            }
+        }
+
+        /**
+         * 【v2.0.2 激活投递修复】延迟重试（走 server 主 Handler，不阻塞 binder 线程）。
+         *
+         * 使用 [HandlerUtil]（server 启动时已 setMainHandler），因此本函数可在
+         * attachApplication / uid observer 等 binder 线程里安全调用。
+         */
+        private fun scheduleSendBinderRetry(
+            binder: IBinder,
+            packageName: String,
+            userId: Int,
+            retry: Boolean,
+            attempt: Int
+        ) {
+            try {
+                HandlerUtil.getMainHandler().postDelayed({
+                    try {
+                        sendBinderToUserAppInternal(binder, packageName, userId, retry, attempt)
+                    } catch (t: Throwable) {
+                        LOGGER.e(t, "retry send binder to %s", packageName)
+                    }
+                }, PROVIDER_NULL_RETRY_DELAY_MS)
+            } catch (t: Throwable) {
+                LOGGER.e(t, "scheduleSendBinderRetry %s", packageName)
             }
         }
 

@@ -80,7 +80,17 @@ fun ExecutePluginActionScreen(
 ) {
     val developerOptionsEnabled = AxeronSettings.getEnableDeveloperOptions()
 
-    var isActionRunning by rememberSaveable { mutableStateOf(true) }
+    // 【运行信任弹窗】点「运行」后先询问用户是否信任该模块：
+    //   信任   → 直接执行模块（不做抓取 / 分析，运行全程不弹任何解析类弹窗）；
+    //   不信任 → 走原有解析链路（strace + sh -x 抓取 → AI / 规则分析 → 再执行）。
+    // null = 尚未选择（弹窗显示中）
+    var trustDecision by rememberSaveable { mutableStateOf<Boolean?>(null) }
+
+    // 是否正在运行（等用户选择「信任 / 不信任」期间为 false，避免误显示"正在分析"）
+    var isActionRunning by rememberSaveable { mutableStateOf(false) }
+
+    // 解析 / 拦截阶段的进度弹窗是否显示（仅「不信任」链路需要）
+    var showAnalysisDialog by rememberSaveable { mutableStateOf(false) }
 
     // 解析/拦截阶段的进度指示（避免用户以为卡死）
     var stage by rememberSaveable { mutableStateOf("正在准备解析…") }
@@ -105,10 +115,13 @@ fun ExecutePluginActionScreen(
     var aiAnalyzing by rememberSaveable { mutableStateOf(false) }
     var aiAnalysisReply by rememberSaveable { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(trustDecision) {
+        // 等用户在信任弹窗里做出选择；未选择前不做任何事
+        val trusted = trustDecision ?: return@LaunchedEffect
         if (text.isNotEmpty()) {
             return@LaunchedEffect
         }
+        isActionRunning = true
         launch(Dispatchers.IO) {
             val pluginPath =
                 File(
@@ -127,7 +140,10 @@ fun ExecutePluginActionScreen(
             val isWhitelisted = frb.axeron.manager.ai.AIConfigStore.isWhitelisted(
                 plugin.dirId, plugin.prop.name
             )
-            if (analyzer != null && !isWhitelisted) {
+            // 只有「不信任」且不在白名单时才做拦截分析；
+            // 选择「信任」时完全跳过：不做 strace 抓取、不做 AI / 规则分析、不弹任何弹窗。
+            if (!trusted && analyzer != null && !isWhitelisted) {
+                showAnalysisDialog = true
                 // 【方案 A（strace 版）】执行前用静态 strace 跟踪 `sh action.sh` 整个进程树，
                 // 只抓 execve 系统调用，从而 100% 捕获解密/展开后「最终真实启动的命令」
                 // （YTAS 三层壳、base64、openssl、eval、shc 编译 ELF 全部覆盖）。
@@ -292,14 +308,17 @@ fun ExecutePluginActionScreen(
                 stage = "正在生成分析报告…"
                 val analysis = analyzer.analyze(analyzeCmd, ctx)
                 if (analysis != null && !analysis.allow) {
-                    // 用户选择中止：不执行
-                    launch(Dispatchers.Main) {
-                        text = "已被用户中止"
+                        // 用户选择中止：不执行
+                        showAnalysisDialog = false
+                        launch(Dispatchers.Main) {
+                            text = "已被用户中止"
+                        }
+                        isActionRunning = false
+                        return@launch
                     }
-                    isActionRunning = false
-                    return@launch
+                    // 分析阶段结束，进入执行阶段（此后不再显示进度弹窗）
+                    showAnalysisDialog = false
                 }
-            }
             // ---- 挂钩结束 ----
             // 开启运行时指令采集：cmd 里已用 `sh -x ./action.sh` 开启 xtrace，
             // 把模块脚本内部真实执行（含加密脚本解密后）的每一条命令打到 stderr。
@@ -332,12 +351,30 @@ fun ExecutePluginActionScreen(
                 }
             )
             frb.axeron.manager.ai.RuntimeCommandTracer.end()
-            // 把抓取到的真实指令流喂给云端 AI，生成模块行为总结（并缓存供提问）
-            frb.axeron.manager.ai.AIEngineManager.analyzeRuntimeTrace(
-                pluginName = plugin.prop.name,
-                traceText = frb.axeron.manager.ai.RuntimeCommandTracer.toPromptBlock()
-            )
+            // ============ 【修复：卡在「运行中」界面】 ============
+            // 对齐原版 AxManager 的行为：模块脚本执行完（execWithIO 返回）就立刻解锁界面。
+            //
+            // 旧实现在这里 **同步 await** AIEngineManager.analyzeRuntimeTrace(...)，而它内部
+            // 走 OkHttp 请求 NVIDIA 云端（connect 15s / read 120s）。网络慢或不通时这一行会
+            // 长时间不返回，界面就一直停在「运行中」——返回按钮（enabled = !isActionRunning）
+            // 与关闭 FAB（if (!isActionRunning)）都不出现，看起来像卡死。
+            //
+            // 现在：先把真实指令流写进内存缓存（纯本地、零耗时，供 AI 问答页立即读取），
+            // 然后立刻 isActionRunning = false 解锁界面；AI 行为总结改为后台「尽力而为」，
+            // 成功则更新缓存，失败/超时只影响总结本身，绝不再阻塞界面收尾。
+            val runtimeTraceBlock = frb.axeron.manager.ai.RuntimeCommandTracer.toPromptBlock()
+            frb.axeron.manager.ai.AIEngineManager.updateRuntimeTrace(runtimeTraceBlock)
             isActionRunning = false
+            scope.launch(Dispatchers.IO) {
+                try {
+                    frb.axeron.manager.ai.AIEngineManager.analyzeRuntimeTrace(
+                        pluginName = plugin.prop.name,
+                        traceText = runtimeTraceBlock
+                    )
+                } catch (t: Throwable) {
+                    android.util.Log.w("AIEngine", "后台 AI 行为总结失败（不影响界面）", t)
+                }
+            }
         }
     }
 
@@ -460,8 +497,42 @@ fun ExecutePluginActionScreen(
         }
     }
 
-    // 解析/拦截阶段进度弹窗
-    if (isActionRunning) {
+    // 【运行信任弹窗】点「运行」后先询问用户是否信任该模块：
+    //   信任   → 直接执行模块，运行全程不弹任何弹窗（不做抓取 / 分析）；
+    //   不信任 → 走解析链路（strace + sh -x 抓取 → AI / 规则分析 → 再执行）。
+    if (trustDecision == null) {
+        AlertDialog(
+            onDismissRequest = { navigator.popBackStack() },
+            title = {
+                Text(
+                    text = "是否信任该模块？",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            text = {
+                Text(
+                    text = "信任：直接运行「${plugin.prop.name}」，不做指令抓取与安全分析，" +
+                            "运行过程中不会出现任何弹窗。\n\n" +
+                            "不信任：先抓取并分析该模块真实执行的指令，确认后再运行。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { trustDecision = true }) {
+                    Text("信任，直接运行")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { trustDecision = false }) {
+                    Text("不信任，先分析")
+                }
+            }
+        )
+    }
+
+    // 解析/拦截阶段进度弹窗（仅「不信任」链路显示；「信任」链路运行时全程零弹窗）
+    if (showAnalysisDialog) {
         AlertDialog(
             onDismissRequest = { /* 运行中不允许关闭 */ },
             confirmButton = {},

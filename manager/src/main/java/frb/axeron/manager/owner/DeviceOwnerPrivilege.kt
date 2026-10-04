@@ -3,6 +3,8 @@ package frb.axeron.manager.owner
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.IBinder
 import com.rosan.dhizuku.api.Dhizuku
 import frb.axeron.server.util.Logger
@@ -28,6 +30,14 @@ object DeviceOwnerPrivilege {
     private val LOGGER = Logger("DeviceOwnerPrivilege")
 
     private const val REAL_STUB = "android.app.admin.IDevicePolicyManager\$Stub"
+
+    /**
+     * 【v1.4.0】Android 14 起 Device Policy Management Role 持有者可用的细粒度设备策略权限。
+     *
+     * 系统把该权限授予本应用时（API >= 34 且 ROM 启用了 Device Policy Engine），
+     * `setPackagesSuspended` 等策略走「基于权限」的鉴权路径，本地 DPM 可直接生效。
+     */
+    private const val DPM_ROLE_PERMISSION = "android.permission.MANAGE_DEVICE_POLICY_PACKAGE_STATE"
 
     /**
      * 获取经 Dhizuku 提升为 Device Owner 身份的 DevicePolicyManager。
@@ -56,6 +66,22 @@ object DeviceOwnerPrivilege {
                 if (isSelfOwner) {
                     LOGGER.i("getDeviceOwnerDpm: self is Device Owner, use native DPM directly")
                     return sysDpm
+                }
+                // 【v1.4.0 新增 · Android 14+ DP Role 快速通道】
+                //
+                // 持有 MANAGE_DEVICE_POLICY_* 权限族（Device Policy Management Role 的
+                // 授予结果）时，系统已通过「基于权限」的鉴权路径认可本应用执行设备策略
+                // （AOSP android-14.0.0_r1 DevicePolicyManagerService:13214），
+                // 此时应直接用**系统真实 DPM** —— 无需 Dhizuku 包装：
+                // 包装反而会把调用身份换成 Dhizuku 的 owner，导致鉴权失败。
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                        context.checkSelfPermission(DPM_ROLE_PERMISSION) ==
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        LOGGER.i("getDeviceOwnerDpm: device-policy role permission granted, use native DPM directly")
+                        return sysDpm
+                    }
                 }
             }
 
@@ -151,6 +177,52 @@ object DeviceOwnerPrivilege {
     }
 
     /**
+     * 本地 DPM **是否真的可用**（只做无副作用探测）。
+     *
+     * 【v1.3.1 真机实测结论】仅持有 `android.app.role.DEVICE_POLICY_MANAGEMENT` Role
+     * **并不等于**拥有 DO / PO 身份 —— vivo / Android 13 上 `dpm list-owners` 依旧返回
+     * `no owners`。此时 [execute] 必然返回「Device Owner not active」。
+     *
+     * 因此**路由层必须先探测本方法**：不可用时应回落到 shell 档位
+     * （`pm suspend` / `pm disable-user` / `pm uninstall --user 0` 由 shell(uid=2000)
+     * 执行是能通过鉴权的；只有 `pm hide` 需要 MANAGE_USERS，会失败）。
+     *
+     * @return true = 本进程已是 DO/PO，或 Dhizuku 已授权（可走 binderWrapper）。
+     */
+    fun isLocalDpmUsable(context: Context): Boolean = try {
+        val sysDpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        if (sysDpm != null) {
+            val adminPkg = DeviceOwnerState.admin.packageName
+            if (sysDpm.isDeviceOwnerApp(adminPkg) || sysDpm.isProfileOwnerApp(adminPkg)) {
+                return true
+            }
+        }
+        // 【v1.4.0 新增】Android 14+ 的 Device Policy Management Role 持有者能力探测。
+        //
+        // Android 14 起引入 Device Policy Engine（AOSP 中的 Unicorn），启用它的 ROM 上
+        // `setPackagesSuspended` 走「基于权限」的鉴权路径：
+        //   enforcePermissionAndGetEnforcingAdmin(who, MANAGE_DEVICE_POLICY_PACKAGE_STATE, ...)
+        // （AOSP android-14.0.0_r1 DevicePolicyManagerService.java:13214）
+        // 而 DEVICE_POLICY_MANAGEMENT Role 的持有者会被授予 MANAGE_DEVICE_POLICY_* 权限族，
+        // 因而**可以直接本地执行**，无需 shell。
+        //
+        // 用运行时权限探测判定：API < 34 时该权限根本不存在，checkSelfPermission 恒为
+        // DENIED，天然安全；API >= 34 且系统真把该权限授给了本应用，才认为本地 DPM 可用。
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                context.checkSelfPermission(DPM_ROLE_PERMISSION) == PackageManager.PERMISSION_GRANTED
+            ) {
+                LOGGER.i("isLocalDpmUsable: device-policy role permission granted → local DPM usable")
+                return true
+            }
+        }
+        runCatching { Dhizuku.init(context) && Dhizuku.isPermissionGranted() }.getOrDefault(false)
+    } catch (t: Throwable) {
+        LOGGER.w("isLocalDpmUsable: ${t.message}")
+        false
+    }
+
+    /**
      * 执行 `axeron-dpm` 命令。
      * @return Pair(exitCode, output)，exitCode = 0 成功，非 0 失败。
      */
@@ -158,7 +230,16 @@ object DeviceOwnerPrivilege {
         if (args.isEmpty()) {
             return 1 to "Usage: axeron-dpm <hide|unhide|suspend|unsuspend|set-anim|set-global|set-secure|cleardata|grant|deny|block-uninstall|unblock-uninstall|reboot|locknow|org-name|lock-task|camera|keyguard|statusbar|user-restrict|clear-user-restrict|install-apps|wipe|force-stop|uninstall> ..."
         }
-        val dpm = getDeviceOwnerDpm(context) ?: return 1 to "Error: Device Owner not active"
+        runCatching { frb.axeron.api.AxeronRuntimeLog.i("DeviceOwnerPrivilege", "execute args=$args") }
+        val dpm = getDeviceOwnerDpm(context) ?: run {
+            runCatching {
+                frb.axeron.api.AxeronRuntimeLog.e(
+                    "DeviceOwnerPrivilege",
+                    "getDeviceOwnerDpm 返回 null：既不是 DO/PO，也未获得 Dhizuku 授权 → Device Owner not active"
+                )
+            }
+            return 1 to "Error: Device Owner not active"
+        }
         // admin 选择：自我 DO 场景下（本进程就是 Owner）直接用 DeviceOwnerState.admin；
         // 否则（第三方经 Dhizuku 授权）用 Dhizuku 的 ownerComponent。
         val admin = ownerComponent() ?: DeviceOwnerState.admin
@@ -170,6 +251,8 @@ object DeviceOwnerPrivilege {
                 "unhide" -> level1Unhide(dpm, admin, args)
                 "suspend" -> level1Suspend(dpm, admin, args)
                 "unsuspend" -> level1Unsuspend(dpm, admin, args)
+                // 复合动作：撤销 挂起 + 隐藏 + 禁用（软件管理「恢复」）
+                "unsuspend_unhide_enable" -> level1Restore(dpm, admin, args)
                 "set-anim" -> level1SetAnim(dpm, admin, args)
                 "set-global" -> level1SetGlobalSetting(dpm, admin, args)
                 "set-secure" -> level1SetSecureSetting(dpm, admin, args)
@@ -240,6 +323,49 @@ object DeviceOwnerPrivilege {
             0 to "Success: unsuspended ${packages.joinToString(" ")}"
         } else {
             1 to "Partial: unsuspend failed for ${failed.joinToString(" ")}"
+        }
+    }
+
+    /**
+     * unsuspend_unhide_enable <package>：复合「恢复」动作。
+     *
+     * 依次撤销 挂起 → 隐藏 → 禁用，任一步失败不影响其余步骤，最终只要有一步
+     * 生效即视为部分成功（避免因系统版本差异导致某个 API 不可用而整体失败）。
+     */
+    private fun level1Restore(dpm: DevicePolicyManager, admin: ComponentName, args: List<String>): Pair<Int, String> {
+        if (args.size < 2) return 1 to "Usage: axeron-dpm unsuspend_unhide_enable <package>"
+        val pkg = args[1]
+        val errors = mutableListOf<String>()
+        try {
+            dpm.setPackagesSuspended(admin, arrayOf(pkg), false)
+        } catch (e: Exception) {
+            errors += "unsuspend: ${e.message}"
+        }
+        try {
+            dpm.setApplicationHidden(admin, pkg, false)
+        } catch (e: Exception) {
+            errors += "unhide: ${e.message}"
+        }
+        try {
+            // `setApplicationEnabledSetting` 是隐藏 API（编译期不可见），
+            // 与 DeviceOwnerState.setPermissionGrantState 一致，走反射调用。
+            // 常量取值：APPLICATION_ENABLED_STATE 传 0；ENABLED_STATE_ENABLED = 1。
+            val m = DevicePolicyManager::class.java.getMethod(
+                "setApplicationEnabledSetting",
+                ComponentName::class.java,
+                String::class.java,
+                Integer.TYPE,
+                Integer.TYPE
+            )
+            m.invoke(dpm, admin, pkg, 0, 1)
+        } catch (e: Exception) {
+            LOGGER.w("level1Restore enable failed", e)
+            errors += "enable: ${e.message}"
+        }
+        return if (errors.isEmpty()) {
+            0 to "Success: restored $pkg"
+        } else {
+            1 to "Partial: restored $pkg (${errors.joinToString("; ")})"
         }
     }
 

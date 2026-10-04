@@ -18,6 +18,22 @@
         tools:ignore="PackageVisibilityPolicy,QueryAllPackagesPermission" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- ================================================================
+         【v1.4.6 修复 · 原版 Shizuku 无法给本应用授权】
+         Shizuku 官方的 client 判定有**两个必要条件**（源码依据：
+           · Shizuku/server BinderSender.ProcessObserver：只对 requestedPermissions
+             含 moe.shizuku.manager.permission.API_V23 的包下发 binder；
+           · Shizuku/manager AuthorizationManager.getApplications：要求 meta-data
+             moe.shizuku.client.V3_SUPPORT=true **且** 申请了 API_V23 权限，
+             否则该应用根本不出现在 Shizuku 的授权列表里）。
+         本工程把 provider 以**源码**方式内联（rikka.shizuku.ShizukuProvider），
+         因此丢掉了官方 provider AAR manifest 里的这两行声明，导致：
+           · 原版 Shizuku 看不到本应用、也永远送不来 binder（只显示未授权）；
+           · Shizuku.pingBinder() 恒为 false → 所有 shell 档位（挂起/卸载等）不可用。
+         此处按官方 provider 库的 manifest 原样补齐。
+         ================================================================ -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -39,12 +55,44 @@
         android:name="${applicationId}.permission.MANAGER"
         android:protectionLevel="signature" />
     <uses-permission android:name="${applicationId}.permission.MANAGER" />
-
     <!-- Device Owner / Device Admin：非 root 下获取设备所有者高级权限 -->
     <uses-feature
         android:name="android.software.device_admin"
         android:required="false" />
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
+
+    <!-- ================================================================
+         新权限路径：DP + WS（国产 ROM 砍掉 DO/PO 后的替代方案）
+
+         DP = android.app.role.DEVICE_POLICY_MANAGEMENT（Role，能力容器）
+         WS = android.permission.WRITE_SECURE_SETTINGS（能力钥匙）
+
+         依据：AOSP PermissionController/res/xml/roles.xml 中
+         <role name="android.app.role.DEVICE_POLICY_MANAGEMENT"> 绑定 73 个权限，
+         其中已包含 WRITE_SECURE_SETTINGS 与 MANAGE_DEVICE_ADMINS。
+
+         注意：这些是 signature|role 档权限，必须在 manifest 中声明，
+         系统才会在「持有 Role 后重装/更新」时自动授予；不能靠 pm grant。
+         ================================================================ -->
+    <uses-permission
+        android:name="android.permission.MANAGE_DEVICE_ADMINS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- 【v1.6.4 关键修复】必须声明 MANAGE_PROFILE_AND_DEVICE_OWNERS。
+         它是非 ADB 直连路径（[DpDoDirectActivation]）的**唯一放行判据**：
+           - forceUpdateUserSetupComplete() / setDeviceOwner() 都要求
+             hasCallingOrSelfPermission(MANAGE_PROFILE_AND_DEVICE_OWNERS)；
+           - 而 checkSelfPermission 走 PermissionManagerServiceImpl#checkPermissionInternal
+             → UidPermissionState.isPermissionGranted(name)，该方法要求
+             `mPermissions.get(name) != null`。**未在 manifest 声明的权限根本不会
+             进入 UidPermissionState 的权限表**，即使持有 Role 也恒返回 DENIED。
+         这正是「DP_GRANT_OK 却始终报未获得 MAPDO」的根因。 -->
+    <uses-permission
+        android:name="android.permission.MANAGE_PROFILE_AND_DEVICE_OWNERS"
+        tools:ignore="ProtectedPermissions" />
+
 
     <application
         android:name="org.lsposed.lspatch.LSPApplication"
@@ -184,6 +232,14 @@
             android:exported="true"
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+        <!--
+            【v1.4.6】Shizuku 客户端标记（与官方 provider 库的 manifest 一致）。
+            Shizuku 管理端 AuthorizationManager 用它筛选「谁是 Shizuku 客户端」，
+            缺失时本应用不会出现在 Shizuku 的授权列表里，永远拿不到 binder。
+        -->
+        <meta-data
+            android:name="moe.shizuku.client.V3_SUPPORT"
+            android:value="true" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -313,18 +369,46 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+        <!-- ================================================================
+             【v1.4.9 闪退修复 · ForegroundServiceDidNotStopInTimeException】
+             真实崩溃日志（Android 15，PID 30069）：
+               RemoteServiceException$ForegroundServiceDidNotStopInTimeException:
+                 A foreground service of type dataSync did not stop within its timeout:
+                 ComponentInfo{frb.axeron.manager/...features.keepalive.KeepAliveService}
+               ForegroundServiceStartNotAllowedException:
+                 Time limit already exhausted for foreground service type dataSync
+             根因：Android 14+（SDK 34）对 foregroundServiceType="dataSync" 施加
+             **累计 6 小时/天** 的硬配额。保活服务是常驻的，配额一旦耗尽：
+               · startForeground() 抛 ForegroundServiceStartNotAllowedException；
+               · 进程未按时 stopForeground() 再抛 DidNotStopInTimeException。
+             崩溃后 AxActivity.onResume 的「自恢复」又把它拉起来 → 无限崩溃循环。
+             修法：这三个服务都不做真正的数据同步，语义本就是「本应用自身持续运行」，
+             因此改用 specialUse（无时长配额，需在 manifest 声明 SOURCE/SUBTYPE）。
+             ================================================================ -->
         <service
             android:name=".features.keepalive.KeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keep the app process alive in the background so modules stay usable" />
+        </service>
         <service
             android:name=".features.runtime.RuntimeModuleService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="supervise long-running runtime module processes and their sensors" />
+        </service>
         <service
             android:name=".features.bootstart.BootStartService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="re-establish adb connection right after boot" />
+        </service>
 
         <!-- LSPatch (AXMD) 注入引擎组件 -->
         <service

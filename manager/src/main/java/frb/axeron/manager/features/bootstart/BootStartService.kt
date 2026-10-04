@@ -119,10 +119,15 @@ class BootStartService : Service() {
         createChannel()
         val notification = buildNotification(getString(R.string.boot_start_enabling_adb))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // 【v1.4.9 闪退修复】类型必须与 AndroidManifest 中本 service 的
+            // android:foregroundServiceType 一致（现为 specialUse）。
+            // 原为 DATA_SYNC，而 Android 14+ 对 dataSync 有 6 小时/天硬配额，
+            // 耗尽后 startForeground 抛 ForegroundServiceStartNotAllowedException，
+            // 进程进而被 ForegroundServiceDidNotStopInTimeException 干掉。
             startForeground(
                 NOTIFICATION_ID,
                 notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)

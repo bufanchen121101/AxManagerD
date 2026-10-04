@@ -35,8 +35,23 @@
     <string name="install_backup">Backup install</string>
     <string name="install_backup_desc">Install to a separate backup directory and snapshot the original state so changes can be rolled back on uninstall.</string>
     <string name="export_running_log">Export running logs</string>
-    <string name="export_running_log_desc">Copy all AxManager running logs under axeron/logs/ to the Download folder.</string>
+    <string name="export_running_log_desc">Copy all AxManagerD running logs under axeron/logs/ to the Download folder.</string>
     <string name="export_running_log_empty">No running logs to export</string>
+    <!-- Runtime log (in-app log capture entry) -->
+    <string name="runtime_log">Runtime log</string>
+    <string name="runtime_log_desc">View, copy and export AxManagerD runtime logs (install / privilege routing / env injection).</string>
+    <string name="runtime_log_refresh">Refresh</string>
+    <string name="runtime_log_copy">Copy all</string>
+    <string name="runtime_log_clear">Clear</string>
+    <string name="runtime_log_activation">Activation diagnostics</string>
+    <string name="runtime_log_snapshot">Env snapshot</string>
+    <string name="runtime_log_logcat">System logcat</string>
+    <string name="runtime_log_export">Export</string>
+    <string name="runtime_log_copied">Log copied to clipboard</string>
+    <string name="runtime_log_cleared">Log cleared</string>
+    <string name="runtime_log_failed">Export failed</string>
+    <string name="runtime_log_empty">No log yet. Reproduce the problem, then tap Refresh.</string>
+    <string name="runtime_log_path">File: %1$s</string>
     <string name="web_ui_configuration">WebUI Configuration</string>
     <string name="add_web_ui_shortcut">Add WebUI Shortcut</string>
     <string name="add_web_ui_shortcut_msg">Add WebUI shortcut of this plugin to your homescreen</string>
@@ -49,7 +64,7 @@
     <string name="plugin_update_json_empty">Empty</string>
     <string name="ignite">Ignite</string>
     <string name="what_is_ignite">What Is Ignite?</string>
-    <string name="what_is_ignite_msg"><![CDATA[Ignite was a replace method of reboot in AxManager, you can ignite on Home > Reignite]]></string>
+    <string name="what_is_ignite_msg"><![CDATA[Ignite was a replace method of reboot in AxManagerD, you can ignite on Home > Reignite]]></string>
     <string name="understand">I Understand</string>
     <string name="re_ignite_now">Re-ignite now</string>
     <string name="install">Install</string>
@@ -87,14 +102,14 @@
     <string name="connect_tcp_debugging">Connect to TCP</string>
     <string name="stop_tcp_debugging">Stop TCP</string>
     <string name="enable_wireless_debugging">Enable Wireless Debugging</string>
-    <string name="enable_wireless_debugging_msg">Please enable \"Wireless debugging\" in \"Developer options\". \"Wireless debugging\" is automatically disabled when network changes.\n\nNote, do not disable \"Developer options\" or \"USB debugging\", or AxManager will be stopped.</string>
+    <string name="enable_wireless_debugging_msg">Please enable \"Wireless debugging\" in \"Developer options\". \"Wireless debugging\" is automatically disabled when network changes.\n\nNote, do not disable \"Developer options\" or \"USB debugging\", or AxManagerD will be stopped.</string>
     <string name="open_developer_opt">Developer</string>
     <string name="step_by_step">Step-by-Step</string>
     <string name="instruction">Instruction</string>
     <string name="enable_notification">Enable Notification</string>
     <string name="start_pairing">Start Pairing</string>
     <string name="activate_by_root">Start (for rooted devices)</string>
-    <string name="activate_by_root_msg"><![CDATA[In addition, AxManager can be started automatically on boot. If not, please check if your system or third-party tools have restricted AxManager.<br>You can refer to %s.]]></string>
+    <string name="activate_by_root_msg"><![CDATA[In addition, AxManagerD can be started automatically on boot. If not, please check if your system or third-party tools have restricted AxManagerD.<br>You can refer to %s.]]></string>
     <string name="adb_tcp_not_ready">ADB TCP not ready on port %d</string>
     <string name="adb_tcp_stopped">Stop ADB TCP Success</string>
     <string name="failed_to_stop_adb_tcp">Failed to stop ADB TCP</string>
@@ -137,9 +152,9 @@
     <string name="idle">Idle</string>
     <string name="support_me">Support Me</string>
     <string name="not_available_yet">Not available yet</string>
-    <string name="support_me_msg">AxManager is completely free and open-source. If you find it useful, please follow the project and consider giving it a star on GitHub.</string>
-    <string name="learn_more">Learn AxManager</string>
-    <string name="learn_more_msg">Learn how to use AxManager and how to make a plugin</string>
+    <string name="support_me_msg">AxManagerD is completely free and open-source. If you find it useful, please follow the project and consider giving it a star on GitHub.</string>
+    <string name="learn_more">Learn AxManagerD</string>
+    <string name="learn_more_msg">Learn how to use AxManagerD and how to make a plugin</string>
     <string name="updating">Updating…</string>
     <string name="server_updating_version" formatted="false"><![CDATA[Updating: %d > %d]]></string>
     <string name="version_pid" formatted="false">Version: %d | Pid: %d</string>
@@ -148,7 +163,7 @@
     <string name="home_need_fix">Need extra step</string>
     <string name="home_need_fix_msg">Click to see how to fix</string>
     <string name="home_not_running">Need to Activate</string>
-    <string name="home_not_running_msg">Click to activating AxManager</string>
+    <string name="home_not_running_msg">Click to activating AxManagerD</string>
     <string name="home_update">Need Re-Activate</string>
     <string name="new_version_available">New version %s is available, click to update.</string>
     <string name="android_version">Android Version</string>
@@ -161,7 +176,7 @@
     <string name="search_label_apps">Search Apps</string>
     <string name="quick_shell">QuickShell</string>
     <string name="quick_shell_short">QShell</string>
-    <string name="quick_shell_not_supported">Please activate AxManager first</string>
+    <string name="quick_shell_not_supported">Please activate AxManagerD first</string>
     <string name="save">Save</string>
     <string name="exec">Exec</string>
     <string name="send">Send</string>
@@ -181,7 +196,7 @@
     <string name="axeron_permission">AX-Permission Intercept</string>
     <string name="axeron_permission_desc">Intercept permission manager built on Shizuku-API using Ax-Environment</string>
     <string name="tcp_mode">TCP Mode</string>
-    <string name="tcp_mode_desc">Allows AxManager to restart without Wi-Fi (AxManager must have started once since reboot)</string>
+    <string name="tcp_mode_desc">Allows AxManagerD to restart without Wi-Fi (AxManagerD must have started once since reboot)</string>
     <string name="invalid_port">Port must be between 1024 and 65535</string>
     <string name="reactive_to_apply">Re-Activate to apply changes</string>
     <string name="active_on_boot">Activate on Boot</string>
@@ -190,17 +205,17 @@
     <string name="please_wait">Please wait…</string>
     <string name="view_command_message">`%s`\n\nThere are some other considerations, please confirm that you have read the help first.</string>
     <string name="activate_by_computer">Start by connecting to a computer</string>
-    <string name="activate_by_computer_desc">For devices without root, you need to use adb to start AxManager (requires computer connection). This process needs to be repeated every time the device restarted.</string>
+    <string name="activate_by_computer_desc">For devices without root, you need to use adb to start AxManagerD (requires computer connection). This process needs to be repeated every time the device restarted.</string>
     <string name="activate_by_wireless">Start via Wireless Debugging</string>
-    <string name="activate_by_wireless_desc">On Android 11 or above, you can enable Wireless debugging and start AxManager directly from your device, without connecting to a computer.\n\nPlease view step-by-step guide first.</string>
+    <string name="activate_by_wireless_desc">On Android 11 or above, you can enable Wireless debugging and start AxManagerD directly from your device, without connecting to a computer.\n\nPlease view step-by-step guide first.</string>
     <string name="view_command">View Command</string>
     <string name="share_command">Share Command</string>
-    <string name="active_on_boot_desc">Auto activate AxManager on boot (Root / ADB on Android 11+ (Experimental))</string>
+    <string name="active_on_boot_desc">Auto activate AxManagerD on boot (Root / ADB on Android 11+ (Experimental))</string>
     <string name="ignite_when_relog">Relog to Ignite</string>
-    <string name="ignite_when_relog_desc">When you relog AxManager will Re-Ignite</string>
-    <string name="reset_path">Reset AxManager</string>
+    <string name="ignite_when_relog_desc">When you relog AxManagerD will Re-Ignite</string>
+    <string name="reset_path">Reset AxManagerD</string>
     <string name="reset_path_desc">This action will disable and remove all of your plugins</string>
-    <string name="ask_reset_path">Reset AxManager Now?</string>
+    <string name="ask_reset_path">Reset AxManagerD Now?</string>
     <string name="ask_reset_path_desc">This action will disable and remove all of your plugins\n\nat %s</string>
     <string name="reset">Reset</string>
     <string name="settings_editor">Settings Editor</string>
@@ -230,7 +245,41 @@
 
     <!-- Device Owner / Dhizuku activation -->
     <string name="activate_permission_group">Activation Method</string>
-    <string name="activate_permission_group_desc">Choose how you want to grant AxManager system-level permissions. Each method provides different capabilities.</string>
+    <string name="activate_permission_group_desc">Choose how you want to grant AxManagerD system-level permissions. Each method provides different capabilities.</string>
+
+    <!-- ===== 三段式分区标题（授权 / 激活） ===== -->
+    <string name="section_title_authorization">Authorization</string>
+    <string name="section_desc_authorization">Grant system-level permissions to AxManagerD. Each item below is an independent authorization that can be granted or revoked separately.</string>
+    <string name="section_title_activation">Activation</string>
+    <string name="section_desc_activation">Start the Axeron service. Pick any one of the methods below — they all lead to a running service.</string>
+
+    <!-- ===== 新权限路径：DP + WS ===== -->
+    <string name="new_perm_section">New Permission Path (DP + WS)</string>
+    <string name="new_perm_dp_role">DP Role active</string>
+    <string name="new_perm_ws">WRITE_SECURE_SETTINGS granted</string>
+    <string name="new_perm_dp_active_label">Activated via DP Role</string>
+    <string name="app_manage_title">App management</string>
+    <string name="app_manage_entry_desc">Freeze / suspend / hide / uninstall apps (DO · DP · Shell)</string>
+    <string name="new_perm_section_desc">For ROMs that removed Device Owner / Profile Owner. Grants the DEVICE_POLICY_MANAGEMENT role (DP) and WRITE_SECURE_SETTINGS (WS) via shell, unlocking 73 system permissions including silent DeviceAdmin management and full Settings access.</string>
+    <string name="new_perm_dp_label">DP · Device Policy Management Role</string>
+    <string name="new_perm_ws_label">WS · Write Secure Settings</string>
+    <string name="new_perm_mda_label">MANAGE_DEVICE_ADMINS</string>
+    <string name="new_perm_granted">Granted</string>
+    <string name="new_perm_not_granted">Not granted</string>
+    <string name="new_perm_grant_dp">Grant DP via Shizuku</string>
+    <string name="new_perm_revoke_dp">Revoke DP</string>
+    <!-- 【v1.9.0】Both DO cards keep only the "Revoke DP" entry (the old "Remove Device Owner" was dropped) -->
+    <string name="new_perm_revoke_dp_desc">Runs the revoke script through Shizuku to take back the DEVICE_POLICY_MANAGEMENT (DP) role granted to this app. If the role is not granted, nothing changes.</string>
+    <string name="new_perm_revoke_dp_ok">DP role revoked</string>
+    <string name="new_perm_revoke_dp_failed">Failed to revoke DP: %s</string>
+    <string name="new_perm_view_script">View / Copy Shell Script</string>
+    <string name="new_perm_script_title">DP Grant Script</string>
+    <string name="new_perm_script_desc">The script runs three steps: enable role-qualification bypass, add the role holder, then restore the bypass switch. Executing this changes a global system switch (bypass) temporarily.</string>
+    <string name="new_perm_shizuku_required">Shizuku is required to grant the role (it runs cmd role as shell). Please grant Shizuku permission first.</string>
+    <string name="new_perm_grant_ok">DP granted successfully</string>
+    <string name="new_perm_grant_failed">Grant failed: %s</string>
+    <string name="new_perm_revoke_ok">DP revoked</string>
+
     <string name="shizuku_section">Shizuku Permission</string>
     <string name="shizuku_section_desc">Delegate to a running Shizuku service so other apps can access Axeron\'s high-privilege environment through the Shizuku API.</string>
     <string name="shizuku_grant">Grant Shizuku Permission</string>
@@ -239,7 +288,7 @@
     <string name="shizuku_revoke">Revoke Shizuku Permission</string>
     <string name="shizuku_not_running">Shizuku is not running. Please start Shizuku first.</string>
     <string name="dhizuku_section">Dhizuku / Device Owner</string>
-    <string name="dhizuku_section_desc">Activate Device Owner to let AxManager (and its modules) run with system-level capabilities without root.</string>
+    <string name="dhizuku_section_desc">Activate Device Owner to let AxManagerD (and its modules) run with system-level capabilities without root.</string>
     <string name="dhizuku_grant">Request Dhizuku Authorization</string>
     <string name="dhizuku_granted">Dhizuku Authorized</string>
     <string name="dhizuku_not_granted">Dhizuku Not Authorized</string>
@@ -272,10 +321,10 @@
     <string name="other_permission_config">Other Permission Config</string>
     <!-- Keep Alive -->
     <string name="keep_alive">Background Keep-Alive</string>
-    <string name="keep_alive_desc">Keep AxManager running in background via a foreground service (START_STICKY). This is a regular keep-alive method that works WITHOUT Device Owner / Dhizuku / root.</string>
-    <string name="keep_alive_title">AxManager is running</string>
+    <string name="keep_alive_desc">Keep AxManagerD running in background via a foreground service (START_STICKY). This is a regular keep-alive method that works WITHOUT Device Owner / Dhizuku / root.</string>
+    <string name="keep_alive_title">AxManagerD is running</string>
     <string name="keep_alive_channel">Keep-Alive</string>
-    <string name="keep_alive_channel_desc">Keeps AxManager alive in background</string>
+    <string name="keep_alive_channel_desc">Keeps AxManagerD alive in background</string>
     <!-- Module process keep-alive: removed（功能已按需求移除） -->
     <string name="do_keep_alive">设备所有者保活加固</string>
     <string name="do_keep_alive_desc">利用设备所有者（Device Owner）权限降低被系统冻结、回收的概率（放宽电池优化与应用待机）。仅在手机已授予本应用「设备所有者」权限时生效；其他情况下打开此开关不会报错，也不会有任何作用。</string>
@@ -589,7 +638,7 @@
     <string name="log_service_title">LSPatch is monitoring logs</string>
     <string name="log_service_text">Collecting framework and patched-app logs</string>
     <string name="dhizuku_request_permission_title">Grant Device Owner permission to "%s"?</string>
-    <string name="dhizuku_request_permission_desc">This app can perform Device Owner (Dhizuku-compatible) operations through AxManager. Only authorize trusted apps.</string>
+    <string name="dhizuku_request_permission_desc">This app can perform Device Owner (Dhizuku-compatible) operations through AxManagerD. Only authorize trusted apps.</string>
     <string name="dhizuku_allow">Allow</string>
     <string name="dhizuku_deny">Deny</string>
     <string name="dhizuku_permission_manage">Manage Device Owner Authorizations</string>
@@ -605,19 +654,19 @@
     <string name="device_owner_removing">Removing…</string>
     <string name="device_owner_removed">Device Owner removed. The app is now running with normal privileges.</string>
     <string name="device_owner_remove_failed">Removal failed: %s. You may try the fallback command below.</string>
-    <string name="device_owner_remove_confirm_message">This will revoke the Device Owner privilege of AxManager. Some advanced features may stop working until it is activated again. Continue?</string>
+    <string name="device_owner_remove_confirm_message">This will revoke the Device Owner privilege of AxManagerD. Some advanced features may stop working until it is activated again. Continue?</string>
     <string name="device_owner_fallback_show">Show fallback command</string>
     <string name="device_owner_fallback_hide">Hide fallback command</string>
-    <string name="device_owner_remove_fallback_desc">If the in-app removal does not work on your device, run the following command from an adb shell, then restart AxManager to refresh the status.</string>
+    <string name="device_owner_remove_fallback_desc">If the in-app removal does not work on your device, run the following command from an adb shell, then restart AxManagerD to refresh the status.</string>
     <string name="device_owner_remove_fallback_command">adb shell dpm remove-active-admin %s/%s</string>
     <string name="device_owner_remove_command">Fallback command</string>
     <!-- Device Owner 增强激活（用设备所有者替代 ADB 激活） -->
     <string name="activate_by_owner">Activate via Device Owner</string>
-    <string name="activate_by_owner_desc">Make AxManager the Device Owner and let it switch ADB on by itself, then reconnect through 127.0.0.1. This replaces the ADB computer activation and only needs to be set up once.</string>
-    <string name="owner_activate_prereq_title">Step 1 · Make AxManager the Device Owner</string>
+    <string name="activate_by_owner_desc">Make AxManagerD the Device Owner and let it switch ADB on by itself, then reconnect through 127.0.0.1. This replaces the ADB computer activation and only needs to be set up once.</string>
+    <string name="owner_activate_prereq_title">Step 1 · Make AxManagerD the Device Owner</string>
     <string name="owner_activate_prereq_desc">Run this command once from a computer (or an existing shell):</string>
     <string name="owner_activate_adb_title">Step 2 · Switch ADB on and connect</string>
-    <string name="owner_activate_adb_desc">AxManager uses Device Owner privileges to enable ADB (and wireless debugging), reboot adbd into TCP mode, then connects to 127.0.0.1 to obtain a shell.</string>
+    <string name="owner_activate_adb_desc">AxManagerD uses Device Owner privileges to enable ADB (and wireless debugging), reboot adbd into TCP mode, then connects to 127.0.0.1 to obtain a shell.</string>
     <string name="owner_activate_start">Enable ADB and Activate</string>
     <string name="owner_activate_running">Enabling ADB…</string>
     <string name="owner_activate_need_owner">Device Owner is required. Finish step 1 first.</string>
@@ -644,18 +693,18 @@
     <string name="lockscreen_org_save">Apply</string>
     <!-- 开机自动启动（无线调试预热，v1.6.1） -->
     <string name="boot_start_switch">Device Owner Auto Start</string>
-    <string name="boot_start_switch_desc">Creates a fixed ADB port and remembers it. After a reboot the Device Owner keeps wireless debugging on, so just open AxManager and tap Activate to reconnect on that port — no mDNS search needed. A Device Owner privilege is required.</string>
+    <string name="boot_start_switch_desc">Creates a fixed ADB port and remembers it. After a reboot the Device Owner keeps wireless debugging on, so just open AxManagerD and tap Activate to reconnect on that port — no mDNS search needed. A Device Owner privilege is required.</string>
     <string name="boot_start_channel_name">Boot start</string>
-    <string name="boot_start_channel_desc">Shows progress while AxManager restores itself after boot.</string>
-    <string name="boot_start_notification_title">Starting AxManager</string>
+    <string name="boot_start_channel_desc">Shows progress while AxManagerD restores itself after boot.</string>
+    <string name="boot_start_notification_title">Starting AxManagerD</string>
     <string name="boot_start_enabling_adb">Enabling ADB…</string>
     <string name="boot_start_discovering_port">Discovering the wireless debugging port…</string>
     <string name="boot_start_connecting">Connecting to 127.0.0.1…</string>
     <string name="boot_start_retrying">Retrying…</string>
-    <string name="boot_start_success">AxManager is up.</string>
-    <string name="boot_start_failed">Boot start failed. Tap to open AxManager and activate manually.</string>
+    <string name="boot_start_success">AxManagerD is up.</string>
+    <string name="boot_start_failed">Boot start failed. Tap to open AxManagerD and activate manually.</string>
     <string name="boot_start_autostart_title">Allow auto start</string>
-    <string name="boot_start_autostart_desc">Some system skins block boot broadcasts. Open the auto-start list and allow AxManager.</string>
+    <string name="boot_start_autostart_desc">Some system skins block boot broadcasts. Open the auto-start list and allow AxManagerD.</string>
     <string name="boot_start_autostart_action">Open auto-start settings</string>
 
     <!-- Core file modification permission (Overlay) -->
@@ -685,7 +734,7 @@
     <string name="backup_manage">Backup &amp; Restore</string>
     <string name="backup_desc_none">Not backed up yet (auto-backup runs on first launch)</string>
     <string name="backup_desc_last">Last backup: %1$s</string>
-    <string name="backup_path_hint">Location: /sdcard/AxManagerD/backup/</string>
+    <string name="backup_path_hint">Location: %1$s</string>
     <string name="backup_now">Backup now</string>
     <string name="backup_restore">Restore from backup</string>
     <string name="backup_done">Backup complete</string>
@@ -701,6 +750,9 @@
     <string name="overlay_need_disclaimer">Please read and accept the disclaimer first</string>
     <string name="overlay_need_global_switch">Please enable the global switch first</string>
     <string name="overlay_axeron_not_running">Axeron is not running; cannot manage module permissions</string>
+    <string name="overlay_install_declares">This module requests core file modification</string>
+    <string name="overlay_install_declares_desc">It declares capabilities=overlay in module.prop. If you grant it, the module may replace any file under assets, including executables such as lspatch.jar.</string>
+    <string name="overlay_install_grant_now">Grant permission on install</string>
 
     <!-- 临时DO / 权限转移 -->
     <string name="temp_do_title">Activate Device Owner</string>
@@ -720,4 +772,65 @@
     <string name="owner_transfer_confirm">Transfer Device Owner to %s?</string>
     <string name="owner_transfer_success">Ownership transferred</string>
     <string name="owner_transfer_failed">Transfer failed: %s</string>
+
+    <!-- Profile Owner 独立卡片 / 转移增强 -->
+    <string name="temp_profile_owner_title">Activate Profile Owner</string>
+    <string name="temp_profile_owner_desc">Activate Profile Owner (single user) with a single shell command — no computer required. Profile Owner applies to the current user only, and is mutually exclusive with Device Owner.</string>
+    <string name="temp_profile_owner_active">Active</string>
+    <string name="temp_profile_owner_active_label">Profile Owner active</string>
+    <string name="temp_profile_owner_inactive">Not active</string>
+    <string name="temp_profile_owner_copy">Copy command</string>
+    <string name="temp_profile_owner_activate_by_shizuku">Activate via Shizuku</string>
+    <string name="shizuku_activate_owner_desc">Full device control: manage all users, install/uninstall apps system-wide, set policies.</string>
+    <string name="shizuku_activate_profile_owner_desc">Current user only: manage policies and apps within your own profile, fewer privileges.</string>
+    <string name="owner_transfer_target_label">Target app</string>
+    <string name="owner_transfer_none_hint">No app with a device-admin receiver was found. Install one first (e.g. Dhizuku) to transfer ownership.</string>
+    <string name="owner_transfer_refresh">Refresh list</string>
+    <string name="temp_do_prereq">Prerequisites: no accounts on the device, and only one user. If unmet, the system reports a clear error.</string>
+    <!-- ===== 【v1.6.5 文案重做】卡片 1：DP + Shizuku（走 ADB 分支）===== -->
+    <!--
+      卡片 1 的真实执行身份是 shell(uid 2000)，AOSP 的 isAdb() 对 shell UID 返回 true，
+      因此它命中的是 DevicePolicyManagerService#setDeviceOwner 的 **ADB 分支**，
+      该分支会依次检查：向导状态、第二用户、账户（hasIncompatibleAccountsOrNonAdb）。
+      旧文案把本卡描述成「non-ADB 直连」，与卡片 2 完全重复，属于误标，此处更正。
+    -->
+    <string name="dpdo_section">Activate Device Owner (DP + Shizuku &#183; ADB path)</string>
+    <string name="dpdo_section_desc">Grants the DEVICE_POLICY_MANAGEMENT role (DP), then runs the official two-step dpm command via Shizuku (shell UID = ADB identity): &#8220;dpm set-active-admin&#8221; &#8594; &#8220;dpm set-device-owner&#8221;. Because shell UID counts as ADB, this path **does check accounts and extra users** &#8212; the app self-rescues on the first failure (see the note below). Use this when the device has already finished setup. Requires: Shizuku running and a release build.</string>
+    <string name="dpdo_status_dp_role">DP &#183; Device Policy Management Role</string>
+    <string name="dpdo_status_shizuku">Shizuku (shell / ADB identity)</string>
+    <string name="dpdo_status_device_owner">Device Owner</string>
+    <!-- 【v1.6.0】状态行：非 ADB 直连通道所需的 MAPDO 权限是否落地 -->
+    <string name="dpdo_status_direct_channel">Direct-channel permission (MAPDO via DP Role)</string>
+    <string name="dpdo_direct_no_account_needed">This path runs as the app\'s own identity (non-ADB branch), which **never reads accounts** &#8212; no accounts or hidden users have to be removed. Its only hard gate is &#8220;device setup not yet completed&#8221;; if your device has already finished setup, the app closes that gate automatically for a few seconds and restores it right after.</string>
+    <string name="dpdo_direct_accounts_info">Current device state &#8212; accounts: %1$d, users: %2$d (informational only; the non-ADB path ignores both)</string>
+    <string name="dpdo_version_unsupported">Not supported on this Android version. The DEVICE_POLICY_MANAGEMENT role was introduced in Android 13 (API %1$d). Please use the Shizuku / Dhizuku activation entries below.</string>
+    <string name="dpdo_precondition_title">Preconditions</string>
+    <string name="dpdo_precondition_accounts">Accounts on device: %1$d</string>
+    <string name="dpdo_precondition_users">Users on device: %1$d</string>
+    <string name="dpdo_precondition_hint">Preconditions not met. Remove all accounts (Settings &#8594; Accounts; system accounts can be signed out directly) and delete any work profile / clone / private space so that only the owner user remains, then retry. After removing accounts wait about 10 seconds before retrying.</string>
+    <string name="dpdo_activate">Activate Device Owner via DP + Shizuku</string>
+    <string name="dpdo_deactivate">Remove Device Owner</string>
+    <string name="dpdo_activate_ok">Device Owner activated</string>
+    <string name="dpdo_activate_failed">Activation failed: %s</string>
+    <string name="dpdo_deactivate_ok">Device Owner removed</string>
+    <!-- ===== 【v1.6.1 / v1.6.5 重做】卡片 1 自救说明 + 卡片 2 非 ADB 直连 ===== -->
+    <string name="dpdo_rescue_hint">This path runs as shell (ADB branch), so accounts and extra users are checked. If the first attempt fails, the app automatically deletes hidden user 999 and temporarily freezes the **non-system** apps that hold accounts, then retries and unfreezes them. In short: this card can clear the account gate for you, but it cannot bypass the &#8220;setup completed&#8221; gate.</string>
+    <string name="dpdo_direct_section">Activate Device Owner (no account removal)</string>
+    <string name="dpdo_direct_section_desc">Activates Device Owner **as the app&#8217;s own identity** without removing any account: first tap &#8220;Step 1: Prepare&#8221; to set user_setup_complete to 0 through Shizuku (opening the setup gate), then tap &#8220;Activate&#8221; to run forceUpdateUserSetupComplete &#8594; setActiveAdmin &#8594; setDeviceOwner, and user_setup_complete is restored to 1 as soon as the attempt ends. This branch **never reads accounts**, so your accounts can stay exactly as they are. Shizuku is required.</string>
+    <string name="dpdo_direct_danger_hint">Order of operations: tap &#8220;Step 1: Prepare&#8221; first (temporarily setting user_setup_complete to 0), wait until it shows &#8220;Ready&#8221;, then tap &#8220;Activate&#8221;. The &#8220;Activate&#8221; button stays greyed out until preparation is done.\nNote: This method has so far **only been verified on real Android 13 (API 33) devices**; other Android versions (14/15/16/17) are untested and may fail or behave unexpectedly.\nWhile prepared, the system temporarily believes &#8220;setup has not been completed&#8221;. Within those few seconds the three-button navigation Home / Recents keys may stop responding (the Back key and gesture navigation are unaffected). Everything returns to normal the moment activation ends and user_setup_complete is restored to 1.\nNo account is removed and no data is wiped, but please make sure the battery is sufficient and do not force-shutdown the device or kill the app while it is running.</string>
+    <string name="dpdo_direct_switch_title">One-tap activation</string>
+    <string name="dpdo_direct_switch_desc">Runs the non-ADB direct activation (no account removal). Tap &#8220;Step 1: Prepare&#8221; above first to open the setup gate, then tap this button to activate; user_setup_complete is restored to 1 immediately whichever way the attempt ends. Shizuku is required.</string>
+    <string name="dpdo_direct_gate_prepare">Step 1: Prepare (open the setup gate)</string>
+    <string name="dpdo_direct_gate_prepare_desc">Sets user_setup_complete to 0 temporarily through Shizuku. This step only &#8220;unlocks the door&#8221; and does not activate anything; tap &#8220;Activate&#8221; below once it is done. Shizuku is required.</string>
+    <string name="dpdo_direct_gate_open">Ready: the setup gate is open (user_setup_complete=0). You can tap &#8220;Activate&#8221; now.</string>
+    <string name="dpdo_direct_gate_closed">Not ready: the setup gate is still closed. Tap &#8220;Step 1: Prepare&#8221; above first. The &#8220;Activate&#8221; button is disabled until then.</string>
+    <string name="dpdo_direct_activate">Activate</string>
+    <string name="dpdo_direct_role_granted_perm_missing">The DP Role is granted, but the MANAGE_PROFILE_AND_DEVICE_OWNERS permission has not taken effect yet. Common causes: (1) the role grant was just issued and the permission table has not refreshed (usually settles within seconds); (2) the app manifest does not declare this permission (left over from an older version &#8212; reinstalling the new build fixes it). Tap &#8220;Activate&#8221; to see the exact reason.</string>
+    <string name="dpdo_direct_copy_pc_cmd">View activation commands</string>
+    <!-- 【v1.6.7 重做】卡片 2 的指令弹窗内容（与「通过电脑命令行激活」的 view_command_message 同构） -->
+    <string name="dpdo_direct_cmd_message">`%s`\n\nRun the three steps as commented: &#9312; run the preparation commands on your computer; &#9313; go back to the phone and tap &#8220;Activate&#8221; on this card (this step must be done by the app itself and cannot be replaced by a computer command); &#9314; after activation, run the restore command on your computer. Never paste &#9312; and &#9314; together &#8212; that would set the setup gate back to 1 before activation and make it fail.</string>
+    <!-- 【v1.6.5 新增 / v1.6.6 语义更新】卡片 2 的注意事项（向导已完成时显示在卡片上） -->
+    <string name="dpdo_direct_setup_done_hint">This device has already finished the setup wizard &#8212; the only hard gate of the non-ADB branch. The app handles it automatically: it temporarily sets user_setup_complete to 0 (through Shizuku), activates, then restores it to 1 whichever way the attempt ends. While it is 0, the three-button navigation Home / Recents keys stop responding (the Back key still works; gesture navigation is unaffected) and recover immediately afterwards. No account or user is ever removed.</string>
+    <string name="dpdo_script_title">DP + Shizuku Activation Script</string>
+    <string name="dpdo_script_desc">The script runs the two-step shell command used by the official dpm tool: first &#8220;dpm set-active-admin&#8221;, then &#8220;dpm set-device-owner&#8221;. Shizuku executes it with shell UID, which AOSP treats identically to ADB (isAdb = shell or root UID).</string>
 </resources>

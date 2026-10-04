@@ -30,6 +30,9 @@ import frb.axeron.manager.AxeronApplication
 import frb.axeron.manager.adb.AdbStarter
 import frb.axeron.manager.owner.DeviceOwnerAdbActivator
 import frb.axeron.manager.owner.DeviceOwnerState
+import frb.axeron.manager.owner.NewPermissionPaths
+import frb.axeron.manager.owner.DpDoDirectActivation
+import frb.axeron.manager.owner.DpDoEscalation
 import frb.axeron.manager.adb.AdbStarter.stopTcp
 import rikka.shizuku.Shizuku
 import frb.axeron.manager.adb.AdbStateInfo
@@ -48,9 +51,27 @@ class ActivateViewModel : ViewModel() {
     companion object {
         const val TAG = "AdbViewModel"
         const val ACTIVATE_FAILED = -1
+
+        /** 【v1.6.1】提权模式：卡片 1 —— DP + Shizuku（先试激活，失败则删 999 隐藏用户 + 冻结非系统账户应用后重试）。 */
+        const val ELEVATE_MODE_DP_SHIZUKU = 1
+
+        /** 【v1.6.1】提权模式：卡片 2 —— 非 ADB 直连（不清账户、不冻结）。 */
+        const val ELEVATE_MODE_DIRECT = 2
         const val ACTIVATE_PROCESS = 0
         const val ACTIVATE_SUCCESS = 1
 
+        /**
+         * 【v1.4.9 闪退修复】提权日志的字符上限。
+         *
+         * 取 24 KB：远小于 Binder 1MB 上限，也远小于崩溃日志里出事的 531KB 单条目；
+         * 又足够容纳一次完整提权流程的输出（正常仅几 KB）。
+         *
+         * 背景：`elevateLog` 是长任务实时输出，一旦被某个 rememberSaveable 持有，
+         * 用户按返回/切后台时会被打包进 onSaveInstanceState 的 Binder 事务，
+         * 超限即抛 TransactionTooLargeException 崩进程（Android 15 实测）。
+         * 这里设硬上限做兜底，界面侧同时禁止用 rememberSaveable 持有它。
+         */
+        const val ELEVATE_LOG_MAX_CHARS = 24_000
     }
 
     var activateStatus by mutableStateOf<ActivateStatus>(run {
@@ -78,23 +99,42 @@ class ActivateViewModel : ViewModel() {
         }
     }
 
-    /** 向官方 Shizuku 发起真实授权请求，结果通过 listener 回调。 */
+    /**
+     * 最近一次 Shizuku 授权尝试的失败原因（成功或未尝试时为 null）。
+     *
+     * 用于「不做过滤、失败即如实提示」的策略：不再提前判断 pingBinder/权限状态并
+     * 静默 return，而是把真实失败原因交给 UI 提示。
+     */
+    var shizukuRequestError by mutableStateOf<String?>(null)
+        private set
+
+    fun clearShizukuRequestError() {
+        shizukuRequestError = null
+    }
+
+    /** 向官方 Shizuku 发起真实授权请求，结果通过 listener 回调。失败原因写入 [shizukuRequestError]。 */
     fun requestShizukuPermission(requestCode: Int) {
         viewModelScope.launch(Dispatchers.Main) {
-            if (!Shizuku.pingBinder()) {
-                isShizukuActive = false
-                return@launch
-            }
+            shizukuRequestError = null
+            // 不做 pingBinder/权限过滤：直接尝试请求，由 Shizuku 回调决定结果。
             if (shizukuPermissionListener == null) {
                 shizukuPermissionListener =
                     Shizuku.OnRequestPermissionResultListener { _, grantResult ->
                         viewModelScope.launch(Dispatchers.Main) {
                             isShizukuActive = grantResult == PackageManager.PERMISSION_GRANTED
+                            if (!isShizukuActive) {
+                                shizukuRequestError = "Shizuku 授权被拒绝（代码 $grantResult）"
+                            }
                         }
                     }
                 Shizuku.addRequestPermissionResultListener(shizukuPermissionListener!!)
             }
-            Shizuku.requestPermission(requestCode)
+            runCatching { Shizuku.requestPermission(requestCode) }
+                .onFailure { t ->
+                    // binder 不可用 / 服务已死等：如实抛出，不再静默 return
+                    isShizukuActive = false
+                    shizukuRequestError = t.message ?: t.toString()
+                }
         }
     }
 
@@ -136,11 +176,16 @@ class ActivateViewModel : ViewModel() {
         private set
 
     /**
-     * 是否已「完全激活」——即至少具备 shizuku / dhizuku(Device Owner) / root 中的任一种高级权限。
-     * 若三者皆无，则为 false，用于在首页权限状态卡中展示。
+     * 是否已「完全激活」——即至少具备 shizuku / dhizuku(Device Owner) / root / DP Role / WS 中的任一种高级权限。
+     * 若皆无，则为 false，用于在首页权限状态卡中展示。
+     *
+     * 【v1.2.0】新增 [isDpGranted] / [isWsGranted]：[isDpGranted] 表示本应用持有
+     * `DEVICE_POLICY_MANAGEMENT` Role（即「用 DP 激活」），它与 DO/PO 等价地提供高权限，
+     * 因此必须计入「已激活」，否则用 DP 激活的用户在主页会看到「未完全激活」。
      */
     val isFullyActivated: Boolean
-        get() = isShizukuActive || isDhizukuGranted || isDeviceOwner || isProfileOwner || isRootActive
+        get() = isShizukuActive || isDhizukuGranted || isDeviceOwner || isProfileOwner || isRootActive ||
+                isDpGranted || isWsGranted
 
     /** 刷新 root 权限状态。安全获取 shell，libsu 未初始化或无 root 时返回 false，不抛异常。 */
     fun refreshRootState() {
@@ -248,6 +293,9 @@ class ActivateViewModel : ViewModel() {
                 val shell = Shell.getShell()
                 shell.isRoot
             }.getOrDefault(false)
+            // 【v1.2.0】一并刷新 DP / WS 新权限状态，保证「用 DP 激活」时主页权限状态正确显示。
+            // 该调用走 Shizuku 查询；Shizuku 不可用时内部会保持原值，不会误报。
+            runCatching { refreshNewPermissionState() }
             viewModelScope.launch(Dispatchers.Main) {
                 isRootActive = rooted
             }
@@ -279,7 +327,6 @@ class ActivateViewModel : ViewModel() {
             tryActivate = activate
         }
     }
-
     fun resetStatus() {
         activateStatus = ActivateStatus.Disable
     }
@@ -288,6 +335,39 @@ class ActivateViewModel : ViewModel() {
         if (activateStatus is ActivateStatus.Running) return
         withTimeoutOrNull(timeout) {
             snapshotFlow { activateStatus }.first { it is ActivateStatus.Running }
+        }
+
+        // 【v2.0.1 激活状态机修复】「提示成功却没有跳转」的兜底。
+        //
+        // 背景：activateStatus 只在 axeronObserve() 的 binder 事件（onBinderReceived /
+        // onBinderDead）到来时才会被改写；而每个激活入口在开始前都会 resetStatus()
+        // 把它清成 Disable。若此时 App 已经持有活着的 binder（典型场景：已经激活过
+        // 再点一次「连接 ADB 端口」；或 server 因本次激活重建、binder 事件晚于本函数
+        // 超时），就再也不会有一条新的 Running 事件进来 —— awaitRunning 只能等满
+        // timeout 后静默返回，表现就是「Toast 说成功、界面原地不动、也不跳回主页」。
+        //
+        // 处理：超时后直接向 Axeron 复核一次真实状态，确认服务确实在跑就补发 Running，
+        // 让 Activate.kt 里的跳转监听（activateStatus is Running）正常生效。
+        if (activateStatus !is ActivateStatus.Running) {
+            val info = runCatching {
+                if (Axeron.pingBinder()) {
+                    Axeron.getAxeronInfo().takeIf { it.isRunning() }
+                } else {
+                    null
+                }
+            }.getOrNull()
+
+            if (info != null) {
+                withContext(Dispatchers.Main) {
+                    axeronInfo = info
+                    activateStatus = ActivateStatus.Running(info)
+                }
+            } else {
+                Log.w(
+                    "AxManagerBinder",
+                    "awaitRunning 超时：binder=" + Axeron.pingBinder() + "，Axeron 服务未就绪"
+                )
+            }
         }
     }
 
@@ -376,31 +456,37 @@ class ActivateViewModel : ViewModel() {
         // 异步检测 root / Owner 状态，避免在构造阶段同步调用 libsu / DeviceOwnerState 导致崩溃。
         refreshRootState()
         viewModelScope.launch {
-            axeronObserve().collect { status ->
-                val isStillUpdating =
-                    status is ActivateStatus.Disable && activateStatus is ActivateStatus.Updating
-                axeronInfo = when (status) {
-                    is ActivateStatus.Running -> {
-                        checkShizukuIntercept()
-                        status.axeronInfo
-                    }
+            // 【崩溃修复】axeronObserve() 内部已对 binder 异常兜底，但为防止任何遗漏的
+            // 异常沿协程冒泡崩掉进程，这里再加一层 catch，保证「重进软件不再先崩溃一次」。
+            runCatching {
+                axeronObserve().collect { status ->
+                    val isStillUpdating =
+                        status is ActivateStatus.Disable && activateStatus is ActivateStatus.Updating
+                    axeronInfo = when (status) {
+                        is ActivateStatus.Running -> {
+                            checkShizukuIntercept()
+                            status.axeronInfo
+                        }
 
-                    is ActivateStatus.Updating -> {
-                        status.axeronInfo
-                    }
+                        is ActivateStatus.Updating -> {
+                            status.axeronInfo
+                        }
 
-                    else -> {
-                        if (isStillUpdating) {
-                            (activateStatus as ActivateStatus.Updating).axeronInfo
-                        } else {
-                            AxeronInfo()
+                        else -> {
+                            if (isStillUpdating) {
+                                (activateStatus as ActivateStatus.Updating).axeronInfo
+                            } else {
+                                AxeronInfo()
+                            }
                         }
                     }
+                    if (isStillUpdating) return@collect
+                    Log.i("AxManagerBinder", "status: $status")
+                    activateStatus = status
+                    setTryToActivate(false)
                 }
-                if (isStillUpdating) return@collect
-                Log.i("AxManagerBinder", "status: $status")
-                activateStatus = status
-                setTryToActivate(false)
+            }.onFailure {
+                Log.e("AxManagerBinder", "axeronObserve collect failed", it)
             }
         }
     }
@@ -671,9 +757,110 @@ class ActivateViewModel : ViewModel() {
         get() = frb.axeron.manager.owner.DeviceOwnerExtras
             .buildTempProfileOwnerCommand(AxeronApplication.axeronApp)
 
+    /**
+     * 【v1.9.0】临时 DO 指令的**电脑端展示版**（带 `adb shell` 前缀）。
+     *
+     * 为什么单独开一个字段而不是直接改 [tempDoCommand]：
+     * [tempDoCommand] 同时被 [enableTempDoViaShizuku] / [activateDeviceOwnerViaShizuku]
+     * 交给 Shizuku 以 shell 身份执行，**加上 `adb shell` 会让执行失败**
+     * （那是在电脑上敲的命令前缀，不是设备内命令的一部分）。
+     * 因此：执行走 [tempDoCommand]（裸命令），UI 展示/复制走本字段。
+     */
+    val tempDoPcCommand: String
+        get() = "adb shell " + tempDoCommand
+
+    /** 【v1.9.0】资料所有者指令的电脑端展示版（带 `adb shell` 前缀）。执行仍走 [tempProfileOwnerCommand]。 */
+    val tempProfileOwnerPcCommand: String
+        get() = "adb shell " + tempProfileOwnerCommand
     /** 当前应用是否已是资料所有者。 */
     var isProfileOwnerActive by mutableStateOf(false)
         private set
+
+    // =====================================================================
+    // 新权限路径：DP（DEVICE_POLICY_MANAGEMENT Role）+ WS（WRITE_SECURE_SETTINGS）
+    //
+    // 独立新增，不改动上方任何既有状态/方法，避免污染公共路径。
+    // 实现细节见 [frb.axeron.manager.owner.NewPermissionPaths]。
+    // =====================================================================
+
+    /** 是否持有 `DEVICE_POLICY_MANAGEMENT` Role。 */
+    var isDpGranted by mutableStateOf(false)
+        private set
+
+    /** 是否已授予 `WRITE_SECURE_SETTINGS`。 */
+    var isWsGranted by mutableStateOf(false)
+        private set
+
+    /** 是否已授予 `MANAGE_DEVICE_ADMINS`。 */
+    var isManageDeviceAdminsGranted by mutableStateOf(false)
+        private set
+
+    /**
+     * 刷新新权限路径的状态（DP / WS / MANAGE_DEVICE_ADMINS）。
+     *
+     * ⚠️ **必须走 Shizuku**：`dumpsys role` / `dumpsys package` 需要
+     * `android.permission.DUMP`（shell 专属）。若用应用自身 UID 执行
+     * （`Runtime.exec`），只会得到 `Permission Denial` 或**空输出**，
+     * 导致 `isDpGranted` 恒为 false —— 即「授权成功却显示未激活」的根因。
+     *
+     * Shizuku 不可用时退回「保持原值」，避免误报为「未授予」。
+     */
+    suspend fun refreshNewPermissionState() = withContext(Dispatchers.IO) {
+        val context = AxeronApplication.axeronApp
+        if (!isShizukuActive && !Shizuku.pingBinder()) {
+            // 无 Shizuku：无法可靠查询，保持原值不动（宁可 stale 也不误报）
+            Log.w("AxManager", "refreshNewPermissionState: Shizuku 不可用，跳过查询")
+            return@withContext
+        }
+        val dpOut = execViaShizuku(NewPermissionPaths.buildQueryDpScript(context)).getOrNull()
+        val wsOut = execViaShizuku(NewPermissionPaths.buildQueryWsScript(context)).getOrNull()
+        val mdaOut = execViaShizuku(NewPermissionPaths.buildQueryMdaScript(context)).getOrNull()
+        isDpGranted = NewPermissionPaths.parseDp(context, dpOut)
+        isWsGranted = NewPermissionPaths.parseGranted(wsOut)
+        isManageDeviceAdminsGranted = NewPermissionPaths.parseGranted(mdaOut)
+    }
+
+    /** 授予 DP 的完整 shell 脚本（供 UI 展示 / 复制）。 */
+    val grantDpScript: String
+        get() = NewPermissionPaths.buildGrantDpScript(AxeronApplication.axeronApp)
+
+    /** 撤销 DP 的完整 shell 脚本（供 UI 展示 / 复制）。 */
+    val revokeDpScript: String
+        get() = NewPermissionPaths.buildRevokeDpScript(AxeronApplication.axeronApp)
+
+    /**
+     * 用 Shizuku 授予 `DEVICE_POLICY_MANAGEMENT` Role。
+     *
+     * 走 [execViaShizuku]，因为 `cmd role` 需要 shell 身份。
+     * 脚本内部已处理「开 bypass → 授予 → 还原 bypass」，无需额外调用。
+     *
+     * 成功后刷新状态；失败时返回原始错误（含 `RuntimeException: Failed` 等）。
+     */
+    suspend fun grantDpViaShizuku(): Result<String> = withContext(Dispatchers.IO) {
+        val context = AxeronApplication.axeronApp
+        val r = execViaShizuku(NewPermissionPaths.buildGrantDpScript(context))
+        if (r.isSuccess) {
+            // 【v2.0.0】脚本内部自带降级：DP_MODE=ROLE 为默认方案成功，
+            // DP_MODE=WS 为默认方案失败、已降级到备选方案（pm grant WRITE_SECURE_SETTINGS）。
+            val mode = NewPermissionPaths.parseGrantMode(r.getOrNull())
+            Log.i("AxManager", "grantDpViaShizuku 生效通道=" + (mode ?: "unknown"))
+            refreshNewPermissionState()
+        }
+        r
+    }
+
+    /**
+     * 用 Shizuku 撤销 `DEVICE_POLICY_MANAGEMENT` Role（含还原 bypass 开关）。
+     */
+    suspend fun revokeDpViaShizuku(): Result<String> = withContext(Dispatchers.IO) {
+        val context = AxeronApplication.axeronApp
+        val r = execViaShizuku(NewPermissionPaths.buildRevokeDpScript(context))
+        if (r.isSuccess) {
+            refreshNewPermissionState()
+        }
+        r
+    }
+
 
     /** 刷新资料所有者状态。 */
     fun refreshProfileOwnerState() {
@@ -739,11 +926,993 @@ class ActivateViewModel : ViewModel() {
             out.trim()
         }
     }
+    // =====================================================================
+    // 新路径：DP + Shizuku(ADB) 联合激活 Device Owner
+    //
+    // 独立新增，不改动上方任何既有状态/方法，避免污染公共路径。
+    // 原理与版本限制见 [frb.axeron.manager.owner.DpDoEscalation]。
+    // =====================================================================
+
+    /** 运行期版本是否满足本方案（Android 13+，DP Role 自 A13 引入）。 */
+    val isDpDoVersionSupported: Boolean
+        get() = DpDoEscalation.isVersionSupported()
+
+    /** 最近一次「DO 激活前置状态」诊断结果（未采集过为 null）。 */
+    var dpDoDiagnostics by mutableStateOf<DpDoEscalation.Diagnostics?>(null)
+        private set
+
+    /** 采集「DO 激活前置状态」（账户数 / 用户数 / 向导状态 / 是否已是 DO/PO）。 */
+    suspend fun refreshDpDoDiagnostics() = withContext(Dispatchers.IO) {
+        val context = AxeronApplication.axeronApp
+        if (!isShizukuActive && !Shizuku.pingBinder()) {
+            // 无 Shizuku：无法可靠查询，保持原值（宁可 stale 也不误报）
+            Log.w("AxManager", "refreshDpDoDiagnostics: Shizuku 不可用，跳过查询")
+            return@withContext
+        }
+        val out = execViaShizuku(DpDoEscalation.buildDiagnosticScript(context)).getOrNull()
+        dpDoDiagnostics = DpDoEscalation.parseDiagnostics(out)
+    }
+
+    /** 激活脚本原文（供 UI 展示 / 复制）。 */
+    val dpDoActivateScript: String
+        get() = DpDoEscalation.buildActivateScript(AxeronApplication.axeronApp)
+
+    // =====================================================================
+    // 【新增】DP 差异化激活：非 ADB 直连分支
+    //
+    // 独立追加，不改动上方任何既有状态/方法（[runElevateFlow] 等保持原样），
+    // 避免污染公共路径。原理与 A13→A17 源码取证见
+    // [frb.axeron.manager.owner.DpDoDirectActivation] 与项目文档
+    // `AxManagerD_AOSP_13to17_DP差异化取证.md`。
+    //
+    // 与既有 [runElevateFlow] 的区别：那条走 ADB 分支（Shizuku shell 执行 dpm），
+    // 必须清账户；本路径走非 ADB 分支（应用自身身份直连 binder），**不清账户**。
+    // =====================================================================
+
+    /** 非 ADB 直连路径是否可用（运行期版本 + 已持有 DP Role）。 */
+    var isDirectActivationAvailable by mutableStateOf(false)
+        private set
+
+    /**
+     * 【v1.6.5】设备是否已完成开机向导。
+     *
+     * 非 ADB 分支的**唯一硬闸**，向导完成后即关闭且无法绕开（A13→A16 源码核实）。
+     * 卡片 2 据此显示 [R.string.dpdo_direct_setup_done_hint]，让用户提前知道
+     * 该入口在其设备上不可用，而不是点进去白跑一趟再吃一个异常。
+     */
+    var isSetupCompleted by mutableStateOf(false)
+        private set
+
+    /** 最近一次非 ADB 直连激活的结果（未跑过为 null）。 */
+    var directActivationResult by mutableStateOf<DpDoDirectActivation.ActivationResult?>(null)
+        private set
+
+    /** 刷新「非 ADB 直连路径」可用性（版本 + MAPDO 权限实际持有情况 + 向导状态）。 */
+    fun refreshDirectActivationAvailability() {
+        val context = AxeronApplication.axeronApp
+        isDirectActivationAvailable = DpDoEscalation.isVersionSupported() &&
+                DpDoDirectActivation.hasManageProfileAndDeviceOwners(context)
+        // 【v1.6.5】向导状态：读 Settings.Secure.USER_SETUP_COMPLETE（与 DPM 同源）。
+        // 独立于 MAPDO 判据，因为「向导已完成」是本路径不可用的根本原因，
+        // 即使用户把 DP Role / MAPDO 都搞定了也依然走不通。
+        //
+        // ⚠️【v1.7.0】注意：`isSetupCompleted` 用的是**应用自身身份**读 Settings，
+        //    实测读不到该 `@hide` 键（恒 null → 恒 false），因此它**不能**用来判断
+        //    「激活按钮是否该亮」。真正的判定改用下面的 [isSetupGateOpen]（走 Shizuku）。
+        isSetupCompleted = DpDoDirectActivation.isSetupCompleted(context)
+    }
+
+    // =====================================================================
+    // 【v1.7.0】「开机向导」闸的打开 / 关闭 / 状态（卡片 2 专用）
+    //
+    // 设计背景（用户要求）：
+    //   把「激活前自动执行 settings put secure user_setup_complete 0」从激活流程里
+    //   删掉，改成卡片上「激活」按钮**之前**多一个「第一步：准备」按钮，由用户手动点；
+    //   「激活」按钮默认置灰，只有确认 `user_setup_complete == 0` 之后才可点。
+    //
+    // 为什么状态必须走 Shizuku：应用自身（untrusted_app）读不到该 `@hide` 键，
+    //   只能借 shell(uid 2000) 身份执行脚本回读。
+    // =====================================================================
+
+    /**
+     * 「开机向导」闸是否已打开（`user_setup_complete == 0`）。
+     *
+     * 由 [refreshSetupGateState] 经 Shizuku 回读后刷新；应用自身读不到该键，
+     * 因此本字段是**唯一可靠**的按钮灰化依据。未知（尚未刷新 / 读取失败）时为 false，
+     * 即「激活」按钮默认保持置灰 —— 与用户要求「默认激活按钮是灰色的」一致。
+     */
+    var isSetupGateOpen by mutableStateOf(false)
+        private set
+
+    /** 闸状态刷新是否正在进行（避免连点重复执行脚本）。 */
+    var isSetupGateBusy by mutableStateOf(false)
+        private set
+
+    /** 闸操作最近一次的人类可读提示（成功 / 失败原因），供卡片展示。 */
+    var setupGateMessage by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * 经 Shizuku（shell 身份）回读 `user_setup_complete`，刷新 [isSetupGateOpen]。
+     *
+     * @param showMessage 是否把失败原因写入 [setupGateMessage]（刷新场景通常不写，
+     *   避免用户一进页面就看到红色提示；按钮动作场景则写）。
+     */
+    suspend fun refreshSetupGateState(showMessage: Boolean = false) {
+        val res = runCatching {
+            execViaShizuku(DpDoDirectActivation.buildReadSetupCompleteScript())
+        }.getOrElse { Result.failure(it) }
+        val value = DpDoDirectActivation.parseSetupCompleteOutput(res.getOrNull())
+        val open = value == 0
+        withContext(Dispatchers.Main) {
+            isSetupGateOpen = open
+            if (showMessage && !open) {
+                setupGateMessage = res.exceptionOrNull()?.message
+                    ?.takeIf { it.isNotBlank() }
+                    ?: ("当前 user_setup_complete=" + (value?.toString() ?: "未确认") +
+                            "；若为 1 表示闸未打开。")
+            }
+        }
+    }
+
+    /**
+     * 【第一步：准备】把 `user_setup_complete` 临时置 0，打开非 ADB 分支的唯一硬闸。
+     *
+     * 本操作**不执行激活**，只开门；用户随后手动点「激活」。
+     * 成功后 [isSetupGateOpen] 变 true，「激活」按钮才可点。
+     */
+    fun openSetupGate() {
+        if (isSetupGateBusy) return
+        isSetupGateBusy = true
+        setupGateMessage = null
+        viewModelScope.launch {
+            val res = runCatching {
+                execViaShizuku(DpDoDirectActivation.buildSetSetupCompleteScript(0))
+            }.getOrElse { Result.failure(it) }
+            val value = DpDoDirectActivation.parseSetupCompleteOutput(res.getOrNull())
+            val ok = res.isSuccess && value == 0
+            withContext(Dispatchers.Main) {
+                isSetupGateOpen = ok
+                setupGateMessage = if (ok) {
+                    "已就绪：「开机向导」闸已打开（user_setup_complete=0），现在可以点「激活」。"
+                } else {
+                    "打开失败：" + (res.exceptionOrNull()?.message
+                        ?.takeIf { it.isNotBlank() }
+                        ?: ("回读值=" + (value?.toString() ?: "未确认"))) +
+                            "；请确认 Shizuku 正在运行且已授权本应用。"
+                }
+                isSetupGateBusy = false
+            }
+        }
+    }
+
+    /**
+     * 【还原：关闭闸】把 `user_setup_complete` 恢复为 1（导航键恢复正常）。
+     *
+     * 正常路径下激活流程的 `finally` 已自动恢复，本方法供用户手动补救
+     * （例如激活中途退出、或设备停在导航键失灵状态时）。
+     */
+    fun closeSetupGate() {
+        if (isSetupGateBusy) return
+        isSetupGateBusy = true
+        setupGateMessage = null
+        viewModelScope.launch {
+            val res = runCatching {
+                execViaShizuku(DpDoDirectActivation.buildSetSetupCompleteScript(1))
+            }.getOrElse { Result.failure(it) }
+            val value = DpDoDirectActivation.parseSetupCompleteOutput(res.getOrNull())
+            val ok = res.isSuccess && value == 1
+            withContext(Dispatchers.Main) {
+                isSetupGateOpen = !ok
+                setupGateMessage = if (ok) {
+                    "已恢复：「开机向导」闸已关闭（user_setup_complete=1），导航键正常。"
+                } else {
+                    "恢复失败：请手动执行 settings put secure user_setup_complete 1"
+                }
+                isSetupGateBusy = false
+            }
+        }
+    }
+
+    // =====================================================================
+    // 【v1.6.4】MAPDO 落地判据（双通道）
+    //
+    // 背景：`MANAGE_PROFILE_AND_DEVICE_OWNERS` 的 protectionLevel = signature|role。
+    // `Context#checkSelfPermission` 最终走
+    // `PermissionManagerServiceImpl#checkPermissionInternal` →
+    // `UidPermissionState#isPermissionGranted`，而后者要求该权限**已在 manifest 声明**
+    // （未声明 → 权限表中无该项 → PermissionState == null → 恒 DENIED）。
+    // 旧版 manifest 恰好漏声明该权限，导致「DP_GRANT_OK 却永远等不到 MAPDO」。
+    //
+    // 现已补 manifest 声明；此处再叠加一条**shell 侧 dumpsys 证据**作为并列判据，
+    // 用于覆盖两类残余场景：
+    //   ① 部分 ROM 上 Role 位权限的应用侧权限表刷新晚于 role holder 落地；
+    //   ② 用户设备上旧版 APK 未重装（旧 manifest 无声明）时的诊断可读性。
+    //
+    // ⚠️ 依赖 `execViaShizuku`（shell 身份）。Shizuku 不可用时自动退回
+    //    `checkSelfPermission` 单判据，行为与旧版一致，不会误报。
+    // =====================================================================
+
+    /**
+     * MAPDO 是否已落地（应用侧权限表 **或** shell 侧 dumpsys 证据任一成立）。
+     *
+     * ⚠️ suspend：判据 ② 需经 [execViaShizuku] 走 shell 身份查询。
+     * 必须在**非主线程**调用（`execViaShizuku` 内部会阻塞 binder）。
+     */
+    private suspend fun isMapdoReady(context: Context): Boolean {
+        // 判据 ①：应用侧权限表（manifest 已声明时可靠）
+        if (DpDoDirectActivation.hasManageProfileAndDeviceOwners(context)) return true
+        // 判据 ②：shell 侧证据（需 Shizuku；失败时静默退回判据 ①）
+        val evidence = runCatching {
+            if (!Shizuku.pingBinder()) return@runCatching null
+            execViaShizuku(NewPermissionPaths.buildQueryMapdoScript(context)).getOrNull()
+        }.getOrNull() ?: return false
+        return DpDoDirectActivation.hasManageProfileAndDeviceOwners(context, evidence)
+    }
+
+    /**
+     * MAPDO 未落地时的中文原因（区分「权限未声明」与「role 未授予」两类根因）。
+     *
+     * 旧实现只回一句「请确认系统未限制该 Role」，用户在
+     * 「DP 角色 = ✓ 已授予 / 直连通道 = ✗ 未就绪」的界面下无法判断到底卡在哪。
+     */
+    private fun mapdoMissingReason(context: Context): String {
+        // 【v1.6.4】按项目既有风格处理 API 33+ 的 getPackageInfo 废弃：
+        // 33+ 用 PackageInfoFlags，以下用 @Suppress("DEPRECATION") 老签名。
+        val declared = runCatching {
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.PackageInfoFlags.of(
+                        PackageManager.GET_PERMISSIONS.toLong(),
+                    ),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.GET_PERMISSIONS,
+                )
+            }
+            info.requestedPermissions?.contains(
+                NewPermissionPaths.PERM_MANAGE_PROFILE_AND_DEVICE_OWNERS,
+            ) == true
+        }.getOrDefault(false)
+
+        return if (!declared) {
+            "本应用未在清单中声明 MANAGE_PROFILE_AND_DEVICE_OWNERS —— " +
+                    "系统不会把该权限纳入本应用的权限表，即使持有 DP 角色也无法生效。" +
+                    "请安装包含该声明的新版本后重试。"
+        } else if (!isDpGranted) {
+            "本应用尚未持有 DEVICE_POLICY_MANAGEMENT 角色，因此没有 " +
+                    "MANAGE_PROFILE_AND_DEVICE_OWNERS 权限。请先完成 DP 角色授予。"
+        } else {
+            "DP 角色已授予，但 MANAGE_PROFILE_AND_DEVICE_OWNERS 仍未生效。" +
+                    "Android 14+ 上该角色仅在「设备无任何账户」时才会真正授予此权限；" +
+                    "请确认已删除全部账户，或改用其它激活通道。"
+        }
+    }
+
+    /**
+     * 【v1.6.1】卡片 2 用：供用户复制到**电脑**执行的 adb 激活指令。
+     *
+     * 惰性生成并缓存（内容只依赖包名/组件名，运行期不变）。
+     */
+    val pcAdbCommands: String by lazy {
+        DpDoEscalation.buildPcAdbCommands(AxeronApplication.axeronApp)
+    }
+
+    /**
+     * 以 **DP Role + 应用自身身份（非 ADB 分支）** 激活 Device Owner。
+     *
+     * 流程：
+     * ```
+     * ① 确认 Shizuku 可用（仅第 ② 步需要 shell 身份）
+     * ② 授予 DP Role（复用 [NewPermissionPaths.buildGrantDpScript]，含 bypass 处理）
+     * ③ 等待权限落地 + 校验 MANAGE_PROFILE_AND_DEVICE_OWNERS
+     * ④ 非 ADB 直连：forceUpdateUserSetupComplete → setActiveAdmin → setDeviceOwner
+     * ⑤ 失败时不抛出，把 [DpDoDirectActivation.Result] 交给 UI 如实展示
+     * ```
+     *
+     * 与 [runElevateFlow] 的差异：本路径**不清账户、不冻结应用**，
+     * 因为它命中的是非 ADB 分支（只受 `hasUserSetupCompleted` 一道闸，可被反向覆盖）。
+     */
+    suspend fun activateDeviceOwnerViaDpDirect(): Result<DpDoDirectActivation.ActivationResult> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val context = AxeronApplication.axeronApp
+
+                // ---------- ① Shizuku（仅 DP Role 授予需要）----------
+                if (!Shizuku.pingBinder()) {
+                    throw IllegalStateException("Shizuku 未运行：DP Role 授予需要 shell 身份")
+                }
+                if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                    throw IllegalStateException("未获得 Shizuku 授权")
+                }
+                // ---------- ② 授予 DP Role（已持有时跳过）----------
+                //
+                // 【v1.6.2】不再只看退出码：必须核对 MAPDO 是否真正落地，
+                // 否则会在第 ④ 步以语义模糊的 PERMISSION_MISSING 失败。
+                // 【v1.6.4】判据改用 isMapdoReady（含 shell 侧证据），与下方等待循环一致。
+                if (!isDpGranted && !isMapdoReady(context)) {
+                    val grant = execViaShizuku(NewPermissionPaths.buildGrantDpScript(context))
+                    if (grant.isFailure) {
+                        // 【v1.6.3】`execViaShizuku` 失败时原文在 exception.message（stderr），
+                        // getOrNull() 为 null。两者都试，保证 `explainDpFailure` 能拿到真实文本
+                        // （它靠 DP_ACCTS / DP_GRANT_FAIL 等标记判断 Android 14+ 的账户限制）。
+                        val raw = grant.getOrNull()
+                            ?: (grant.exceptionOrNull()?.message ?: "")
+                        throw IllegalStateException(
+                            NewPermissionPaths.explainDpFailure(context, raw)
+                                ?: ("DP Role 授予失败：" + raw.ifBlank { "未知原因" })
+                        )
+                    }
+                }
+                refreshNewPermissionState()
+
+                // ---------- ③ 权限异步生效：最多等 ~12s ----------
+                // 【v1.6.4】判据改用 isMapdoReady（checkSelfPermission 或 shell 侧
+                // dumpsys 证据任一成立即算落地），修正 manifest 漏声明导致的恒 false。
+                var ready = isMapdoReady(context)
+                var waited = 0L
+                val waits = longArrayOf(500L, 1000L, 2000L, 2000L, 3000L, 4000L)
+                var i = 0
+                while (!ready && i < waits.size) {
+                    Thread.sleep(waits[i])
+                    waited += waits[i]
+                    ready = isMapdoReady(context)
+                    i++
+                }
+                if (!ready) {
+                    // 【v1.6.2】改为明确失败：继续调用只会得到同样的 PERMISSION_MISSING，
+                    // 不如把「DP Role 没换来 MAPDO」这个真实原因直接抛给 UI。
+                    throw IllegalStateException(
+                        mapdoMissingReason(context) +
+                                "（已等待 ${waited}ms）"
+                    )
+                }
+
+                // ---------- ④ 非 ADB 直连激活 ----------
+                // 【v1.6.4】传入 mapdoPrecheck=false：上面已用 isMapdoReady（双通道判据）
+                // 确认 MAPDO 落地，避免内部单判据在权限表刷新延迟时误判 PERMISSION_MISSING。
+                val result = DpDoDirectActivation.activate(context, mapdoPrecheck = false)
+
+                // ---------- ⑤ 刷新全局状态 ----------
+                refreshOwnerState()
+                refreshDpDoDiagnostics()
+                refreshNewPermissionState()
+                refreshDirectActivationAvailability()
+                withContext(Dispatchers.Main) { directActivationResult = result }
+
+                result
+            }
+        }
+
+    /**
+     * 用「DP + Shizuku」激活 Device Owner。
+     *
+     * 走 [execViaShizuku]（shell uid = ADB 路径）执行：
+     * `dpm set-active-admin` → `dpm set-device-owner`。
+     * 成功后刷新 DO 状态与前置诊断。
+     */
+    suspend fun activateDeviceOwnerViaDp(): Result<String> = withContext(Dispatchers.IO) {
+        val context = AxeronApplication.axeronApp
+        // 【v1.4.6 修复】先确保 DP Role 真正授予，再执行 dpm 激活。
+        //
+        // 旧实现直接跑 `dpm set-active-admin` → `dpm set-device-owner`。
+        // 由于 Shizuku 已是 shell(ADB) 身份，`dpm set-device-owner` 在
+        // 「无账户 + 仅 User 0」的设备上**即使不持有 DP Role 也能成功**（ADB 分支放行），
+        // 于是出现「激活成功、但卡片 DP Role 显示未授予」的现象 ——
+        // 用户实际走的是纯 shell 路径，DP 从未参与。
+        //
+        // 现在：若尚未持有 DP，则先走 [grantDpViaShizuku]（bypass + add-role-holder），
+        // 让本卡片名副其实（DP 提供 MANAGE_DEVICE_ADMINS，Shizuku 提供 ADB 身份）。
+        // 若 DP 授予失败（如 14+ static role 资格校验不过），不阻断 DO 激活 ——
+        // 仅记录到输出中，由诊断行如实展示。
+        val dpNote = StringBuilder()
+        if (!isDpGranted) {
+            val dpResult = grantDpViaShizuku()
+            if (dpResult.isFailure) {
+                dpNote.append("[DP role] ")
+                    .append(dpResult.exceptionOrNull()?.message ?: "grant failed")
+                    .append("\n")
+            }
+        }
+        val r = execViaShizuku(DpDoEscalation.buildActivateScript(context))
+        if (r.isSuccess) {
+            refreshOwnerState()
+            refreshDpDoDiagnostics()
+            refreshNewPermissionState()
+        }
+        if (dpNote.isNotEmpty()) {
+            r.map { dpNote.toString() + it }
+        } else {
+            r
+        }
+    }
+    /** 撤销由本方案激活的 Device Owner（`dpm remove-active-admin`）。 */
+    suspend fun deactivateDeviceOwnerViaDp(): Result<String> = withContext(Dispatchers.IO) {
+        val context = AxeronApplication.axeronApp
+        // 【v1.4.6】移除 DO 时，把本卡片曾授予的 DP Role 一并撤销，避免残留。
+        //
+        // 旧实现只跑 `dpm remove-active-admin`，因此：
+        //  - 若 DO 实际是纯 shell 路径设上的，移除本身是有效的；
+        //  - 但 DP Role 会残留为已授予状态，卡片仍显示「已授予」，用户以为没生效。
+        // 现在两步都做，并如实把结果带回 UI。
+        val revokeNote = StringBuilder()
+        if (isDpGranted || isManageDeviceAdminsGranted) {
+            val revokeResult = revokeDpViaShizuku()
+            if (revokeResult.isFailure) {
+                revokeNote.append("[DP role] ")
+                    .append(revokeResult.exceptionOrNull()?.message ?: "revoke failed")
+                    .append("\n")
+            }
+        }
+        val r = execViaShizuku(DpDoEscalation.buildDeactivateScript(context))
+        if (r.isSuccess) {
+            refreshOwnerState()
+            refreshDpDoDiagnostics()
+            refreshNewPermissionState()
+        }
+        if (revokeNote.isNotEmpty()) {
+            r.map { revokeNote.toString() + it }
+        } else {
+            r
+        }
+    }
+    // =====================================================================
+    // 【v1.4.7】DP + Shizuku「提权流程」：供 ElevateScreen 使用
+    //
+    // 独立新增，不改动上方任何既有方法。
+    // =====================================================================
+
+
+    /**
+     * 提权流程的实时输出（逐行追加，供提权界面渲染）。
+     *
+     * 【v1.4.9 闪退修复 · TransactionTooLargeException】
+     * 真实崩溃日志（Android 15，PID 28599）：
+     * ```
+     * RuntimeException: android.os.TransactionTooLargeException: data parcel size 544532 bytes
+     *   androidx.lifecycle.BundlableSavedStateRegistry.key [size=543664]
+     *     SaveableStateRegistry:-1 [size=542876]
+     * ```
+     * 根因：提权输出是长任务（20~60s）的实时日志，内容可达数百 KB。只要它被
+     * 某个 `rememberSaveable` 持有，用户一按返回/切后台，系统就会在
+     * `onSaveInstanceState` 阶段把整段日志打包进 Binder 事务（上限 1MB），
+     * 超限即 [`android.os.TransactionTooLargeException`] → **进程当场崩溃**，
+     * 命令半途而废（拿不到 DO）。
+     *
+     * 因此这里做两道保险：
+     *  ① 硬上限 [ELEVATE_LOG_MAX_CHARS]：只保留**末尾**（最新）部分，
+     *     头部用省略标记替代 —— 提权输出越往后越关键（DPDO_* 标记在末尾）；
+     *  ② 界面侧**不得**用 `rememberSaveable` 持有它（见 Elevate.kt）。
+     */
+    var elevateLog by mutableStateOf("")
+        private set
+
+    /** 提权流程当前阶段（0=空闲，1=运行中，2=成功，3=失败）。 */
+    var elevatePhase by mutableStateOf(0)
+        private set
+
+    /**
+     * 【v1.6.1】提权界面当前模式，决定 ElevateScreen 触发哪条流程。
+     *
+     * 两张卡片共用同一个提权界面（ElevateScreen），故用本字段分流：
+     *  - [ELEVATE_MODE_DP_SHIZUKU]：卡片 1「DP + Shizuku 激活」
+     *  - [ELEVATE_MODE_DIRECT]    ：卡片 2「非 ADB 直连激活」
+     *
+     * 注：属性名刻意用 `elevateModeValue` 而非 `elevateMode`，避免与下方
+     * [setElevateMode] 生成同签名 `setXxx(I)V` 造成 JVM 平台声明冲突。
+     */
+    var elevateModeValue by mutableStateOf(ELEVATE_MODE_DP_SHIZUKU)
+        private set
+
+    /** 当前提权模式（只读访问，配对 [setElevateMode]）。 */
+    val elevateMode: Int
+        get() = elevateModeValue
+
+    /** 设置提权模式（由卡片在跳转前调用）。 */
+    fun setElevateMode(mode: Int) {
+        elevateModeValue = mode
+    }
+
+    /** 提权流程失败时的中文原因（成功时为 null）。 */
+    var elevateError by mutableStateOf<String?>(null)
+        private set
+
+    // 【v1.7.0】原 `elevateWarning`（「三键导航会暂时失灵」红色警告条）已整体删除。
+    // 原因：置 0 已移出激活流程、改由卡片上的「第一步：准备」按钮手动完成（见
+    // [openSetupGate] / [closeSetupGate]），激活过程本身不再让导航键失灵，
+    // 该警告不再有出现场景；随 Elevate.kt 的渲染块一并清理。
+
+    /** 向提权输出追加一行。
+     *
+     * 【v1.4.8 闪退修复】必须切到主线程写 Compose 状态：
+     * `elevateLog` 是 `mutableStateOf`，Compose 的快照写入本身要求
+     * 「同一状态对象只在同一线程写入」。此前本方法在 IO 线程直接写，
+     * 而 UI 又在主线程读取/触发重绘，高版本 Android 上会命中
+     * 「snapshot apply conflict / 状态被并发修改」而导致**进程直接崩溃**
+     * （现象正是用户反馈的「命令没跑完就闪退」）。
+     *
+     * 这里用 [viewModelScope] 无法保证顺序，故改用显式追加缓冲 + 主线程提交：
+     * 所有写入统一经 [elevatePost]，由主线程串行消费，天然有序且不跨线程。
+     */
+    private fun elevateAppend(line: String) {
+        elevatePendingPost = elevatePendingPost + line + "\n"
+    }
+
+    /** 待提交的日志缓冲（仅在主线程读写）。 */
+    private var elevatePendingPost: String = ""
+
+    /** 把缓冲内容提交到 [elevateLog]（只能在主线程调用）。 */
+    private fun elevateFlush() {
+        if (elevatePendingPost.isEmpty()) return
+        val merged = elevateLog + elevatePendingPost
+        elevatePendingPost = ""
+        // 【v1.4.9】硬截断到 [ELEVATE_LOG_MAX_CHARS]，只保留末尾（最新）部分。
+        // 目的：即使某处误用 rememberSaveable 持有本状态，也不会因日志过长
+        // 触发 TransactionTooLargeException（实测崩溃时单条目达 531KB）。
+        // 保留末尾而非头部：DPDO_* 结果标记永远在输出最后几行，头部是无关的启动噪声。
+        elevateLog = if (merged.length <= ELEVATE_LOG_MAX_CHARS) {
+            merged
+        } else {
+            "[... 已省略前 " + (merged.length - ELEVATE_LOG_MAX_CHARS) + " 字符 ...]\n" +
+                    merged.substring(merged.length - ELEVATE_LOG_MAX_CHARS)
+        }
+    }
+
+    /**
+     * 【v1.4.8 闪退修复】提权流程的**唯一入口**。
+     *
+     * 与旧版的区别：流程跑在 [viewModelScope] 上，而**不是** `LaunchedEffect`。
+     * `LaunchedEffect` 的协程绑定 Composable 生命周期，用户一按返回/切后台，
+     * 协程被取消而底层 `execViaShizuku` 的阻塞读流仍在继续，随后向已销毁的
+     * 界面状态回写 → 高版本 Android 直接闪退（且命令半途而废，拿不到 DO）。
+     *
+     * 现在：流程生命周期与 ViewModel（≈ Activity）一致；
+     * 界面销毁只影响渲染，不影响命令执行与结果落库。
+     */
+    fun startElevateFlow() {
+        if (elevatePhase == 1) return // 已在运行，避免重复触发
+        elevatePhase = 1
+        elevateError = null
+        elevateLog = ""
+        elevatePendingPost = ""
+        viewModelScope.launch {
+            runCatching { runElevateFlow() }
+                .onFailure { t ->
+                    // 兜底：任何未预期异常都不允许冒泡成进程崩溃
+                    Log.e("AxManager", "runElevateFlow crashed", t)
+                    elevateAppend("x 提权流程异常终止：" + (t.message ?: t.toString()))
+                    elevateError = "提权流程异常终止：" + (t.message ?: t.toString())
+                    elevatePhase = 3
+                }
+        }
+    }
+
+    /** 重置提权流程状态（每次进入提权界面时调用）。 */
+    fun resetElevateState() {
+        elevateLog = ""
+        elevatePendingPost = ""
+        elevatePhase = 0
+        elevateError = null
+        // 【v1.7.0】原「警告条」状态已随 elevateWarning 字段一并删除。
+    }
+
+    /**
+     * 【v1.4.8】DP + Shizuku 提权主流程（内部实现，请通过 [startElevateFlow] 调用）。
+     *
+     * 步骤：
+     * ```
+     * ① 检查 Shizuku 可用性
+     * ② 授予 DP Role（bypass + add-role-holder）
+     * ③ 尝试默认激活：dpm set-active-admin → dpm set-device-owner
+     * ④ 若失败：列出账户 → 冻结持有账户的应用 → 重试 → 解冻
+     * ⑤ 汇总结果，更新 elevatePhase
+     * ```
+     *
+     * ⚠️ 本方法**不在** IO 线程直接写 Compose 状态：所有 [elevateAppend]
+     * 只写线程内缓冲，经 [withContext] 切主线程后统一提交，避免跨线程写状态崩进程。
+     *
+     * ⚠️ 【v1.6.1】本方法为**卡片 1「DP + Shizuku 激活」**的主流程：
+     * 先尝试激活，失败则删隐藏用户 999 + 只冻结「非系统」的账户所属应用后重试。
+     * 卡片 2「非 ADB 直连」走 [startElevateDirectFlow]（不清账户、不冻结）。
+     */
+    private suspend fun runElevateFlow() = withContext(Dispatchers.IO) {
+        val context = AxeronApplication.axeronApp
+
+        suspend fun post(line: String) = withContext(Dispatchers.Main) {
+            elevateAppend(line)
+            elevateFlush()
+        }
+
+        suspend fun postAll(block: String) = withContext(Dispatchers.Main) {
+            block.lineSequence().forEach { if (it.isNotBlank()) elevateAppend("  " + it) }
+            elevateFlush()
+        }
+
+        // ---------- ① Shizuku 可用性 ----------
+        post("> 检查执行通道 ...")
+        if (!Shizuku.pingBinder()) {
+            post("x Shizuku 未运行")
+            withContext(Dispatchers.Main) {
+                elevateError = "Shizuku 未运行，请先启动 Shizuku 并授权本应用"
+                elevatePhase = 3
+            }
+            return@withContext
+        }
+        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+            post("x 未获得 Shizuku 授权")
+            withContext(Dispatchers.Main) {
+                elevateError = "未获得 Shizuku 授权，请在弹窗中允许本应用使用 Shizuku"
+                elevatePhase = 3
+            }
+            return@withContext
+        }
+        post("v Shizuku 通道就绪（shell 身份）")
+
+        // ---------- ② 授予 DP Role ----------
+        post("")
+        post("> 授予 DEVICE_POLICY_MANAGEMENT 角色 ...")
+        val dpResult = runCatching {
+            execViaShizuku(NewPermissionPaths.buildGrantDpScript(context))
+        }.getOrElse { Result.failure(it) }
+        postAll(dpResult.getOrNull().orEmpty())
+        if (dpResult.isSuccess) {
+            post("v DP 角色已授予")
+        } else {
+            post(
+                "! DP 角色授予失败（不阻断后续激活）：" +
+                        (dpResult.exceptionOrNull()?.message ?: "")
+            )
+        }
+        runCatching { refreshNewPermissionState() }
+
+        // ---------- ③④ 激活 DO（默认 → 删 999 + 冻结非系统账户应用 → 重试）----------
+        post("")
+        post("> 开始激活设备所有者 ...")
+        //
+        // 【v1.6.1】改用 buildRescueActivateScript：
+        //   - 不再「账户>0 就直接失败退出」，改为尝试自救；
+        //   - 失败自动删隐藏用户 999 + 只冻结「非系统」的账户所属应用后重试；
+        //   - 无论成败都解冻，不留下副作用。
+        val raw = runCatching {
+            execViaShizuku(DpDoEscalation.buildRescueActivateScript(context))
+        }.getOrElse { Result.failure(it) }
+        val out = raw.getOrNull().orEmpty()
+        postAll(out)
+
+        val ok = raw.isSuccess && out.contains("DPDO_OK")
+
+        // 兜底解冻：脚本内已解冻，这里对「记录到但可能未解冻」的包再补一次，
+        // 避免异常中断导致 App 被永久禁用。
+        val frozen = DpDoEscalation.parseFrozenList(out)
+        if (frozen.isNotEmpty()) {
+            runCatching { execViaShizuku(DpDoEscalation.buildUnfreezeAppsScript(frozen)) }
+        }
+
+        // ---------- ⑤ 汇总 ----------
+        post("")
+        if (ok) {
+            post("v 提权流程全部成功")
+            withContext(Dispatchers.Main) { elevatePhase = 2 }
+            runCatching {
+                refreshOwnerState()
+                refreshAllStates()
+            }
+        } else {
+            val err = raw.exceptionOrNull()?.message
+            // 【v1.5.0】前置预检给出的中文原因优先级最高：
+            // 脚本在 precheck 阶段就已判定账户/用户不满足并直接返回，
+            // 此时 explainFailure(out) 拿到的 DPDO_DO_OUT 是空的（根本没跑 dpm），
+            // 只有 DPDO_REASON 才是真正可执行的原因，必须优先采用。
+            val reason = out.lineSequence()
+                .firstOrNull { it.contains("DPDO_REASON=") }
+                ?.substringAfter("DPDO_REASON=")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            val friendly = reason
+                ?: DpDoEscalation.explainFailure(out)
+                ?: "设备所有者激活被系统拒绝。已尝试自动冻结账户应用并重试，仍失败。"
+            post("x 提权失败")
+            if (!err.isNullOrBlank()) post("  " + err)
+            withContext(Dispatchers.Main) {
+                elevateError = friendly
+                elevatePhase = 3
+            }
+        }
+    }
+
+
+    /**
+     * 【v1.6.0】DP 差异化提权流程的**唯一入口**（非 ADB 直连路径）。
+     *
+     * 与 [startElevateFlow] 完全对称（同走 viewModelScope、同样的异常兜底），
+     * 区别只在底层流程：[runElevateDirectFlow] 走应用自身身份直连 binder，
+     * 不清账户、不冻结应用。
+     */
+    fun startElevateDirectFlow() {
+        if (elevatePhase == 1) return // 已在运行，避免重复触发
+        elevatePhase = 1
+        elevateError = null
+        elevateLog = ""
+        elevatePendingPost = ""
+        viewModelScope.launch {
+            runCatching { runElevateDirectFlow() }
+                .onFailure { t ->
+                    // 兜底：任何未预期异常都不允许冒泡成进程崩溃
+                    Log.e("AxManager", "runElevateDirectFlow crashed", t)
+                    elevateAppend("x 提权流程异常终止：" + (t.message ?: t.toString()))
+                    elevateError = "提权流程异常终止：" + (t.message ?: t.toString())
+                    elevatePhase = 3
+                }
+        }
+    }
+
+    /**
+     * 【v1.6.0】DP 差异化提权主流程（**非 ADB 直连**）。
+     *
+     * 取代 [runElevateFlow] 的 ADB 路径。核心差异：本流程**不清账户、不冻结应用**。
+     *
+     * 步骤：
+     * ```
+     * ① 检查 Shizuku（仅 DP Role 授予需要 shell 身份）
+     * ② 授予 DP Role（bypass + add-role-holder）
+     * ③ 等待并校验 MANAGE_PROFILE_AND_DEVICE_OWNERS 落地
+     * ④ 非 ADB 直连：DpDoDirectActivation.activate()
+     *    forceUpdateUserSetupComplete(0) → setActiveAdmin → setDeviceOwner
+     * ⑤ 汇总结果，更新 elevatePhase
+     * ```
+     *
+     * 与 [runElevateFlow] 同样的线程约束：所有 [elevateAppend] 只写线程内缓冲，
+     * 经 `withContext(Dispatchers.Main)` 统一提交。
+     */
+    private suspend fun runElevateDirectFlow() = withContext(Dispatchers.IO) {
+        val context = AxeronApplication.axeronApp
+
+        suspend fun post(line: String) = withContext(Dispatchers.Main) {
+            elevateAppend(line)
+            elevateFlush()
+        }
+
+        suspend fun postAll(block: String) = withContext(Dispatchers.Main) {
+            block.lineSequence().forEach { if (it.isNotBlank()) elevateAppend("  " + it) }
+            elevateFlush()
+        }
+
+        // ---------- ① Shizuku（仅 DP Role 授予需要）----------
+        post("> 检查执行通道 ...")
+        if (!Shizuku.pingBinder()) {
+            post("x Shizuku 未运行")
+            withContext(Dispatchers.Main) {
+                elevateError = "Shizuku 未运行，请先启动 Shizuku 并授权本应用"
+                elevatePhase = 3
+            }
+            return@withContext
+        }
+        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+            post("x 未获得 Shizuku 授权")
+            withContext(Dispatchers.Main) {
+                elevateError = "未获得 Shizuku 授权，请在弹窗中允许本应用使用 Shizuku"
+                elevatePhase = 3
+            }
+            return@withContext
+        }
+        post("v Shizuku 通道就绪（仅用于授予 DP Role）")
+        // ---------- ② 授予 DP Role ----------
+        //
+        // 【v1.6.2 修复】旧实现只看脚本退出码就打印「v DP 角色已授予」，
+        // 而脚本在 14+ static role 资格校验未过时**退出码仍可能为 0**
+        // （bypass 命令本身成功、add-role-holder 的失败被吞在 DP_OUT 里）。
+        // 于是界面显示"已获得 DP"，紧接着 activate() 判 PERMISSION_MISSING 失败 ——
+        // 即用户看到的「第一部分提示获得 DP 权限，直连却说未持有 MAPDO」。
+        //
+        // 现在：显式解析 DP_GRANT_OK / DP_GRANT_FAIL，并**以 MAPDO 实际落地为准**。
+        post("")
+        post("> 授予 DEVICE_POLICY_MANAGEMENT 角色 ...")
+        // 【v1.6.3 修复】旧写法 `runCatching { execViaShizuku(...).also { dpGrantRaw = it.getOrNull() } }`
+        // 有个致命盲点：`execViaShizuku` 在脚本 exit!=0 时**抛异常**（stderr 原文进
+        // exception.message），此时 `.also{}` 尚未执行 → `dpGrantRaw` 恒为 null；
+        // 而 `postAll(dpResult.getOrNull().orEmpty())` 在失败分支拿到 null →
+        // **系统原文（DP_OUT / DP_GRANT_FAIL 所在行）根本没被打印到界面**，
+        // 于是下面的 `grantMarkedFail` 分支成了永不触发的死代码。
+        //
+        // 现在：失败时把异常原文一并取出，统一合并成一个 `raw` 字符串，
+        // 既用于界面展示（用户能看到系统真实返回），也用于标记判定。
+        val dpExec: Result<String> = execViaShizuku(
+            NewPermissionPaths.buildGrantDpScript(context)
+        )
+        val dpGrantRaw: String = dpExec.getOrNull()
+            ?: (dpExec.exceptionOrNull()?.message ?: "")
+        postAll(dpGrantRaw)
+        val grantMarkedOk = dpGrantRaw.contains("DP_GRANT_OK")
+        val grantMarkedFail = dpGrantRaw.contains("DP_GRANT_FAIL")
+        when {
+            grantMarkedFail -> post("! DP 角色授予被系统拒绝（详见上方系统原文）")
+            grantMarkedOk -> post("v DP 角色授予指令已执行（等待权限落地校验）")
+            else -> post("x DP 角色授予未返回成功标记，详见上方系统原文")
+        }
+        runCatching { refreshNewPermissionState() }
+
+        // ---------- ③ 等待权限落地 ----------
+        //
+        // 【v1.6.2】等待窗口从 3.5s 放宽到 ~12s：Role 位权限的落地依赖
+        // RoleManagerService 的异步授权广播，长设备上 3.5s 常不够。
+        //
+        // 【v1.6.4 修复】判据增补 shell 侧证据。
+        // 旧实现只调 `hasManageProfileAndDeviceOwners(context)`（内部走
+        // `checkSelfPermission`）。而该判据要求 manifest 已声明该权限；此外
+        // 部分 ROM 上 Role 位权限的**应用侧权限表刷新**晚于 role holder 落地，
+        // 会出现「role 已授予、checkSelfPermission 仍 DENIED」的窗口期。
+        // 现在每轮同时用 shell 身份读一次 `dumpsys package`（granted=true 即算落地），
+        // 两条判据取「或」，既修 manifest 漏声明导致的恒 false，也消除刷新延迟误判。
+        post("")
+        post("> 等待角色权限生效 ...")
+        var ready = isMapdoReady(context)
+        val waits = longArrayOf(500L, 1000L, 2000L, 2000L, 3000L, 4000L)
+        var i = 0
+        while (!ready && i < waits.size) {
+            Thread.sleep(waits[i])
+            ready = isMapdoReady(context)
+            i++
+        }
+        if (ready) {
+            post("v 已获得 MANAGE_PROFILE_AND_DEVICE_OWNERS")
+        } else {
+            // 【v1.6.2】不再"仍继续尝试"——那样必然在第 ④ 步白跑一次并报
+            // 语义模糊的「未持有 MAPDO」。这里直接给出可执行的中文原因后终止。
+            post("x 未获得 MANAGE_PROFILE_AND_DEVICE_OWNERS（等待 ${waits.sum()}ms）")
+            val reason = NewPermissionPaths.explainDpFailure(context, dpGrantRaw)
+                ?: mapdoMissingReason(context)
+            post("  " + reason)
+            withContext(Dispatchers.Main) {
+                elevateError = reason
+                elevatePhase = 3
+            }
+            runCatching {
+                refreshNewPermissionState()
+                refreshDirectActivationAvailability()
+            }
+            return@withContext
+        }
+
+
+        // ---------- ④ 非 ADB 直连激活（**置 0 已移到卡片按钮，本流程不再自动置 0**）----------
+        //
+        // 【v1.7.0 改造】用户要求：把「激活前自动运行的 settings put secure user_setup_complete 0」
+        // 从激活流程里删掉，改由用户在卡片上先点「第一步：准备」按钮手动打开向导闸；
+        // 「激活」按钮默认置灰，只有确认闸已打开（shell 侧回读值 == 0）后才可点。
+        //
+        // 因此本流程**不再自动置 0**，只做一次防御性检查：闸没开就直接给出可执行的提示，
+        // 而不是等到 setDeviceOwner 吃一个被反射包成 InvocationTargetException 的异常。
+        //
+        // ⚠️ 恢复 1 **仍保留在 finally**：卡片按钮置 0 之后设备处于「系统认为未完成向导」
+        //    的状态（三键导航的 Home / 最近任务键失灵），激活结束后必须无条件恢复，绝不能让
+        //    用户停在导航键失灵的状态。若闸本来就没开（gateValue != 0），恢复段会被跳过判断
+        //    自然「置 1 也没坏处」——但为避免无谓写入，这里用 needRestoreGate 标记。
+        //
+        // 全程不删账户、不清数据、不退出登录。
+        post("")
+        post("> 检查「开机向导」闸状态 ...")
+        // 【v1.7.0】本流程不再自动置 0。置 0 已移到卡片上的「第一步：准备」按钮，
+        // 由用户先手动点开；这里只做一次**防御性检查**（经 Shizuku 的 shell 身份回读），
+        // 闸没开就给出可执行的提示，而不是等 setDeviceOwner 吃一个被反射包成
+        // InvocationTargetException 的异常（那样用户看不到任何有用信息）。
+        var needRestoreGate = false
+        // 【v1.8.0】把 shell 回读到闸值提到外层，供第 ⑤ 步传给 activate() 做真正的预检。
+        // 旧实现里 activate() 的向导预检用应用自身读 @hide 键（恒 false → 永远放行），
+        // 等于没有预检；这里把 shell 身份的权威读值传进去，预检才具备拦截能力。
+        var shellGateValue: Int? = null
+        run {
+            val gateRes = runCatching {
+                execViaShizuku(DpDoDirectActivation.buildReadSetupCompleteScript())
+            }.getOrElse { Result.failure(it) }
+            val gateOut = gateRes.getOrNull()
+            gateOut?.lineSequence()
+                ?.filter { it.isNotBlank() }
+                ?.forEach { line -> post("  " + line) }
+            val gateValue = DpDoDirectActivation.parseSetupCompleteOutput(gateOut)
+            shellGateValue = gateValue
+            if (gateValue != 0) {
+                post("x 「开机向导」闸未打开（当前 user_setup_complete=" +
+                        (gateValue?.toString() ?: "未确认") + "）")
+                post("  请先回卡片点击「第一步：准备」，把该值临时置为 0，再点「激活」。")
+                withContext(Dispatchers.Main) {
+                    elevateError = "「开机向导」闸尚未打开：请先在卡片上点「第一步：准备」按钮" +
+                            "（它会经 Shizuku 把 user_setup_complete 临时置为 0），然后再点「激活」。"
+                    elevatePhase = 3
+                }
+                runCatching { refreshDirectActivationAvailability() }
+                return@withContext
+            }
+            post("v 闸已打开（user_setup_complete=0，由卡片上的「第一步：准备」设置），开始激活")
+            needRestoreGate = true
+        }
+
+        // 真正的激活。恢复 1 放在 finally 中，保证无论成功失败都执行。
+        var direct: DpDoDirectActivation.ActivationResult
+        try {
+            post("")
+            post("> 开始非 ADB 直连激活（应用自身身份）...")
+            post("  注：置 0 已由卡片上的「第一步：准备」完成，本流程不重复写入。")
+            // 【v1.6.4】mapdoPrecheck=false：上游已用 isMapdoReady（双通道判据）确认落地，
+            // 避免内部单判据在「权限表刷新延迟」的 ROM 上误判 PERMISSION_MISSING。
+            //
+            // 【v1.8.0】shellSetupValue=shellGateValue：把上面经 Shizuku 回读到的权威闸值
+            // 传进去，让 activate() 内部的向导预检真正生效（否则它用应用自身读 @hide 键，
+            // 恒 false → 预检永远放行，形同虚设）。
+            direct = runCatching {
+                DpDoDirectActivation.activate(
+                    context,
+                    mapdoPrecheck = false,
+                    shellSetupValue = shellGateValue,
+                )
+            }.getOrElse { t ->
+                post("x 激活过程抛出异常：" + (t.message ?: t.toString()))
+                DpDoDirectActivation.ActivationResult(
+                    stage = DpDoDirectActivation.Stage.SET_OWNER_THREW,
+                    success = false,
+                    message = "激活过程异常：" + (t.message ?: t.toString()),
+                    log = emptyList(),
+                )
+            }
+            postAll(direct.log.joinToString("\n"))
+        } finally {
+            // 【v1.7.0】恢复 1 保留：用户在「第一步：准备」里已把闸置 0，设备此刻处于
+            // 「系统认为未完成开机向导」状态（三键导航的 Home / 最近任务键失灵），
+            // 激活结束后必须对称恢复，绝不能让用户停在导航键失灵的状态。
+            // 仅当本次流程**确实确认过闸已打开**（needRestoreGate）才恢复，
+            // 避免在闸本来就没开的设备上做无谓写入。
+            if (needRestoreGate) {
+                post("")
+                post("> 恢复 user_setup_complete=1（经 Shizuku 的 shell 身份执行脚本）...")
+                val backRes = runCatching {
+                    execViaShizuku(DpDoDirectActivation.buildSetSetupCompleteScript(1))
+                }.getOrElse { Result.failure(it) }
+                // 【v1.6.7】与置 0 对称：判据同样取脚本输出的回读值，确认真的恢复为 1，
+                // 而不是「命令发出去了就当成功」——否则设备会停在导航键失灵的状态。
+                val backVal = DpDoDirectActivation.parseSetupCompleteOutput(backRes.getOrNull())
+                if (backRes.isSuccess && backVal == 1) {
+                    post("v 已恢复 user_setup_complete=1（脚本回读确认），导航键恢复正常")
+                } else {
+                    post("x 恢复 user_setup_complete 失败：" +
+                            (backRes.exceptionOrNull()?.message
+                                ?: "回读值=" + (backVal?.toString() ?: "未确认")))
+                    post("  请手动执行：settings put secure user_setup_complete 1")
+                }
+                // 【v1.7.0】原 `elevateWarning = null` 已删除（字段整体移除）。
+                runCatching { refreshDirectActivationAvailability() }
+            }
+        }
+
+        // ---------- ⑤ 汇总 ----------
+        post("")
+        if (direct.success) {
+            post("v 提权流程全部成功（非 ADB 直连路径）")
+            post("  " + direct.message)
+            withContext(Dispatchers.Main) { elevatePhase = 2 }
+            runCatching {
+                refreshOwnerState()
+                refreshAllStates()
+                refreshDirectActivationAvailability()
+            }
+        } else {
+            post("x 提权失败")
+            withContext(Dispatchers.Main) {
+                elevateError = direct.message
+                elevatePhase = 3
+            }
+        }
+    }
 
     /** 用 Shizuku 一键激活完整的 Device Owner 权限。 */
     suspend fun enableTempDoViaShizuku(): Result<String> = withContext(Dispatchers.IO) {
         val r = execViaShizuku(tempDoCommand)
-        if (r.isSuccess) refreshTempDoState()
+        if (r.isSuccess) {
+            refreshTempDoState()
+            refreshAllStates()
+        }
         r
     }
 
@@ -757,6 +1926,8 @@ class ActivateViewModel : ViewModel() {
         val raw: Result<String> = execViaShizuku(tempDoCommand)
         if (raw.isSuccess) {
             refreshTempDoState()
+            // 激活成功后同步刷新整页状态（DO 卡片 / 主页指示 / 权限分组）
+            refreshAllStates()
             val active = frb.axeron.manager.owner.DeviceOwnerExtras
                 .isTempDoActive(AxeronApplication.axeronApp)
             return@withContext if (active) {
@@ -797,6 +1968,7 @@ class ActivateViewModel : ViewModel() {
         if (raw.isSuccess) {
             refreshProfileOwnerState()
             refreshOwnerState()
+            refreshAllStates()
             val active = frb.axeron.manager.owner.DeviceOwnerExtras
                 .isTempProfileOwnerActive(AxeronApplication.axeronApp)
             return@withContext if (active) {

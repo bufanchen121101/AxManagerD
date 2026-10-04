@@ -4,7 +4,6 @@ import android.app.admin.DeviceAdminReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import frb.axeron.server.ServerConstants
 import frb.axeron.server.util.Logger
 
 /**
@@ -30,21 +29,34 @@ class DeviceOwnerReceiver : DeviceAdminReceiver() {
         private const val ACTION_PROFILE_OWNER_CHANGED = "android.app.action.PROFILE_OWNER_CHANGED"
 
         @JvmStatic
-        fun componentName(): ComponentName =
-            ComponentName(ServerConstants.MANAGER_APPLICATION_ID, DeviceOwnerReceiver::class.java.name)
+        fun componentName(): ComponentName = DeviceOwnerState.admin
+
+        /**
+         * 【v1.4.6】带 Context 的重载：优先用传入 Context 的真实包名
+         * （`manages` 变体的 applicationId 是 `frb.axerond.manages`，
+         *  不能再用硬编码的 `frb.axeron.manager`）。
+         */
+        @JvmStatic
+        fun componentName(context: Context): ComponentName =
+            ComponentName(context.packageName, DeviceOwnerReceiver::class.java.name)
     }
 
     override fun onEnabled(context: Context, intent: Intent) {
+        // 【v1.9.0 闪退加固】onEnabled 会在「DO 激活成功」瞬间由系统回调；
+        // 一旦这里抛出未捕获异常，进程会直接闪退（用户看到「激活成功但闪退」）。
+        // 因此整体包 runCatching —— 同步失败只影响权限预授予，不影响激活结果。
         super.onEnabled(context, intent)
         LOGGER.i("Device admin enabled")
         // 通知状态管理器同步 Device Owner / Profile Owner 状态
-        DeviceOwnerState.sync(context)
+        runCatching { DeviceOwnerState.sync(context) }
+            .onFailure { LOGGER.w("sync failed in onEnabled", it) }
     }
 
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
         LOGGER.i("Device admin disabled")
-        DeviceOwnerState.sync(context)
+        runCatching { DeviceOwnerState.sync(context) }
+            .onFailure { LOGGER.w("sync failed in onDisabled", it) }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -59,7 +71,9 @@ class DeviceOwnerReceiver : DeviceAdminReceiver() {
             ACTION_DEVICE_OWNER_CHANGED,
             ACTION_PROFILE_OWNER_CHANGED -> {
                 LOGGER.i("device owner state changed: $action")
-                DeviceOwnerState.sync(context)
+                // 【v1.9.0 闪退加固】转移广播同样在系统回调线程执行，异常即闪退。
+                runCatching { DeviceOwnerState.sync(context) }
+                    .onFailure { LOGGER.w("sync failed in onReceive", it) }
             }
         }
     }

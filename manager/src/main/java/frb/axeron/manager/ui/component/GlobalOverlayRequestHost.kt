@@ -9,6 +9,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import frb.axeron.manager.features.overlay.OverlayRequestWatcher
+import frb.axeron.manager.util.OverlayLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -45,11 +46,20 @@ fun GlobalOverlayRequestHost() {
 
     // 全局轮询：Activity 存活期间常驻。
     LaunchedEffect(Unit) {
+        OverlayLog.i("GlobalOverlayRequestHost 启动轮询，间隔=${OverlayRequestWatcher.POLL_INTERVAL_MS}ms")
+        var tick = 0
         while (true) {
             // 已有弹窗时不打断（避免内容跳变）。
             if (current == null) {
                 val req = runCatching { OverlayRequestWatcher.peek(context) }.getOrNull()
-                if (req != null) current = req
+                if (req != null) {
+                    OverlayLog.i("发现待处理申请: id=${req.moduleId} reason=${req.reason}")
+                    current = req
+                }
+            }
+            // 每 20 个 tick（约 60 秒）打一次心跳，确认轮询还活着
+            if (++tick % 20 == 0) {
+                OverlayLog.d("轮询心跳 tick=$tick current=${current?.moduleId}")
             }
             delay(OverlayRequestWatcher.POLL_INTERVAL_MS)
         }

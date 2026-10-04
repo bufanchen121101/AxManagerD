@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.app.ActivityManager
 import android.os.IBinder
@@ -61,10 +62,34 @@ class KeepAliveService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        startForegroundCompat()
         // 保活加固：若本应用是 Device Owner，则利用 DO 特权降低被系统冻结/清理的概率。
         // 失败不影响常规保活（前台服务 + START_STICKY 仍生效）。
         applyDeviceOwnerHardening()
+    }
+
+    /**
+     * 启动前台服务（带 foregroundServiceType）。
+     *
+     * 【v1.4.9 闪退修复】必须显式传 `SPECIAL_USE`，且与 AndroidManifest 中该
+     * service 声明的 `android:foregroundServiceType="specialUse"` 严格一致。
+     *
+     * 历史问题：manifest 声明的是 `dataSync`，而 Android 14+ 对 dataSync 施加
+     * 「累计 6 小时/天」硬配额，常驻保活服务必然耗尽，随后
+     * `startForeground()` 抛 `ForegroundServiceStartNotAllowedException`、
+     * 进程被系统以 `ForegroundServiceDidNotStopInTimeException` 干掉 ——
+     * 正是崩溃日志里那串反复出现的堆栈。
+     *
+     * 若 Kotlin 侧不传类型而 manifest 声明了类型，Android 14+ 同样会抛
+     * `MissingForegroundServiceTypeException`，所以这里显式对齐。
+     */
+    private fun startForegroundCompat() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     /** 以 Device Owner 身份做一次保活加固（非 DO 时静默跳过）。 */
@@ -88,7 +113,7 @@ class KeepAliveService : Service() {
                 return START_NOT_STICKY
             }
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+        startForegroundCompat()
         return START_STICKY
     }
 

@@ -29,14 +29,57 @@
 #   （uid 2000 可调用 exported provider）触发 AxManagerProvider 的 execDpm method，
 #   命令在 app 进程内执行，结果直接塞进返回 Bundle 由脚本读回。
 
-TARGET="frb.axeron.manager"
-# AxManagerProvider 的 authority = ${applicationId}.server = frb.axeron.manager.server
-PROVIDER_URI="content://frb.axeron.manager.server"
+# 【v1.4.6 修复 · axeron-dpm 在 manages 变体上完全不可用】
+# 旧实现硬编码 official 变体的 applicationId：
+#   TARGET="frb.axeron.manager" / PROVIDER_URI="content://frb.axeron.manager.server"
+# 而本机（以及覆盖安装场景）安装的是 manages 变体 `frb.axerond.manages`，
+# 其 provider authority 是 `frb.axerond.manages.server`。包名写死 →
+# `am start` 唤醒失败 + `content call` 无人应答 → 脚本报 “no response from manager”（rc=3）。
+#
+# 现改为**运行期候选探测**：环境变量（若未来由 server 注入）优先，
+# 其后依次尝试两个已知 applicationId，并用 provider 是否真的回包来确认。
+CANDIDATES="${AXERON_MANAGER_PACKAGE:-} frb.axerond.manages frb.axeron.manager"
+TARGET=""
+PROVIDER_URI=""
 
 if [ "$#" -eq 0 ]; then
   # 打印 usage（本地，无需跨进程）
+  # 【v1.4.0】补全全部可用命令：底层 DeviceOwnerPrivilege.execute 支持的所有
+  # Device Owner 能力都应能从 shell 脚本调用（而不只是挂起/隐藏两条路）。
   cat <<'EOF'
-Usage: axeron-dpm <hide|unhide|suspend|unsuspend|force-stop|uninstall> ...
+Usage: axeron-dpm <command> [args...]
+
+应用/账户类
+  suspend <pkg> [pkg...]      挂起应用（Android 10+）
+  unsuspend <pkg> [pkg...]    解除挂起
+  hide <pkg>                  从启动器隐藏
+  unhide <pkg>                取消隐藏
+  unsuspend_unhide_enable <pkg>  复合恢复：解除挂起 + 取消隐藏 + 启用
+  force-stop <pkg>            强停进程
+  uninstall <pkg>             静默卸载
+  cleardata <pkg>             清除应用数据
+  block-uninstall <pkg>       禁止卸载
+  unblock-uninstall <pkg>     允许卸载
+  grant <pkg> <permission>    授予运行时权限
+  deny <pkg> <permission>     拒绝运行时权限
+
+设置类
+  set-anim <scale>            设置三个动画缩放
+  set-global <key> <value>    写 Global 设置
+  set-secure <key> <value>    写 Secure 设置
+  install-apps <on|off>       允许/禁止安装应用
+  user-restrict <restriction>         添加用户限制（DISALLOW_*）
+  clear-user-restrict <restriction>   清除用户限制
+
+设备/界面类
+  reboot                      重启设备
+  locknow                     立即锁屏
+  wipe [flags]                恢复出厂设置（危险）
+  org-name [name]             设置/清除组织名称
+  lock-task <pkg|clear> [pkg...]      设置 LockTask（Kiosk）名单
+  camera <on|off>             启用/禁用摄像头
+  keyguard <on|off>           启用/禁用锁屏
+  statusbar <on|off>          启用/禁用状态栏
 EOF
   exit 1
 fi
@@ -48,21 +91,33 @@ for a in "$@"; do
   ARGS="$ARGS,$a"
 done
 
-# 唤醒 manager 进程（保留，无闪屏）：保证 provider 所在 app 进程存活。
-# 当 manager 进程处于「后台 / 已 force-stop」状态时，provider 无法响应 content call。
-# DpmWakeActivity 透明、无 UI、立即 finish，仅把进程带入前台可见状态，无任何闪屏副作用。
-am start -n "$TARGET/.owner.DpmWakeActivity" >/dev/null 2>&1
-sleep 1
-
-# 用 content call 同步触发 provider 的 execDpm method，直接拿返回 Bundle。
+# 逐候选尝试：唤醒 manager 进程（保留，无闪屏）后再用 content call 同步触发
+# provider 的 execDpm method，直接拿返回 Bundle。
+#   · 唤醒是必要的：manager 进程处于「后台 / 已 force-stop」时 provider 无法响应 call；
+#     DpmWakeActivity 透明、无 UI、立即 finish，只把进程带入前台可见状态，无闪屏副作用。
+#   · 【v1.4.6】只有**真正回包**的候选才被采用，避免两个变体同时安装时选错。
 # 返回格式示例：
 #   Result: Bundle[{code=0, output=Success: suspended com.x}]
-RESULT=$(content call --uri "$PROVIDER_URI" \
-  --method execDpm \
-  --extra args:s:"$ARGS" 2>/dev/null)
+RESULT=""
+for p in $CANDIDATES; do
+  [ -n "$p" ] || continue
+  # 未安装的候选直接跳过（pm path 失败即 continue）
+  pm path "$p" >/dev/null 2>&1 || continue
+  am start -n "$p/.owner.DpmWakeActivity" >/dev/null 2>&1
+  sleep 1
+  RESULT=$(content call --uri "content://$p.server" \
+    --method execDpm \
+    --extra args:s:"$ARGS" 2>/dev/null)
+  if [ -n "$RESULT" ]; then
+    TARGET="$p"
+    PROVIDER_URI="content://$p.server"
+    break
+  fi
+done
 
 if [ -z "$RESULT" ]; then
   echo "Error: no response from manager (Device Owner not active or manager not running)"
+  echo "Hint: tried manager packages: $CANDIDATES"
   exit 3
 fi
 

@@ -28,6 +28,9 @@ public class AxeronProvider extends ContentProvider {
     private static final String TAG = "AxProvider";
     public static final String EXTRA_BINDER = "AxServer.BINDER";
 
+    /** Axeron 服务 binder 的接口描述符（等于 IAxeronService.DESCRIPTOR）。 */
+    private static final String AXERON_BINDER_DESCRIPTOR = "frb.axeron.server.IAxeronService";
+
     @Override
     public void attachInfo(Context context, ProviderInfo info) {
         super.attachInfo(context, info);
@@ -79,6 +82,24 @@ public class AxeronProvider extends ContentProvider {
 
         if (!Axeron.pingBinder()) {
             if (container != null && container.binder != null) {
+                // 【v2.0.3 关键修复】只接受 Axeron 服务的 binder。
+                //
+                // 服务端 AxeronService.sendBinderToClient() 会用「Shizuku 的 binder」遍历所有
+                // 申请了 moe.shizuku.manager.permission.API_V23 的包 —— 本 App（manager）同样申请了
+                // 该权限，且 .server authority 会被 sendBinderToUserApp() 按包名选中，因此这里可能
+                // 收到 Shizuku binder。一旦接受，Axeron 的所有 API 调用都会报
+                // "Binder invocation to an incorrect interface"，activateStatus 永远无法变成
+                // Running（表现为「已连上 ADB 但不跳转」）。故按接口描述符过滤。
+                String descriptor = null;
+                try {
+                    descriptor = container.binder.getInterfaceDescriptor();
+                } catch (Throwable ignored) {
+                }
+                if (descriptor != null && !AXERON_BINDER_DESCRIPTOR.equals(descriptor)) {
+                    Log.w(TAG, "ignore non-axeron binder: " + descriptor);
+                    return;
+                }
+
                 Log.d(TAG, "binder received");
 
                 AxeronSettings.initialize(getContext());

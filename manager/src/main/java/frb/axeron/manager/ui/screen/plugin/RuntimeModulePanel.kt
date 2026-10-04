@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import frb.axeron.manager.features.runtime.RuntimeDiagnostics
 import frb.axeron.manager.features.runtime.RuntimeModuleService
@@ -296,6 +297,26 @@ private fun ModuleCard(status: RuntimeModuleStatus) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // 作者 / 版本：与 shell 模块卡片（PluginItem）的展示方式一致，
+                    // 直接取 module.prop 的 author / version，空值时不占位。
+                    if (status.version.isNotBlank()) {
+                        Text(
+                            text = "版本：${status.version}",
+                            fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                            lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
+                            fontFamily = MaterialTheme.typography.bodySmall.fontFamily,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (status.author.isNotBlank()) {
+                        Text(
+                            text = "作者：${status.author}",
+                            fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                            lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
+                            fontFamily = MaterialTheme.typography.bodySmall.fontFamily,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 // 右上角：运行状态提示 + 启用开关，纵向排列。
                 // 开关放在这里而不是下方行内，避免模块尺寸变化时被挤成竖排文字。
@@ -416,6 +437,11 @@ private fun ModuleCard(status: RuntimeModuleStatus) {
                         Icon(Icons.Outlined.Terminal, contentDescription = "运行")
                     }
                 }
+                // 【需求】重试/重新启动：重跑 launchModule，即重新拉起 entry.sh 主进程。
+                // 注意：这个按钮之前被误删过（232f4d3），不要再删。
+                IconButton(onClick = { RuntimeModuleService.requestRetry(status.id) }) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "重试")
+                }
                 // 【需求2】卸载：二次确认后停止进程并写 remove 标记
                 var askUninstall by remember { mutableStateOf(false) }
                 val context = LocalContext.current
@@ -447,6 +473,22 @@ private fun ModuleCard(status: RuntimeModuleStatus) {
                         },
                     )
                 }
+            }
+
+            // 简介：与 shell 模块卡片（PluginItem）一致 —— 最多 4 行、超出省略。
+            // 放在按钮行下方，避免挤占第一行的名称/开关布局。
+            if (status.description.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = status.description,
+                    fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                    lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
+                    fontWeight = MaterialTheme.typography.bodySmall.fontWeight,
+                    fontFamily = MaterialTheme.typography.bodySmall.fontFamily,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                )
             }
 
             AnimatedVisibility(visible = status.lastError.isNotBlank()) {

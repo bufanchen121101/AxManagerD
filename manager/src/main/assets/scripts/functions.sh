@@ -1,4 +1,22 @@
 #!/system/bin/sh
+# 【自愈】AXERONDIR / AXERONVER 兜底。
+#   本脚本固定位于 $AXERONDIR/bin/functions.sh，若环境变量缺失（服务端环境
+#   注入失败、或经 busybox standalone 启动导致环境为空），这里按脚本自身
+#   位置反推 AXERONDIR，避免 MODROOT 退化成 /plugins；AXERONVER 缺失时置 0，
+#   让版本校验退化为「一律放行」而不是触发算术错误（exit 2）。
+if [ -z "$AXERONDIR" ]; then
+  if [ -n "$AXERONBIN" ]; then
+    AXERONDIR="${AXERONBIN%/bin}"
+  elif [ -n "$0" ] && [ -f "$0" ]; then
+    AXERONDIR=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
+  else
+    AXERONDIR=/data/user_de/0/com.android.shell/axeron
+  fi
+fi
+# AXERONVER 缺失时置为一个极大值，令下方版本校验
+#   [ "$MODPLUGIN" -gt "$AXERONVER" ] 恒为假 → 退化为「一律放行」，
+# 既不触发算术错误（避免 exit 2），也不会误拦任何新格式模块。
+[ -z "$AXERONVER" ] && AXERONVER=999999999
 ui_print() {
   echo "$1"
 }

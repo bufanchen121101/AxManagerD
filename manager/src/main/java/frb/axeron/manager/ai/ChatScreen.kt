@@ -69,7 +69,7 @@ fun ChatScreen(
 
     // 空态提示文案
     val emptyHint = if (AIConfigStore.useOfficialAi) {
-        "正在使用官方默认 AI（英伟达 nemotron），输入消息开始对话"
+        "正在使用官方默认 AI（GPT-OSS-20B），输入消息开始对话"
     } else if (!AIChatService.isCloudConfigured()) {
         "未配置 API，请先在「云端模型配置」中填写网址、Key 并识别模型"
     } else {

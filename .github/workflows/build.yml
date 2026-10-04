@@ -4,6 +4,16 @@ name: Build Release APK (R8)
 # 日常代码验证走 verify.yml（只编 Kotlin，3-6 分钟）。
 on:
   workflow_dispatch:
+    inputs:
+      flavor:
+        description: 'Build flavor (official = UI 主包；manages = frb.axerond.manages 壳；both = 两个都编)'
+        required: false
+        default: 'official'
+        type: choice
+        options:
+          - official
+          - manages
+          - both
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -117,15 +127,37 @@ jobs:
           echo "JAVA_HOME=$ORACLE_HOME" >> $GITHUB_ENV
           echo "ORG_GRADLE_PROJECT_java.home=$ORACLE_HOME" >> $GITHUB_ENV
           echo "$ORACLE_HOME/bin" >> $GITHUB_PATH
-      # 只构建 official flavor（versionName 1.2.0）。
-      # manages flavor（frb.axerond.manages / versionCode 15000 / 1.4.8.r349）保留在
-      # build.gradle.kts 中以便需要时手动构建，但 CI 不再产出，避免 artifacts 里混入 1500 版本。
+      # 按 workflow_dispatch 的 flavor 输入选择构建目标（默认 official，行为与改造前完全一致）。
+      # official = UI 主包（frb.axeron.manager）；manages = 免 root 服务端壳
+      # （frb.axerond.manages / versionCode 15000 / 1.4.8.r349）；both = 两个都编。
+      # 官方默认 AI 密钥：优先用 Secret，其次用仓库 Variable；都没配 -> 传空，
+      # App 侧会判定「官方默认 AI 不可用」。这里只输出长度，绝不输出明文。
+      - name: Check official AI key
+        env:
+          OFFICIAL_AI_API_KEY: ${{ secrets.OFFICIAL_AI_API_KEY || vars.OFFICIAL_AI_API_KEY }}
+        run: |
+          if [ -z "$OFFICIAL_AI_API_KEY" ]; then
+            echo "::warning::未配置 OFFICIAL_AI_API_KEY（Secret 或 Variable）→ 官方默认 AI 将被置空、不可用。"
+          else
+            echo "OFFICIAL_AI_API_KEY 已注入（长度 ${#OFFICIAL_AI_API_KEY}，此处只输出长度）"
+          fi
       - name: Build release APKs (R8 enabled)
+        env:
+          OFFICIAL_AI_API_KEY: ${{ secrets.OFFICIAL_AI_API_KEY || vars.OFFICIAL_AI_API_KEY }}
         run: |
           # R8 需要更大 CodeCache：覆盖掉 gradle.properties 里
           # CICompilerCount=1 / -TieredCompilation 的省内存组合，
           # 否则 minifyReleaseWithR8 会抛 "Out of space in CodeCache for method handle intrinsic"
-          ./gradlew :manager:assembleOfficialRelease \
+          FLAVOR="${{ github.event.inputs.flavor }}"
+          if [ -z "$FLAVOR" ]; then FLAVOR="official"; fi
+          echo "BUILD FLAVOR = $FLAVOR"
+          case "$FLAVOR" in
+            manages) TASKS=":manager:assembleManagesRelease" ;;
+            both)    TASKS=":manager:assembleOfficialRelease :manager:assembleManagesRelease" ;;
+            *)       TASKS=":manager:assembleOfficialRelease" ;;
+          esac
+          echo "GRADLE TASKS = $TASKS"
+          ./gradlew $TASKS \
             --console=plain --parallel --build-cache \
             -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -XX:+TieredCompilation -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8"
       - name: Verify signature
@@ -136,6 +168,20 @@ jobs:
           for APK in $(find . -path '*/build/outputs/apk/*/release/*.apk'); do
             echo "---- $APK ----"
             "$APKSIGNER" verify --print-certs "$APK"
+          done
+      # 防回归：不许把明文密钥打进 APK（密钥经 XOR+十六进制 混淆后应无法用 nvapi- 检索到）。
+      - name: Guard - no plaintext official AI key in APK
+        run: |
+          for APK in $(find . -path '*/build/outputs/apk/*/release/*.apk'); do
+            echo "---- $APK ----"
+            if unzip -p "$APK" 'classes*.dex' 2>/dev/null | grep -aq 'nvapi-'; then
+              echo "::error::APK 中检出明文 API Key（nvapi-），构建失败。"
+              exit 1
+            fi
+            if ! unzip -p "$APK" 'classes*.dex' 2>/dev/null | grep -aq 'OFFICIAL_AI_KEY_BLOB'; then
+              echo "::warning::APK 中未找到 OFFICIAL_AI_KEY_BLOB（密钥可能未注入）。"
+            fi
+            echo "OK: 未检出明文密钥"
           done
       - name: Collect APK
         run: |

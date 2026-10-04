@@ -25,6 +25,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -78,24 +82,21 @@ fun AIMainScreen(navigator: DestinationsNavigator) {
                 .padding(vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // ============ 0. AI 引擎总开关（最上方） ============
+            // ============ 0. AI 引擎总开关（最上方，唯一开关） ============
+            // 【合并】原本「AI 引擎」+「微型分析模型」两个开关合并为这一个：
+            // 两个开关在拦截链路里互相钳制（任一为 false 就放行），分开显示只会造成
+            // “开关点了没反应”的错觉，因此统一为一个开关，一次切换同时生效。
             SettingsItem(
                 iconVector = Icons.Filled.PowerSettingsNew,
                 label = "AI 引擎",
-                description = "总开关。开启＝采用本定制版（AxManagerD）运行方式，执行模块前做 AI/规则拦截分析；" +
-                    "关闭＝回退到原始未修改的 AxManager 运行方式（不拦截、不分析）。",
-                checked = AIConfigStore.aiMasterEnabled,
-                onSwitchChange = { AIConfigStore.setAiMasterEnabled(it) },
+                description = "总开关。开启＝执行模块前做 AI / 规则拦截分析；" +
+                    "关闭＝不拦截、不分析，直接放行。",
+                checked = AIConfigStore.aiEngineEnabled,
+                onSwitchChange = { AIConfigStore.setAiEngineEnabled(it) },
             )
 
-            // ============ 1. 微型分析模型开关 ============
-            SettingsItem(
-                iconVector = Icons.Filled.Psychology,
-                label = "微型分析模型",
-                description = "命令执行前的本地规则分析。关闭后若未配置云端则不再拦截。",
-                checked = AIConfigStore.isMicroAnalysisEnabled,
-                onSwitchChange = { AIConfigStore.setMicroAnalysisEnabled(it) },
-            )
+            // ============ 1. 拦截抓取时长（自「云端模型」页迁移至此） ============
+            TraceTimeoutSection()
 
             // ============ 2. 云端 AI 板块（整合） ============
             CloudAiSection(navigator)
@@ -158,4 +159,56 @@ private fun SectionHeader(title: String) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
     )
+}
+
+/**
+ * 拦截抓取时长配置：运行时拦截（strace + sh -x）抓取模块真实执行指令的时长（秒）。
+ * 值越大抓取越完整但等待越久，值越小等待越短但可能漏抓核心指令。
+ *
+ * 【迁移】原先位于「云端模型」页（CloudModelScreen），按需求移到 AI 设置主页面。
+ */
+@Composable
+private fun TraceTimeoutSection() {
+    // 关键修复：用 AIConfigStore.traceTimeoutSeconds（mutableStateOf 驱动）作为真实值源，
+    // LaunchedEffect 在其变化时同步到本地拖动状态，避免「remember 缓存初值导致外部修改后
+    // Slider 不刷新」的问题（用户此前反馈「设置里拦截时间不可改变」的根因之一）。
+    val stored = AIConfigStore.traceTimeoutSeconds
+    var value by remember { mutableStateOf(stored.toFloat()) }
+    androidx.compose.runtime.LaunchedEffect(stored) {
+        value = stored.toFloat()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+    ) {
+        Text(
+            text = "拦截抓取时长",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Text(
+            text = "运行时拦截抓取模块真实指令的时长（秒）",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        androidx.compose.material3.Slider(
+            value = value,
+            onValueChange = { value = it },
+            onValueChangeFinished = {
+                AIConfigStore.setTraceTimeoutSeconds(value.toInt())
+            },
+            valueRange = 3f..120f,
+            // steps = 区间内离散点数量；(120-3) = 117 个整数间隔，若要每秒一档则是 116 个点
+            steps = 116,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = "当前：${value.toInt()} 秒（默认 15 秒）",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }

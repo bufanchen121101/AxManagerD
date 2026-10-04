@@ -132,7 +132,7 @@ class CrashActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.error
                         )
                         Text(
-                            text = "AxManager has encountered a problem and crashed.",
+                            text = "AxManagerD has encountered a problem and crashed.",
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }

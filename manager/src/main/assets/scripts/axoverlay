@@ -25,6 +25,11 @@
 # 模块 id 解析顺序：环境变量 AX_MODULE_ID > $PWD > $0，
 # 且同时支持 runtime_plugins/<id>（运行时模块）与 plugins/<id>（Shell 模块）。
 #
+# 【v1.9.2 第三期】能力声明门禁：
+#   模块必须在自己的 module.prop 里声明 `capabilities=overlay`，
+#   才会在**安装过程中**由 App 弹窗向用户请求授权；
+#   未声明的模块一律不授权（is_granted 直接失败，写入类子命令全部拒绝）。
+#
 
 set -u
 
@@ -32,8 +37,16 @@ set -u
 # 环境与路径
 # ---------------------------------------------------------------------------
 
-# 兼容 Root / Shizuku 两种模式（与 PathHelper 判定一致）。
-if [ -d "/data/user_de/0/android/axeron" ]; then
+# 兼容 Root / Shizuku 两种模式（与 App 侧 PathHelper.getWorkingPath 保持一致）。
+#
+# 【v1.9.1 修复】原判定只看「目录是否存在」：
+#     if [ -d "/data/user_de/0/android/axeron" ]; then ROOT_DE else SHELL_DE fi
+# 若该目录只是残留空壳（先前 root 模式安装留下的空目录），脚本会写 ROOT_DE，
+# 而 App（非 root）读 SHELL_DE →「模块写的 pending 与 App 扫的目录不是同一个
+# → 弹窗永远不出现」。改为只认「确实装了 axeron 内容」的根目录。
+if [ -d "/data/user_de/0/android/axeron/perm" ] \
+    || [ -d "/data/user_de/0/android/axeron/plugins" ] \
+    || [ -d "/data/user_de/0/android/axeron/runtime_plugins" ]; then
     AXERON_ROOT="/data/user_de/0/android/axeron"
 else
     AXERON_ROOT="/data/user_de/0/com.android.shell/axeron"
@@ -125,13 +138,32 @@ GRANTED_JSON="${GRANTED_DIR}/${MODULE_ID}.json"
 json_get() {
     # $1=file $2=key
     [ -f "$1" ] || return 1
-    sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -n1
+    sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -n1
 }
 
-# JSON 里取布尔字段。
+# JSON 里取布尔字段。文件缺失、字段缺失、值非 true 一律输出 false。
+#
+# 【v1.9.1 关键 BUG 修复 · toybox sed 不支持 BRE 的 `\|` 交替】
+# 原实现：sed -n 's/.*"key"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p'
+# 真机实测（vivo A13，/system/bin/sed 为 toybox，"This is not GNU sed version 9.0"）：
+#   - 含 `\|` 交替的 BRE 表达式 → **零输出**（busybox sed 同样如此）；
+#   - 于是 global_enabled()/global_disclaimer() 恒为 false →
+#     is_granted() 恒 false →
+#     **模块侧 `axoverlay check/put/rm/clear` 全部永久失败**，
+#     即便 App 里总开关已开、该模块也已授权。
+# 修复方式：只匹配 `true`，匹配不到即 false（语义完全等价，且可移植）。
 json_get_bool() {
-    [ -f "$1" ] || echo "false"
-    sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$1" | head -n1
+    if [ ! -f "$1" ]; then
+        echo "false"
+        return 0
+    fi
+    local v
+    v="$(sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*\(true\).*/\1/p' "$1" 2>/dev/null | head -n1)"
+    if [ "${v}" = "true" ]; then
+        echo "true"
+    else
+        echo "false"
+    fi
 }
 
 # 读取全局开关（文件不存在视为关闭）。
@@ -143,8 +175,57 @@ global_disclaimer() {
     [ "$(json_get_bool "${GLOBAL_JSON}" disclaimerAccepted)" = "true" ] && echo "true" || echo "false"
 }
 
+# ---------------------------------------------------------------------------
+# 能力声明判定（第三期：安装期声明 → 安装时弹窗授权）
+# ---------------------------------------------------------------------------
+
+# 本模块的 module.prop 路径（模块目录下，与授权记录 <id>.json 同源）。
+module_prop_path() {
+    echo "${REAL_ROOT}/${MODULE_ID}/module.prop"
+}
+
+# 本模块是否在 module.prop 里声明了 capabilities=overlay。
+#
+# 【v1.9.2 第三期】需求：模块必须先在 module.prop 里声明能力，安装过程中才向
+# 用户弹窗请求授权；**未声明的模块一律不授权**。
+# 这是模块侧（shell）的最后一层卡点：即便 App 侧的判定被绕过，
+# 未声明的模块也无法通过 `axoverlay put/rm/clear/priority` 写入覆盖层。
+#
+# 实现注意（踩坑记录）：
+#   - toybox sed 不支持 BRE 的 `\|` 交替（v1.9.1 已踩），因此这里先按行取出
+#     capabilities= 的值，再用 IFS 拆分逐个比对，绝不做多值交替匹配；
+#   - 声明值可能是 `overlay`，也可能是 `overlay,notify` 这类逗号/分号/竖线列表，
+#     大小写不敏感。
+declares_overlay() {
+    local prop caps
+    prop="$(module_prop_path)"
+    if [ ! -f "${prop}" ]; then
+        return 1
+    fi
+    # 取最后一个 capabilities= 的值（后者覆盖前者），去掉首尾空白与 CR。
+    caps="$(sed -n 's/^[[:space:]]*capabilities[[:space:]]*=[[:space:]]*//p' "${prop}" 2>/dev/null | tail -n1 | tr -d ' \r')"
+    if [ -z "${caps}" ]; then
+        return 1
+    fi
+    local oldifs one
+    oldifs="${IFS}"
+    IFS=',;|'
+    for one in ${caps}; do
+        case "$(printf '%s' "${one}" | tr 'A-Z' 'a-z')" in
+            overlay)
+                IFS="${oldifs}"
+                return 0
+                ;;
+        esac
+    done
+    IFS="${oldifs}"
+    return 1
+}
+
 # 授权判定：返回 0 表示允许写入。
 is_granted() {
+    # 【v1.9.2 第三期】未在 module.prop 声明 capabilities=overlay 的模块一律不授权。
+    declares_overlay || return 1
     [ "$(global_enabled)" = "true" ] || return 1
     [ "$(global_disclaimer)" = "true" ] || return 1
     [ -f "${GRANTED_JSON}" ] || return 1
@@ -197,6 +278,8 @@ info)
     echo "overlayDir : ${OVERLAY_DIR}"
     echo "globalOn   : $(global_enabled)"
     echo "disclaimer : $(global_disclaimer)"
+    # 第三期：是否在 module.prop 声明了 capabilities=overlay（未声明一律不授权）
+    echo "declares   : $(declares_overlay && echo true || echo false)"
     echo "granted    : $(is_granted && echo true || echo false)"
     if [ -f "${GRANTED_JSON}" ]; then
         echo "grantMode  : $(json_get "${GRANTED_JSON}" mode)"
@@ -235,6 +318,9 @@ request)
         esac
     done
     [ -n "${REASON}" ] || die "request 需要 --reason=\"...\""
+    # 【v1.9.2 第三期】未声明 capabilities=overlay 的模块连申请都不受理：
+    # 既不写入 pending（避免污染授权页的「已申请」列表），也不弹授权窗。
+    declares_overlay || die "本模块未在 module.prop 声明 capabilities=overlay，无法申请核心文件修改权限"
     ensure_dirs
     now="$(date +%s 2>/dev/null || echo 0)"
     # 转义双引号，避免破坏 JSON。

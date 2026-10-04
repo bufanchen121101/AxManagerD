@@ -30,7 +30,14 @@ dependencies {
     api("org.bouncycastle:bcpkix-jdk18on:1.84")
     // 打进 dex 的上游 fork apkzlib（含 NestedZip / ZFile / sign 等）
     api(files("libs/apkzlib-fork.jar"))
-    // lspatch.jar 仅用于编译期符号（LSPatch / ManifestParser 等）
+    // lspatch.jar 仅用于编译期符号（LSPatch / ManifestParser 等）。
+    // 该 jar 随 manager 的 assets 打包、不在 dex 中，因此这里以 compileOnly 引入。
+    //
+    // 【2026-10-04 撤销 Xposed 精简】按用户明确要求「不精简 Xposed」恢复本行：
+    // 该 jar 必须留在 manager/src/main/assets/lspatch.jar（与 28MB 可用版一致），
+    // 不得再挪到本模块 libs/（那会让 APK 打包内容与可用版出现差异）。
+    // 运行期还需 manager/src/main/assets/lspatch/ 下的
+    // loader.dex / metaloader.dex / so/<abi>/liblspatch.so，那些一直保留。
     compileOnly(files("../manager/src/main/assets/lspatch.jar"))
     compileOnlyApi("com.google.auto.value:auto-value-annotations:1.10.1")
     annotationProcessor("com.google.auto.value:auto-value:1.10.1")

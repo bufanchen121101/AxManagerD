@@ -26,9 +26,38 @@ object DeviceOwnerState {
 
     private val LOGGER = Logger("DeviceOwnerState")
 
-    /** 设备管理组件名，与 manifest 中注册的 receiver 对应。 */
-    val admin: ComponentName =
-        ComponentName(ServerConstants.MANAGER_APPLICATION_ID, DeviceOwnerReceiver::class.java.name)
+    /**
+     * 本应用**真实包名**（由 [init] 注入；未注入时回落 [ServerConstants.MANAGER_APPLICATION_ID]）。
+     *
+     * 【v1.4.6 修复 · flavor 错配导致 DO / DP 全链路失效】
+     * [ServerConstants.MANAGER_APPLICATION_ID] 是硬编码常量 `frb.axeron.manager`（official 变体），
+     * 而本机安装的是 `manages` 变体 `frb.axerond.manages`。组件名写死意味着：
+     *   · `isDeviceOwnerApp()/isProfileOwnerApp()` 永远查错包 → 自我 DO 判定恒为 false；
+     *   · `clearProfileOwner(admin)` 作用在一个不存在的组件上 → 解除/转移必失败；
+     *   · `axeron-dpm` 的「自我 DO 快速通道」失效 → 报 `Device Owner not active`；
+     *   · 激活后自动授权 dangerous 权限时查错包 → 权限授予全部落空。
+     * 改为运行期从 Context 取包名，两个变体都正确。
+     */
+    @Volatile
+    private var adminPackageName: String = ServerConstants.MANAGER_APPLICATION_ID
+
+    /**
+     * 用真实 applicationId 初始化设备管理组件名（在 Application 启动早期调用一次即可）。
+     *
+     * 刻意做成幂等的「注入」而不是构造期读取 Context：本类是 object，
+     * 可能在 Activity 之前被访问（如 receiver 广播），注入点放在 Application 最稳妥。
+     */
+    fun init(context: Context) {
+        val pkg = context.packageName
+        if (pkg.isNotBlank() && pkg != adminPackageName) {
+            LOGGER.i("init: admin package $adminPackageName -> $pkg")
+        }
+        adminPackageName = pkg
+    }
+
+    /** 设备管理组件名，与 manifest 中注册的 receiver 对应（随 flavor 动态解析）。 */
+    val admin: ComponentName
+        get() = ComponentName(adminPackageName, DeviceOwnerReceiver::class.java.name)
 
     /**
      * 当前状态快照，供 server 侧判断运行身份使用。
@@ -165,19 +194,27 @@ object DeviceOwnerState {
      * 检测成功后，若为 Owner，则自动授予 dangerous 权限并回调 [onEnabled]。
      */
     fun sync(context: Context) {
-        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
-            ?: run {
-                LOGGER.w("DevicePolicyManager unavailable")
-                return
-            }
-        isDeviceOwner = dpm.isDeviceOwnerApp(admin.packageName)
-        isProfileOwner = dpm.isProfileOwnerApp(admin.packageName)
-        LOGGER.i("sync: isDeviceOwner=$isDeviceOwner, isProfileOwner=$isProfileOwner")
+        // 【v1.9.0 闪退加固】本方法由 DeviceOwnerReceiver 的 onEnabled / onDisabled /
+        // onReceive 直接调用（系统回调线程），也在 Dhizuku 授权回调里被调用。
+        // 之前整段没有异常防护：任一语句抛异常都会冒泡到广播/回调框架 → 进程闪退。
+        // 现象即「激活成功瞬间闪退」。这里整体兜住，失败只记日志。
+        try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+                ?: run {
+                    LOGGER.w("DevicePolicyManager unavailable")
+                    return
+                }
+            isDeviceOwner = dpm.isDeviceOwnerApp(admin.packageName)
+            isProfileOwner = dpm.isProfileOwnerApp(admin.packageName)
+            LOGGER.i("sync: isDeviceOwner=$isDeviceOwner, isProfileOwner=$isProfileOwner")
 
-        if (isOwner) {
-            onEnabled(context, dpm)
-        } else {
-            onDisabled(context, dpm)
+            if (isOwner) {
+                onEnabled(context, dpm)
+            } else {
+                onDisabled(context, dpm)
+            }
+        } catch (t: Throwable) {
+            LOGGER.w("sync failed", t as? Exception)
         }
     }
 

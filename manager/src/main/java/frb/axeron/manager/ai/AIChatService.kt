@@ -48,7 +48,9 @@ object AIChatService {
 
     /** 是否已配置可用的云端对话 */
     fun isCloudConfigured(): Boolean {
-        if (AIConfigStore.useOfficialAi) return true // 官方默认 AI（英伟达）始终可用
+        // 官方默认 AI 需要构建期注入的密钥；未注入（未配置 CI Secret/Variable 的构建）时
+        // 视为不可用，避免出现「开关显示可用、请求却必然失败」的假象。
+        if (AIConfigStore.useOfficialAi) return AIConfigStore.officialAiKeyAvailable
         return !AIConfigStore.cloudApiKey.isNullOrBlank() &&
             !AIConfigStore.cloudEndpoint.isNullOrBlank()
     }

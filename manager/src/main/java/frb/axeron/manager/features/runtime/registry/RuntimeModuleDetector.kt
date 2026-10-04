@@ -298,9 +298,9 @@ object RuntimeModuleRegistry {
 
     /**
      * 当前管理器的版本代号。模块的 minManagerCode 不得高于此值。
-     * 与 AxeronApiConstant 的版本策略保持一致，v1.2.0 提升为 8。
+     * 与 AxeronApiConstant 的版本策略保持一致，v1.3.0 提升为 9。
      */
-    const val MANAGER_CODE_CURRENT = 8
+    const val MANAGER_CODE_CURRENT = 9
 
     /**
      * 运行时模块的独立安装目录（相对 axeron/）：

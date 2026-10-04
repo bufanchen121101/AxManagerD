@@ -26,6 +26,15 @@ data class RuntimeModuleEntry(
     val name: String get() = plugin.prop.name
     val dirId: String get() = plugin.dirId.ifBlank { plugin.prop.id }
 
+    /** 模块作者，对应 module.prop 的 author（与 shell 模块同源）。 */
+    val author: String get() = plugin.prop.author
+
+    /** 模块版本号，对应 module.prop 的 version。 */
+    val version: String get() = plugin.prop.version
+
+    /** 模块简介，对应 module.prop 的 description。 */
+    val description: String get() = plugin.prop.description
+
     /** 是否通过全部校验（可运行）。 */
     val isValid: Boolean get() = issues.isEmpty() && manifest != null
 
@@ -69,6 +78,9 @@ data class RuntimeModuleEntry(
         hasWebUi = hasWebUi,
         enabled = isEnabled,
         hasAction = hasAction,
+        author = author,
+        version = version,
+        description = description,
         aliveCheckIntervalMs = aliveCheckIntervalMs,
     )
 }

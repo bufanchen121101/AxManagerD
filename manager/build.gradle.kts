@@ -7,9 +7,73 @@ plugins {
     id("kotlin-parcelize")
 }
 
+// ============ 官方默认 AI（NVIDIA）密钥：构建期注入 + 混淆 ============
+// 目标：明文不落源码、不落 git，APK 的 dex 里也不出现可被 `strings` 直接提取的明文。
+//
+// 取值优先级：
+//   1) local.properties 的 officialAiKey（本地构建用；该文件已在 .gitignore 中）
+//   2) 环境变量 OFFICIAL_AI_API_KEY（CI 用：GitHub Secret / Variable 注入）
+//   3) Gradle 属性 officialAiKey（-PofficialAiKey=...）
+// 未取到 -> 注入空串，App 侧判定「官方默认 AI 不可用」，不会拿空 key 去发请求。
+//
+// 注意：XOR + 十六进制只是「提高提取门槛」（防 grep / strings 一键提取），
+// 不是密码学意义上的安全 —— 客户端内置密钥在原理上都可以被逆向提取出来。
+
+fun officialAiKeyPlain(): String {
+    // 注意：这里刻意不用 java.util.Properties —— 在 Kotlin DSL 脚本里 `java` 会被
+    // 解析成 JavaPluginExtension，写 `java.util.xxx` 直接报 Unresolved reference: util
+    // （上一版 CI 就是死在这一行）。改为按行读文本自己解析。
+    val localFile = rootProject.file("local.properties")
+    val localValue = if (localFile.exists()) {
+        localFile.readText()
+            .lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("officialAiKey") && it.contains('=') }
+            ?.substringAfter('=')
+            ?.trim()
+            ?.trim('"')
+            .orEmpty()
+    } else {
+        ""
+    }
+    if (localValue.isNotBlank()) return localValue.trim()
+
+    val envValue = System.getenv("OFFICIAL_AI_API_KEY").orEmpty()
+    if (envValue.isNotBlank()) return envValue.trim()
+
+    return (findProperty("officialAiKey") as String?).orEmpty().trim()
+}
+
+/**
+ * 与 App 侧 `AIConfigStore.decodeOfficialAiKey()` 严格对应：
+ * XOR（掩码按 seed 循环）-> 小写十六进制。改这里必须同步改 App 侧。
+ *
+ * 为什么用十六进制而不是 Base64：效果等价（`strings` 一样提取不到明文），
+ * 但编码表可自己实现，不依赖 java.util.Base64 —— Kotlin DSL 脚本里 `java`
+ * 是扩展名，写 `java.util.Base64` 会编译失败；App 侧也顺带避开 Base64 的 API 级别限制。
+ */
+fun officialAiKeyBlob(): String {
+    // 与 App 侧 AIConfigStore.OFFICIAL_AI_KEY_SEED 必须完全一致。
+    val seed = "frb.axeron.manager|AxManagerD/axkey/v1"
+    val plain = officialAiKeyPlain()
+    if (plain.isEmpty()) return ""
+    val mask = seed.toByteArray(Charsets.UTF_8)
+    val src = plain.toByteArray(Charsets.UTF_8)
+    // 十六进制编码：自身实现，不用 java.util.Base64（见上方说明）。
+    val hex = "0123456789abcdef"
+    val sb = StringBuilder(src.size * 2)
+    for (i in src.indices) {
+        val b = (src[i].toInt() xor mask[i % mask.size].toInt()) and 0xFF
+        sb.append(hex[b ushr 4]).append(hex[b and 0x0F])
+    }
+    return sb.toString()
+}
+
 android {
     namespace = "frb.axeron.manager"
     defaultConfig {
+        // 官方默认 AI 密钥（XOR+十六进制 混淆后的 blob，明文不落源码）
+        buildConfigField("String", "OFFICIAL_AI_KEY_BLOB", "\"${officialAiKeyBlob()}\"")
         // 只保留 arm64-v8a（现代 vivo 设备均为 64 位），砍掉 x86/x86_64/armeabi-v7a
         // 三份冗余 native 库（busybox/adb/rish/axeron 等 .so），显著减小 APK 体积。
         ndk {

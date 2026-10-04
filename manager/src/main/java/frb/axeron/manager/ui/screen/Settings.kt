@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.Adb
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Coffee
 import androidx.compose.material.icons.filled.Dangerous
@@ -85,6 +86,7 @@ import com.ramcosta.composedestinations.generated.destinations.DangerCodeScreenD
 import com.ramcosta.composedestinations.generated.destinations.DeveloperScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.OverlayPermissionScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.RuntimeLogScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.SettingsEditorScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.adb.util.AdbEnvironment
@@ -172,8 +174,14 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(8.dp))
+                    // v1.9.1：备份位置已从 /sdcard/AxManagerD/backup 改为应用专属外部目录，
+                    // 该路径含包名（official / manages 两变体不同），故运行时取值而非硬编码文案。
                     Text(
-                        text = stringResource(R.string.backup_path_hint),
+                        text = stringResource(
+                            R.string.backup_path_hint,
+                            frb.axeron.manager.features.backup.BackupManager
+                                .backupRoot(settingsContext).absolutePath
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -398,7 +406,7 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.RestartAlt,
-                                                contentDescription = "Re-Activate AxManager"
+                                                contentDescription = "Re-Activate AxManagerD"
                                             )
                                         }
                                     }
@@ -644,6 +652,16 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                     label = stringResource(R.string.developer),
                     onClick = {
                         navigator.navigate(DeveloperScreenDestination)
+                    }
+                )
+                // 运行日志入口（v1.3.1）：软件内直接查看/复制/导出关键链路日志
+                SettingsItem(
+                    type = SettingsItemType.CHILD,
+                    iconVector = Icons.Filled.Article,
+                    label = stringResource(R.string.runtime_log),
+                    description = stringResource(R.string.runtime_log_desc),
+                    onClick = {
+                        navigator.navigate(RuntimeLogScreenDestination)
                     }
                 )
 

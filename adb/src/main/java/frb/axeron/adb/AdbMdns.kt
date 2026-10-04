@@ -10,6 +10,7 @@ import androidx.lifecycle.Observer
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.ServerSocket
 
 class AdbMdns(
     context: Context, private val serviceType: String,
@@ -87,23 +88,25 @@ class AdbMdns(
     }
 
     /**
-     * 【v1.6.3 修复】判断 mDNS 发现的端口是否「真的已经在本机监听」。
+     * 判断 mDNS 发现的端口是否「可用」。
      *
-     * 原实现用的是 `ServerSocket().bind(127.0.0.1, port)` —— 即「端口能否被我占用」，
-     * 只有**没被占用**才算通过。但无线调试场景下，这个端口**正是 adbd 自己占着**的，
-     * 于是 bind 必然抛「Address already in use」→ 返回 true，看起来也能通过。
+     * 【激活修复】恢复为 1.0.1（用户验证可正常激活的版本）的实现：
+     * 用 `ServerSocket().bind(127.0.0.1, port)` 判断端口是否被占用 ——
+     * 无线调试场景下该端口正是 adbd 自己监听的，bind 必然抛
+     * 「Address already in use」→ 返回 true（可用）。
      *
-     * 问题在于开机早期：此时 adbd 还没起来，端口无人占用 → bind 成功 → 返回 false
-     * → 走「重启 discovery」分支，一直空转到 45s 超时。也就是说这个判定在开机时刻
-     * 恰好把「adbd 已就绪」判成不可用。（本工程开机自启动的另一个卡点。）
-     *
-     * 改为直接**尝试连接**：能连上就说明确实有服务在监听（adbd）→ 可用。
+     * 1.2.0 曾改为「尝试 connect，能连上则 true」。该改动在 adbd 尚未完全就绪
+     * （或在 MIUI/HyperOS 上对本地回环连接有限制）时会判为不可用，从而反复
+     * 重启 discovery 直至超时，导致「无线调试/TCP 激活」失败。
+     * 现回退到经真机验证过的 bind 语义，保证激活成功率。
      */
-    private fun isPortAvailable(port: Int): Boolean = try {
-        java.net.Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 300) }
-        true
+    private fun isPortAvailable(port: Int) = try {
+        ServerSocket().use {
+            it.bind(InetSocketAddress("127.0.0.1", port), 1)
+            false
+        }
     } catch (e: IOException) {
-        false
+        true
     }
 
     internal class DiscoveryListener(private val adbMdns: AdbMdns) : NsdManager.DiscoveryListener {

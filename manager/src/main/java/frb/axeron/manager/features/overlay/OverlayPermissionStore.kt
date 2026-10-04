@@ -7,6 +7,7 @@ import com.google.gson.JsonObject
 import frb.axeron.api.Axeron
 import frb.axeron.api.AxeronPluginService
 import frb.axeron.api.core.AxeronSettings
+import frb.axeron.manager.features.runtime.registry.RuntimeModuleCapabilities
 import frb.axeron.manager.util.OverlayLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -134,6 +135,27 @@ object OverlayPermissionStore {
     }
 
     /**
+     * [syncGlobalJson] 的**阻塞版**包装，供非协程调用方使用
+     * （例如 Application 冷启动的后台线程）。
+     *
+     * 【v1.9.1 BUG 修复 · 为什么要它】
+     * 真机实测（2026-10-01，vivo A13）：
+     *   - App 侧 SP：`refresh: enabled=true disclaimer=true`（用户明明开了开关）；
+     *   - shell 域：`perm/global.json` **根本不存在**；
+     *   ⇒ 模块侧 `axoverlay check` 恒返回 `denied`，即「界面显示已开启，模块实际用不了」。
+     *
+     * 根因：`global.json` 只在 [setEnabled] / [acceptDisclaimer] 被调用时才写，
+     * 一旦该文件丢失（目录被清理、早期版本未写过、写入时 Axeron 未激活），
+     * 全项目**没有任何自愈路径**，开关就永久失效。
+     *
+     * 任何异常都吞掉（不能因为一个镜像文件拖垮冷启动）。
+     */
+    fun syncGlobalJsonBlocking(context: Context) {
+        runCatching { kotlinx.coroutines.runBlocking { syncGlobalJson(context) } }
+            .onFailure { OverlayLog.w("syncGlobalJsonBlocking 失败: $it") }
+    }
+
+    /**
      * 从 shell 域 `perm/global.json` 反向读取（用于 App 启动时校准 SP）。
      *
      * @return Pair(enabled, disclaimerAccepted)；读不到返回 null
@@ -167,14 +189,74 @@ object OverlayPermissionStore {
      * 判定顺序（与设计文档 §4.7 一致）：
      *   ① 全局开关     关 → 拒绝
      *   ② 免责已同意   否 → 拒绝
-     *   ③ 模块已授权   否 → 拒绝
-     *   ④ 授权未过期   过期 → 拒绝
+     *   ③ 能力声明     未声明 overlay → 拒绝（第三期：其他模块不授权）
+     *   ④ 模块已授权   否 → 拒绝
+     *   ⑤ 授权未过期   过期 → 拒绝
      */
     suspend fun isGranted(context: Context, moduleId: String): Boolean {
         if (!isEnabled(context)) return false
         if (!isDisclaimerAccepted(context)) return false
+        // ③ 第三期：未在 module.prop 声明 capabilities=overlay 的模块一律无权限
+        if (!declaresOverlay(context, moduleId)) return false
         val g = getGrant(context, moduleId) ?: return false
         return g.isValidNow()
+    }
+
+    // -----------------------------------------------------------------------
+    // 能力声明（第三期：安装期声明 → 安装时弹窗授权；未声明一律不授权）
+    // -----------------------------------------------------------------------
+
+    /**
+     * 读取模块目录下的 `module.prop` 原文。
+     *
+     * 依次尝试运行时模块目录（`runtime_plugins/<id>`）与 Shell 模块目录
+     * （`plugins/<id>`），与 `axoverlay` 脚本的模块 id 解析口径保持一致。
+     *
+     * @return 文件内容；模块不存在 / 读不到 / binder 不可用时返回 null。
+     */
+    suspend fun modulePropText(context: Context, moduleId: String): String? =
+        withContext(Dispatchers.IO) {
+            if (!isValidModuleId(moduleId)) return@withContext null
+            // 一条命令兼容两类目录；单引号包裹，moduleId 已校验不含引号/斜杠。
+            val cmd = "cat '${OverlayManager.runtimeRoot()}/$moduleId/module.prop' 2>/dev/null" +
+                " || cat '${OverlayManager.shellRoot()}/$moduleId/module.prop' 2>/dev/null"
+            runCatching {
+                val r = AxeronPluginService.execProcessSafeWithTimeout(
+                    cmd = arrayOf("/system/bin/sh", "-c", cmd),
+                    env = Axeron.getEnvironment(),
+                    timeoutMs = TIMEOUT_MS,
+                )
+                if (r.exitCode == 0 && r.stdout.isNotBlank()) r.stdout else null
+            }.getOrNull()
+        }
+
+    /**
+     * 该模块是否在 `module.prop` 里声明了 `capabilities=overlay`。
+     *
+     * 这是「安装期声明」在 App 侧的权威判定：
+     *  - 安装时弹窗授权（`InstallDialog` → `OverlayInstallConsent`）只对返回 true 的模块生效；
+     *  - [isGranted] / [putGrant] 均以此为前置，**未声明的模块一律拿不到授权**。
+     *
+     * 读取失败（模块尚未装好 / Axeron 未激活 / 文件缺失）保守视为「未声明」，
+     * 属于安全默认：宁可拒绝，也不放行未声明的模块。
+     */
+    suspend fun declaresOverlay(context: Context, moduleId: String): Boolean {
+        val text = modulePropText(context, moduleId) ?: return false
+        val caps = RuntimeModuleCapabilities.fromProp(parsePropMap(text))
+        return RuntimeModuleCapabilities.declaresOverlay(caps)
+    }
+
+    /** `module.prop` 文本 → 键值 map（口径与 RuntimeModuleDetector.parsePropFile 一致）。 */
+    private fun parsePropMap(text: String): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        text.lineSequence().forEach { line ->
+            val s = line.trim()
+            if (s.isEmpty() || s.startsWith("#")) return@forEach
+            val i = s.indexOf('=')
+            if (i <= 0) return@forEach
+            map[s.substring(0, i).trim()] = s.substring(i + 1).trim()
+        }
+        return map
     }
 
     // -----------------------------------------------------------------------
@@ -277,6 +359,15 @@ object OverlayPermissionStore {
                 )
             }
             return@withContext null
+        }
+
+        // 第三期：**未声明一律不授权**的强制卡点。
+        // 无论调用方是谁（安装期弹窗、授权页手动开关、模块申请弹窗），
+        // 只要该模块的 module.prop 里没有 capabilities=overlay，这里就不写授权文件。
+        // 撤销（DENIED）在上面的分支已返回，不受此限制。
+        if (!declaresOverlay(context, moduleId)) {
+            OverlayLog.w("putGrant 拒绝：模块未声明 overlay 能力 id=$moduleId")
+            return@withContext "该模块未在 module.prop 声明 capabilities=overlay，无法授权"
         }
 
         val expiresAt = if (mode == GrantMode.ONCE) now + ONCE_SESSION_MS / 1000L else 0L

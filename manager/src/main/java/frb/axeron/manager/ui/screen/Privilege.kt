@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -35,6 +36,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
+import com.ramcosta.composedestinations.generated.destinations.AppManageScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.DhizukuPermissionScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.manager.R
@@ -98,6 +100,42 @@ fun PrivilegeScreen(
                     )
                 }
             ) {
+                // —— 软件管理入口（v1.3.0：由主页右上角迁移至此）——
+                item(key = "app_manage_entry") {
+                    ListItem(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { navigator.navigate(AppManageScreenDestination) }
+                            .padding(end = 6.dp, top = 6.dp),
+                        headlineContent = {
+                            Text(
+                                text = stringResource(R.string.app_manage_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        },
+                        supportingContent = {
+                            Text(
+                                text = stringResource(R.string.app_manage_entry_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                        leadingContent = {
+                            Icon(
+                                imageVector = Icons.Filled.Apps,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        },
+                        trailingContent = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                            )
+                        },
+                    )
+                }
                 // —— 设备所有者授权入口（Dhizuku 兼容）——
                 item(key = "dhizuku_owner_entry") {
                     ListItem(

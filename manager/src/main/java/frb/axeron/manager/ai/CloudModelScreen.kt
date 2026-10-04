@@ -111,62 +111,9 @@ fun CloudModelScreen(navigator: DestinationsNavigator) {
                 onSwitchChange = { AIConfigStore.setUseOfficialAi(it) },
             )
 
-            // ============ 3. 拦截抓取时长 ============
-            TraceTimeoutSection()
-
-            // ============ 4. 自定义 API 配置 ============
+            // ============ 3. 自定义 API 配置 ============
             CustomApiConfigSection()
         }
-    }
-}
-
-/**
- * 拦截抓取时长配置：运行时拦截（strace + sh -x）抓取模块真实执行指令的时长（秒）。
- * 值越大抓取越完整但等待越久，值越小等待越短但可能漏抓核心指令。
- */
-@Composable
-private fun TraceTimeoutSection() {
-    // 关键修复：用 AIConfigStore.traceTimeoutSeconds（mutableStateOf 驱动）作为真实值源，
-    // LaunchedEffect 在其变化时同步到本地拖动状态，避免「remember 缓存初值导致外部修改后
-    // Slider 不刷新」的问题（用户此前反馈「设置里拦截时间不可改变」的根因之一）。
-    val stored = AIConfigStore.traceTimeoutSeconds
-    var value by remember { mutableStateOf(stored.toFloat()) }
-    androidx.compose.runtime.LaunchedEffect(stored) {
-        value = stored.toFloat()
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-    ) {
-        Text(
-            text = "拦截抓取时长",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 8.dp),
-        )
-        Text(
-            text = "运行时拦截抓取模块真实指令的时长（秒）",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        androidx.compose.material3.Slider(
-            value = value,
-            onValueChange = { value = it },
-            onValueChangeFinished = {
-                AIConfigStore.setTraceTimeoutSeconds(value.toInt())
-            },
-            valueRange = 3f..120f,
-            // steps = 区间内离散点数量；(120-3) = 117 个整数间隔，若要每秒一档则是 116 个点
-            steps = 116,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            text = "当前：${value.toInt()} 秒（默认 15 秒）",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 

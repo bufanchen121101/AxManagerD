@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -315,7 +316,7 @@ class RuntimeModuleService : Service() {
         super.onCreate()
         instance = this
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification(0))
+        startForegroundCompat(0)
     }
 
     override fun onDestroy() {
@@ -333,7 +334,7 @@ class RuntimeModuleService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START -> {
-                startForeground(NOTIFICATION_ID, buildNotification(statuses.count { it.state == RuntimeModuleState.RUNNING }))
+                startForegroundCompat(statuses.count { it.state == RuntimeModuleState.RUNNING })
                 startAll()
             }
             ACTION_RESCAN -> {
@@ -370,11 +371,14 @@ class RuntimeModuleService : Service() {
                 val old = prev[entry.id]
                 if (old != null && old.state.isLive) {
                     // 保留运行态，但刷新标记文件推导出来的静态字段
-                    // （enabled / hasWebUi / hasAction / 探测间隔）
+                    // （enabled / hasWebUi / hasAction / 作者版本简介 / 探测间隔）
                     old.copy(
                         enabled = entry.isEnabled,
                         hasWebUi = entry.hasWebUi,
                         hasAction = entry.hasAction,
+                        author = entry.author,
+                        version = entry.version,
+                        description = entry.description,
                         aliveCheckIntervalMs = entry.aliveCheckIntervalMs,
                     )
                 } else {
@@ -925,6 +929,28 @@ class RuntimeModuleService : Service() {
         val running = statuses.count { it.state == RuntimeModuleState.RUNNING }
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         runCatching { nm.notify(NOTIFICATION_ID, buildNotification(running)) }
+    }
+
+    /**
+     * 启动前台服务（带 foregroundServiceType）。
+     *
+     * 【v1.4.9 闪退修复】类型必须与 AndroidManifest 中本 service 声明的
+     * `android:foregroundServiceType` 严格一致（现为 `specialUse`）。
+     *
+     * 原为 `dataSync`：Android 14+ 对 dataSync 施加「累计 6 小时/天」硬配额，
+     * 而本服务是运行时模块的常驻守护（持续数小时），必然耗尽配额，随后
+     * `startForeground()` 抛 `ForegroundServiceStartNotAllowedException`，
+     * 进程再被 `ForegroundServiceDidNotStopInTimeException` 干掉。
+     *
+     * specialUse 无时长配额，适合「守护本应用自身长驻任务」的语义。
+     */
+    private fun startForegroundCompat(runningCount: Int) {
+        val notification = buildNotification(runningCount)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun createChannel() {

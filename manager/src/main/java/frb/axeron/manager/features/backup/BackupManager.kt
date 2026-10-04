@@ -16,7 +16,10 @@ import java.util.Locale
  * 后续方便用户还原。
  *
  * 设计要点：
- *  - **备份位置**：`/sdcard/AxManagerD/backup/`（用户可见、可手动拷走）。
+ *  - **备份位置**（v1.9.1 修正）：`Android/data/<pkg>/files/AxManagerD/backup/`
+ *    （应用专属外部目录：App 无需任何权限即可写，shell / 文件管理器可取走；
+ *     原方案的 `/sdcard/AxManagerD/backup/` 在 Android 10+ scoped storage 下
+ *     App 根本没有创建权限，导致「首次自动备份」与手动备份**必然失败**）。
  *  - **触发时机**：App 首次启动（SP 标记 [PREF_BACKED_UP] 未置位）自动执行一次；
  *    之后可在设置页手动「立即备份」/「从备份还原」。
  *  - **备份内容**：
@@ -32,11 +35,21 @@ import java.util.Locale
  */
 object BackupManager {
 
-    /** 备份根目录（手机存储，用户可见）。 */
-    fun backupRoot(): File = File("/sdcard/AxManagerD/backup")
+    /**
+     * 备份根目录。
+     *
+     * 【v1.9.1 BUG 修复】原实现固定 `/sdcard/AxManagerD/backup/`：
+     * App 属 `untrusted_app` + scoped storage，Android 10+ 对 `/sdcard` 根目录
+     * **没有写权限**（`<sdcard>/AxManagerD` 既不是应用专属目录也不是媒体集合），
+     * `mkdirs()` 必然返回 false → 备份永远失败（用户看到的是「备份失败」，
+     * 且「首次启动自动备份」每 次冷启动都会白跑一遍）。
+     * 现改用应用专属外部目录，与 [frb.axeron.manager.util.OverlayLog] 同一策略。
+     */
+    fun backupRoot(context: Context): File =
+        (context.getExternalFilesDir(null) ?: context.filesDir).resolve("AxManagerD/backup")
 
     /** 当前「最新」备份目录（每次备份生成带时间戳的子目录）。 */
-    fun latestRoot(): File = File(backupRoot(), "latest")
+    fun latestRoot(context: Context): File = File(backupRoot(context), "latest")
 
     private const val PREF = "axmanager_backup"
     private const val PREF_BACKED_UP = "first_backup_done"
@@ -77,7 +90,7 @@ object BackupManager {
      * @return true 成功。
      */
     fun backup(context: Context, reason: String = "手动备份"): Boolean = try {
-        val root = backupRoot()
+        val root = backupRoot(context)
         if (!root.exists() && !root.mkdirs()) {
             OverlayLog.w("backup: 无法创建备份目录 ${root.absolutePath}")
             return false
@@ -119,7 +132,7 @@ object BackupManager {
 
         // 4. 维护 latest 软链接风格副本（覆盖式，方便用户找）
         runCatching {
-            val latest = latestRoot()
+            val latest = latestRoot(context)
             if (latest.exists()) latest.deleteRecursively()
             dir.copyRecursively(latest, overwrite = true)
         }
@@ -146,11 +159,11 @@ object BackupManager {
      * @return 还原出的 APK 文件；失败返回 null。
      */
     fun restore(context: Context): File? = try {
-        val latest = latestRoot()
+        val latest = latestRoot(context)
         if (!latest.exists()) return null
         val apk = latest.listFiles()?.firstOrNull { it.name.endsWith(".apk") } ?: return null
 
-        val outDir = File(backupRoot(), "restore")
+        val outDir = File(backupRoot(context), "restore")
         if (!outDir.exists()) outDir.mkdirs()
         val dst = File(outDir, apk.name)
         apk.copyTo(dst, overwrite = true)
@@ -162,7 +175,8 @@ object BackupManager {
     }
 
     /** 是否存在可还原的备份。 */
-    fun hasBackup(): Boolean = latestRoot().let { it.exists() && (it.listFiles()?.isNotEmpty() == true) }
+    fun hasBackup(context: Context): Boolean =
+        latestRoot(context).let { it.exists() && (it.listFiles()?.isNotEmpty() == true) }
 
     // -----------------------------------------------------------------------
     // 内部

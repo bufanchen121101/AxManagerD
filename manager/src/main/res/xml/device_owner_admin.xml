@@ -22,4 +22,27 @@
         <disable-camera />
         <disable-keyguard-features />
     </uses-policies>
+    <!--
+      【v1.9.0 新增 · 修复「无法接收别人转移过来的设备所有者」】
+
+      为什么必须加这一行：
+      AOSP `DeviceAdminInfo` 只有在 device_admin.xml 里出现**空标签**
+      `<support-transfer-ownership />` 时才会把 `mSupportsTransferOwnership`
+      置为 true；而 `DevicePolicyManagerService#transferOwnership` 里有一道硬断言：
+
+          Preconditions.checkArgument(incomingDeviceInfo.supportsTransferOwnership(),
+                  "Provided target does not support ownership transfer.");
+
+      逐版本核对（aosp-mirror，标签解析行为完全一致，且要求标签必须为空）：
+        Android 13 (android-13.0.0_r1) DeviceAdminInfo.java:337/340
+        Android 14 (android-14.0.0_r1) DeviceAdminInfo.java:359/362
+        Android 15 (android-15.0.0_r1) DeviceAdminInfo.java:388/391
+        Android 16 (android-16.0.0_r1) DeviceAdminInfo.java:383/386
+      缺少本标签时，任何应用（如 OwnDroid）都无法把自己的 DO 身份转移给本应用，
+      必报 "Provided target does not support ownership transfer."。
+
+      注：本标签自 API 28 起可用，语义「本应用支持接收设备所有者/资料所有者的
+      身份转移」，仅声明能力，不产生任何额外权限。
+    -->
+    <support-transfer-ownership />
 </device-admin>

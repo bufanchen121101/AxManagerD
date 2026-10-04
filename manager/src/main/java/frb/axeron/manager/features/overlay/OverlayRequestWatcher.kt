@@ -93,6 +93,12 @@ object OverlayRequestWatcher {
             val result = mutableListOf<Request>()
             for (id in ids) {
                 if (excludeHandled && isHandled(id)) continue
+                // 第三期：未在 module.prop 声明 capabilities=overlay 的模块，
+                // 一律不弹授权窗（对应「其他模块不授权」）。
+                if (!OverlayPermissionStore.declaresOverlay(context, id)) {
+                    OverlayLog.w("跳过未声明 overlay 能力的模块申请: id=$id")
+                    continue
+                }
                 val p = OverlayPermissionStore.getPending(context, id) ?: continue
                 result.add(Request(moduleId = id, reason = p.first, requestedAt = p.second))
             }

@@ -83,6 +83,22 @@ data class RuntimeModuleStatus(
      */
     val hasAction: Boolean = false,
     /**
+     * 模块作者，对应 module.prop 的 author。
+     *
+     * 与 shell 模块（PluginItem 显示 plugin.prop.author）保持一致的展示方式。
+     */
+    val author: String = "",
+    /**
+     * 模块版本号，对应 module.prop 的 version。
+     */
+    val version: String = "",
+    /**
+     * 模块简介，对应 module.prop 的 description。
+     *
+     * 与 shell 模块一样在卡片上以多行省略方式展示。
+     */
+    val description: String = "",
+    /**
      * 存活探测间隔（毫秒）。
      *
      * 由模块在 module.prop 里用 aliveCheckIntervalMs 声明；

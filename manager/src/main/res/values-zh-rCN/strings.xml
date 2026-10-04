@@ -39,7 +39,7 @@
     <string name="plugin_update_json_empty">无</string>
     <string name="ignite">重载</string>
     <string name="what_is_ignite">什么是重载？</string>
-    <string name="what_is_ignite_msg"><![CDATA[重载是 AxManager 中替代重启的方式，您可以在主页右上角的关机按钮里选择重载]]></string>
+    <string name="what_is_ignite_msg"><![CDATA[重载是 AxManagerD 中替代重启的方式，您可以在主页右上角的关机按钮里选择重载]]></string>
     <string name="understand">我知道了</string>
     <string name="re_ignite_now">立刻重载</string>
     <string name="install">安装</string>
@@ -77,14 +77,14 @@
     <string name="connect_tcp_debugging">连接 TCP 端口</string>
     <string name="stop_tcp_debugging">停止 TCP 端口</string>
     <string name="enable_wireless_debugging">启用无线调试</string>
-    <string name="enable_wireless_debugging_msg">请在“开发者选项”中启用“无线调试”，当网络变化时，“无线调试”会自动禁用。\n\n注意，请勿禁用“开发者选项”或“USB 调试”，否则 AxManager 服务将停止。</string>
+    <string name="enable_wireless_debugging_msg">请在“开发者选项”中启用“无线调试”，当网络变化时，“无线调试”会自动禁用。\n\n注意，请勿禁用“开发者选项”或“USB 调试”，否则 AxManagerD 服务将停止。</string>
     <string name="open_developer_opt">开发者</string>
     <string name="step_by_step">步骤指南</string>
     <string name="instruction">操作说明</string>
     <string name="enable_notification">授予通知权限</string>
     <string name="start_pairing">开始配对</string>
     <string name="activate_by_root">直接激活（仅限拥有 Root 权限的设备）</string>
-    <string name="activate_by_root_msg"><![CDATA[此外，AxManager 还可以通过 Root 权限实现开机自启。如果未实现，请检查系统或 Root 管理器是否限制了 AxManager。<br>您可以参考%s。]]></string>
+    <string name="activate_by_root_msg"><![CDATA[此外，AxManagerD 还可以通过 Root 权限实现开机自启。如果未实现，请检查系统或 Root 管理器是否限制了 AxManagerD。<br>您可以参考%s。]]></string>
     <string name="adb_tcp_not_ready">端口未就绪 %d</string>
     <string name="adb_tcp_stopped">停止端口成功</string>
     <string name="failed_to_stop_adb_tcp">无法停止端口</string>
@@ -117,7 +117,7 @@
     <string name="install_backup">备份安装</string>
     <string name="install_backup_desc">安装到独立的备份目录并快照初始状态，卸载时可回滚改动。</string>
     <string name="export_running_log">导出运行日志</string>
-    <string name="export_running_log_desc">将 axeron/logs/ 下的所有 AxManager 运行日志复制到下载目录。</string>
+    <string name="export_running_log_desc">将 axeron/logs/ 下的所有 AxManagerD 运行日志复制到下载目录。</string>
     <string name="export_running_log_empty">没有可导出的运行日志</string>
     <string name="failed_to_save_log">保存日志失败：%s</string>
     <string name="ask_install_plugin">安装插件？</string>
@@ -133,9 +133,9 @@
     <string name="idle">空闲</string>
     <string name="support_me">支持作者</string>
     <string name="not_available_yet">暂不可用</string>
-    <string name="support_me_msg">AxManager 是完全免费且开源的。如果您觉得它有用，请关注该项目并考虑在 GitHub 上点亮 Star 。</string>
-    <string name="learn_more">关于 AxManager</string>
-    <string name="learn_more_msg">了解如何使用 AxManager 以及如何制作插件</string>
+    <string name="support_me_msg">AxManagerD 是完全免费且开源的。如果您觉得它有用，请关注该项目并考虑在 GitHub 上点亮 Star 。</string>
+    <string name="learn_more">关于 AxManagerD</string>
+    <string name="learn_more_msg">了解如何使用 AxManagerD 以及如何制作插件</string>
     <string name="updating">更新中…</string>
     <string name="server_updating_version" formatted="false"><![CDATA[更新中: %d → %d]]></string>
     <string name="version_pid" formatted="false">版本: %d | 进程ID: %d</string>
@@ -144,7 +144,7 @@
     <string name="home_need_fix">需要额外的步骤</string>
     <string name="home_need_fix_msg">点击查看修复方法</string>
     <string name="home_not_running">未激活</string>
-    <string name="home_not_running_msg">点击以激活 AxManager</string>
+    <string name="home_not_running_msg">点击以激活 AxManagerD</string>
     <string name="home_update">需要重启</string>
     <string name="new_version_available">发现新版本 %s，点击更新。</string>
     <string name="android_version">Android 版本</string>
@@ -157,7 +157,7 @@
     <string name="search_label_apps">搜索应用</string>
     <string name="quick_shell">快速终端</string>
     <string name="quick_shell_short">QShell</string>
-    <string name="quick_shell_not_supported">请先激活 AxManager</string>
+    <string name="quick_shell_not_supported">请先激活 AxManagerD</string>
     <string name="save">保存</string>
     <string name="exec">执行</string>
     <string name="send">分享</string>
@@ -177,7 +177,7 @@
     <string name="axeron_permission">AX-权限接管</string>
     <string name="axeron_permission_desc">使用基于 Shizuku-API 构建的 Ax-Environment 接管授权请求</string>
     <string name="tcp_mode">无线调试模式</string>
-    <string name="tcp_mode_desc">允许 AxManager 在没有 Wi-Fi 的情况下自动激活（AxManager 在开机后至少激活过一次）</string>
+    <string name="tcp_mode_desc">允许 AxManagerD 在没有 Wi-Fi 的情况下自动激活（AxManagerD 在开机后至少激活过一次）</string>
     <string name="invalid_port">端口必须介于 1024 和 65535 之间</string>
     <string name="reactive_to_apply">重新激活以应用更改</string>
     <string name="active_on_boot">开机自启</string>
@@ -186,18 +186,18 @@
     <string name="please_wait">请稍候…</string>
     <string name="view_command_message">`%s`\n\n还有其他注意事项，请确认您已阅读步骤指南。</string>
     <string name="activate_by_computer">通过电脑命令行激活</string>
-    <string name="activate_by_computer_desc">对于没有 Root 的设备，需要使用 ADB 激活 AxManager（需要连接电脑）。每次设备重启后都需要重复此操作。</string>
+    <string name="activate_by_computer_desc">对于没有 Root 的设备，需要使用 ADB 激活 AxManagerD（需要连接电脑）。每次设备重启后都需要重复此操作。</string>
     <string name="activate_by_wireless">通过无线调试激活</string>
-    <string name="activate_by_wireless_desc">在 Android 11 或更高版本上，您可以通过无线调试激活 AxManager，而无需连接到计算机。\n\n请先查看步骤指南。</string>
+    <string name="activate_by_wireless_desc">在 Android 11 或更高版本上，您可以通过无线调试激活 AxManagerD，而无需连接到计算机。\n\n请先查看步骤指南。</string>
     <string name="view_command">查看命令</string>
     <string name="share_command">分享命令</string>
-    <string name="active_on_boot_desc">设备开机时自动激活 AxManager（实验性功能，通过 Android 11+ 上的 Root/ADB 实现）</string>
+    <string name="active_on_boot_desc">设备开机时自动激活 AxManagerD（实验性功能，通过 Android 11+ 上的 Root/ADB 实现）</string>
     <string name="ignite_when_relog">自动重载</string>
-    <string name="ignite_when_relog_desc">启动 AxManager 时将尝试自动激活服务</string>
-    <string name="reset_path">重置 AxManager</string>
-    <string name="reset_path_desc">此操作将恢复 AxManager 至初始状态并删除您的所有插件</string>
-    <string name="ask_reset_path">立即重置 AxManager？</string>
-    <string name="ask_reset_path_desc">此操作将恢复 AxManager 至初始状态并删除您的所有插件\n\n目录 %s</string>
+    <string name="ignite_when_relog_desc">启动 AxManagerD 时将尝试自动激活服务</string>
+    <string name="reset_path">重置 AxManagerD</string>
+    <string name="reset_path_desc">此操作将恢复 AxManagerD 至初始状态并删除您的所有插件</string>
+    <string name="ask_reset_path">立即重置 AxManagerD？</string>
+    <string name="ask_reset_path_desc">此操作将恢复 AxManagerD 至初始状态并删除您的所有插件\n\n目录 %s</string>
     <string name="reset">重置</string>
     <string name="settings_editor">设置编辑器</string>
     <string name="developer_and_maintainer">开发者 | 维护者</string>
@@ -226,14 +226,102 @@
 
     <!-- Device Owner / Dhizuku activation -->
     <string name="activate_permission_group">激活方式</string>
-    <string name="activate_permission_group_desc">选择授予 AxManager 系统级权限的方式，不同方式提供的能力有所差异。</string>
+    <string name="activate_permission_group_desc">选择授予 AxManagerD 系统级权限的方式，不同方式提供的能力有所差异。</string>
+
+    <!-- ===== 三段式分区标题（授权 / 激活） ===== -->
+    <string name="section_title_authorization">授权</string>
+    <string name="section_desc_authorization">授予 AxManagerD 系统级权限。以下每一项都是独立授权，可单独授予或撤销。</string>
+    <string name="section_title_activation">激活</string>
+    <string name="section_desc_activation">启动 Axeron 服务。以下任意一种方式均可，效果都是让服务运行起来。</string>
+
+    <!-- ===== 新权限路径：DP + WS ===== -->
+    <string name="new_perm_section">新权限路径（DP + WS）</string>
+    <string name="new_perm_dp_role">DP 角色已激活</string>
+    <string name="new_perm_ws">WRITE_SECURE_SETTINGS 已授予</string>
+    <string name="new_perm_dp_active_label">已用 DP 角色激活</string>
+    <string name="app_manage_title">软件管理</string>
+    <string name="runtime_log">运行日志</string>
+    <string name="runtime_log_desc">查看 / 复制 / 导出 AxManagerD 运行日志（模块安装、权限路由、环境注入）。</string>
+    <string name="runtime_log_refresh">刷新</string>
+    <string name="runtime_log_copy">复制全部</string>
+    <string name="runtime_log_clear">清空</string>
+    <string name="runtime_log_activation">激活诊断</string>
+    <string name="runtime_log_snapshot">环境快照</string>
+    <string name="runtime_log_logcat">系统日志</string>
+    <string name="runtime_log_export">导出日志</string>
+    <string name="runtime_log_copied">日志已复制到剪贴板</string>
+    <string name="runtime_log_cleared">日志已清空</string>
+    <string name="runtime_log_failed">导出失败</string>
+    <string name="runtime_log_empty">暂无日志。请先复现问题，再点「刷新」。</string>
+    <string name="runtime_log_path">日志文件：%1$s</string>
+    <string name="app_manage_entry_desc">冻结 / 挂起 / 隐藏 / 卸载应用（DO · DP · Shell）</string>
+    <string name="new_perm_section_desc">适用于砍掉「设备所有者 / 资料所有者」的国产 ROM。通过 shell 授予 DEVICE_POLICY_MANAGEMENT 角色（DP）与 WRITE_SECURE_SETTINGS（WS），解锁 73 项系统权限，包括静默管理设备管理员、读写任意系统设置。</string>
+    <string name="new_perm_dp_label">DP · 设备策略管理角色</string>
+    <string name="new_perm_ws_label">WS · 写安全设置</string>
+    <string name="new_perm_mda_label">MANAGE_DEVICE_ADMINS</string>
+    <string name="new_perm_granted">已授予</string>
+    <string name="new_perm_not_granted">未授予</string>
+    <string name="new_perm_grant_dp">用 Shizuku 授予 DP</string>
+    <string name="new_perm_revoke_dp">撤销 DP</string>
+    <!-- 【v1.9.0 新增】两张 DO 卡片只保留「撤销 DP 权限」入口（原「移除设备所有者」已移除） -->
+    <string name="new_perm_revoke_dp_desc">将经 Shizuku 执行撤销脚本，回收本应用已获得的「设备策略管理（DP）」角色。若当前并未授予，则不会产生任何影响。</string>
+    <string name="new_perm_revoke_dp_ok">DP 权限已撤销</string>
+    <string name="new_perm_revoke_dp_failed">撤销 DP 失败：%s</string>
+    <string name="new_perm_view_script">查看 / 复制 Shell 指令</string>
+    <string name="new_perm_script_title">DP 授予指令</string>
+    <string name="new_perm_script_desc">该脚本执行三步：开启角色资格校验绕过 → 添加角色持有者 → 还原绕过开关。执行期间会临时改动一个全局系统开关（bypass）。</string>
+    <string name="new_perm_shizuku_required">授予该角色需要 Shizuku（以 shell 身份执行 cmd role），请先授予 Shizuku 权限。</string>
+    <string name="new_perm_grant_ok">DP 授予成功</string>
+    <string name="new_perm_grant_failed">授予失败：%s</string>
+    <string name="new_perm_revoke_ok">已撤销 DP</string>
+    <!-- DP + Shizuku 联合激活 Device Owner -->
+    <string name="dpdo_section">激活设备所有者（DP + Shizuku · 走 ADB 分支）</string>
+    <string name="dpdo_section_desc">先授予 DEVICE_POLICY_MANAGEMENT 角色（DP），再由 Shizuku 以 shell UID（等同 ADB 身份）执行官方两步 dpm 指令：「dpm set-active-admin」→「dpm set-device-owner」。因为 shell UID 被系统视为 ADB，本路径**会检查账户与多用户**（首次失败时应用会自动自救，见下方说明）。适用于已完成开机向导的设备。前置条件：Shizuku 运行中、release 包。</string>
+    <string name="dpdo_status_dp_role">DP · 设备策略管理角色</string>
+    <string name="dpdo_status_shizuku">Shizuku（shell / ADB 身份）</string>
+    <string name="dpdo_status_device_owner">设备所有者</string>
+    <!-- 【v1.6.0】非 ADB 直连通道状态行 -->
+    <string name="dpdo_status_direct_channel">直连通道权限（DP 角色带来的 MAPDO）</string>
+    <string name="dpdo_direct_no_account_needed">本路径以应用自身身份运行（非 ADB 分支），**完全不读取账户** —— 无需删除任何账户或隐藏用户。它唯一的前置条件是「设备尚未完成开机向导」；若你的设备已完成向导，本应用会自动临时关闭这道闸几秒，激活一结束就恢复原状，全程不删任何账户。</string>
+    <string name="dpdo_direct_accounts_info">当前设备状态 —— 账户数：%1$d，用户数：%2$d（仅供参考，非 ADB 路径不读这两项）</string>
+    <string name="dpdo_version_unsupported">当前安卓版本不支持。DEVICE_POLICY_MANAGEMENT 角色自 Android 13（API %1$d）引入，请改用下方的 Shizuku / Dhizuku 激活入口。</string>
+    <string name="dpdo_precondition_title">前置条件</string>
+    <string name="dpdo_precondition_accounts">设备账户数：%1$d</string>
+    <string name="dpdo_precondition_users">设备用户数：%1$d</string>
+    <string name="dpdo_precondition_hint">前置条件未满足。请删除全部账户（设置 → 账户；系统账户可直接退出），并删除所有工作资料 / 克隆 / 隐私空间，只保留机主用户后重试。刚删除账户时请等待约 10 秒让系统重新统计。</string>
+    <string name="dpdo_activate">用 DP + Shizuku 激活设备所有者</string>
+    <string name="dpdo_deactivate">移除设备所有者</string>
+    <string name="dpdo_activate_ok">设备所有者已激活</string>
+    <string name="dpdo_activate_failed">激活失败：%s</string>
+    <string name="dpdo_deactivate_ok">设备所有者已移除</string>
+    <!-- ===== 【v1.6.1】卡片 1 自救说明 + 卡片 2 非 ADB 直连 ===== -->
+    <string name="dpdo_rescue_hint">本路径以 shell 身份运行（ADB 分支），因此会检查账户与多用户。若首次激活失败，应用会自动删除隐藏用户 999，并临时冻结持有账户的「非系统应用」，随后重试并自动解冻。一句话：本卡能替你清掉「账户」这道闸，但清不掉「已开机向导」这道闸。</string>
+    <string name="dpdo_direct_section">激活设备所有者（无需删账号）</string>
+    <string name="dpdo_direct_section_desc">以应用自身身份直连系统服务激活设备所有者（无需删除任何账号）：先点「第一步：准备」经 Shizuku 把 user_setup_complete 置 0（打开向导闸），再点「激活」执行 forceUpdateUserSetupComplete → setActiveAdmin → setDeviceOwner，激活结束后立即恢复为 1（无论成功与否）。该分支**完全不读取账户**，账号可以原样保留。需要 Shizuku。</string>
+    <string name="dpdo_direct_danger_hint">操作顺序：先点「第一步：准备」（把 user_setup_complete 临时置 0），确认「已就绪」后再点「激活」；「激活」按钮在准备完成前一直是灰的。\n注意：本方式目前**仅在 Android 13（API 33）真机实测通过**，其他安卓版本（14/15/16/17）尚未验证，可能无效或行为异常。\n准备期间系统会临时认为「本机尚未完成开机向导」，这几秒内三键导航的「主页/最近任务」键可能失灵（返回键与全屏手势导航不受影响）；激活结束、user_setup_complete 恢复为 1 后立即正常。\n全程不删除账号、不清数据，但请确保电量充足、过程中不要强制关机或强退应用。</string>
+    <string name="dpdo_direct_switch_title">一键激活</string>
+    <string name="dpdo_direct_switch_desc">执行非 ADB 直连激活（无需删账号）。请先点上面的「第一步：准备」打开向导闸，再点本按钮激活；无论成败都会立即把 user_setup_complete 恢复为 1。需要 Shizuku。</string>
+    <string name="dpdo_direct_gate_prepare">第一步：准备（打开向导闸）</string>
+    <string name="dpdo_direct_gate_prepare_desc">经 Shizuku 把 user_setup_complete 临时置为 0。这一步只「开门」，不执行激活；完成后再点下面的「激活」。需要 Shizuku。</string>
+    <string name="dpdo_direct_gate_open">已就绪：向导闸已打开（user_setup_complete=0），可以点「激活」。</string>
+    <string name="dpdo_direct_gate_closed">未就绪：向导闸尚未打开，请先点上面的「第一步：准备」。「激活」按钮在就绪前不可点击。</string>
+    <string name="dpdo_direct_activate">激活</string>
+    <string name="dpdo_direct_role_granted_perm_missing">DP 角色已授予，但它带来的 MANAGE_PROFILE_AND_DEVICE_OWNERS 权限尚未生效。常见原因：① 角色刚授予、权限表尚未刷新（通常数秒内落地）；② 应用清单未声明该权限（旧版本遗留，重装新版即可）。点「激活」可查看具体原因。</string>
+    <string name="dpdo_direct_copy_pc_cmd">查看激活指令</string>
+    <!-- 【v1.6.7 重做】卡片 2 的指令弹窗内容（与「通过电脑命令行激活」的 view_command_message 同构） -->
+    <string name="dpdo_direct_cmd_message">`%s`\n\n请按注释分三段执行：① 在电脑上执行准备命令；② 回到手机，在本卡片点「激活」（该步必须由应用自身完成，电脑端无法代替）；③ 激活结束后回到电脑执行恢复命令。切勿把 ① 和 ③ 整段一次性粘贴，否则会在激活之前就把向导闸关回 1，导致激活失败。</string>
+    <!-- 【v1.6.5 新增 / v1.6.6 语义更新】卡片 2 的注意事项（向导已完成时显示在卡片上） -->
+    <string name="dpdo_direct_setup_done_hint">本设备已完成开机向导 —— 这是非 ADB 分支唯一的硬闸。本应用会自动处理：临时把 user_setup_complete 置 0（经 Shizuku）→ 激活 → 无论成败都恢复为 1。置 0 期间三键导航的「主页 / 最近任务」键会暂时失灵（返回键可用，全屏手势导航不受影响），恢复后立即正常；全程不删除任何账户或用户。</string>
+    <string name="dpdo_script_title">DP + Shizuku 激活指令</string>
+    <string name="dpdo_script_desc">该脚本执行官方 dpm 工具的两步命令：先「dpm set-active-admin」，再「dpm set-device-owner」。Shizuku 以 shell UID 运行它，AOSP 将 shell UID 与 ADB 视为同一身份（isAdb = shell 或 root UID）。</string>
+
     <string name="shizuku_section">Shizuku 权限</string>
     <string name="shizuku_section_desc">委托给运行中的 Shizuku 服务，让其他应用通过 Shizuku API 访问 Axeron 的高权限环境。</string>
     <string name="shizuku_grant">授予 Shizuku 权限</string>
     <string name="shizuku_granted">已授予 Shizuku 权限</string>
     <string name="shizuku_revoke">撤销 Shizuku 权限</string>
     <string name="dhizuku_section">Dhizuku / 设备所有者</string>
-    <string name="dhizuku_section_desc">激活设备所有者，让 AxManager（及其模块）在无 Root 的情况下拥有系统级能力。</string>
+    <string name="dhizuku_section_desc">激活设备所有者，让 AxManagerD（及其模块）在无 Root 的情况下拥有系统级能力。</string>
     <string name="dhizuku_grant">申请 Dhizuku 授权</string>
     <string name="dhizuku_granted">已获得 Dhizuku 授权</string>
     <string name="dhizuku_not_granted">未获得 Dhizuku 授权</string>
@@ -266,10 +354,10 @@
     <string name="other_permission_config">其他权限配置</string>
     <!-- Keep Alive -->
     <string name="keep_alive">后台保活</string>
-    <string name="keep_alive_desc">保持 AxManager 在后台运行，避免被系统杀死（需要设备所有者权限）</string>
-    <string name="keep_alive_title">AxManager 正在运行</string>
+    <string name="keep_alive_desc">保持 AxManagerD 在后台运行，避免被系统杀死（需要设备所有者权限）</string>
+    <string name="keep_alive_title">AxManagerD 正在运行</string>
     <string name="keep_alive_channel">后台保活</string>
-    <string name="keep_alive_channel_desc">让 AxManager 在后台保持运行</string>
+    <string name="keep_alive_channel_desc">让 AxManagerD 在后台保持运行</string>
 
     <!-- Xposed / LSP 模块注入 -->
     <string name="xposed">Xposed</string>
@@ -583,7 +671,7 @@
     <string name="shizuku_not_granted">未授予 Shizuku 权限</string>
     <string name="shizuku_not_running">Shizuku 未运行，请先启动 Shizuku。</string>
     <string name="dhizuku_request_permission_title">是否授予「%s」设备所有者权限？</string>
-    <string name="dhizuku_request_permission_desc">该应用可通过 AxManager 执行设备所有者（Dhizuku 兼容）相关操作。请仅授权给可信应用。</string>
+    <string name="dhizuku_request_permission_desc">该应用可通过 AxManagerD 执行设备所有者（Dhizuku 兼容）相关操作。请仅授权给可信应用。</string>
     <string name="dhizuku_allow">允许</string>
     <string name="dhizuku_deny">拒绝</string>
     <string name="dhizuku_permission_manage">管理设备所有者授权</string>
@@ -599,19 +687,19 @@
     <string name="device_owner_removing">正在移除…</string>
     <string name="device_owner_removed">设备所有者已移除，应用恢复为普通权限运行。</string>
     <string name="device_owner_remove_failed">移除失败：%s。可尝试下方的兜底指令。</string>
-    <string name="device_owner_remove_confirm_message">此操作将解除 AxManager 的设备所有者特权，部分高级功能在重新激活前将不可用。确定继续？</string>
+    <string name="device_owner_remove_confirm_message">此操作将解除 AxManagerD 的设备所有者特权，部分高级功能在重新激活前将不可用。确定继续？</string>
     <string name="device_owner_fallback_show">显示兜底指令</string>
     <string name="device_owner_fallback_hide">隐藏兜底指令</string>
-    <string name="device_owner_remove_fallback_desc">若应用内移除在你的设备上无效，可在 adb shell 中执行以下指令，然后重启 AxManager 以刷新状态。</string>
+    <string name="device_owner_remove_fallback_desc">若应用内移除在你的设备上无效，可在 adb shell 中执行以下指令，然后重启 AxManagerD 以刷新状态。</string>
     <string name="device_owner_remove_fallback_command">adb shell dpm remove-active-admin %s/%s</string>
     <string name="device_owner_remove_command">兜底指令</string>
     <!-- Device Owner 增强激活（用设备所有者替代 ADB 激活） -->
     <string name="activate_by_owner">通过设备所有者激活</string>
-    <string name="activate_by_owner_desc">把 AxManager 设为设备所有者，让它自行打开 ADB 并通过 127.0.0.1 回连。此方式替代电脑 ADB 激活，只需设置一次。</string>
-    <string name="owner_activate_prereq_title">第 1 步 · 将 AxManager 设为设备所有者</string>
+    <string name="activate_by_owner_desc">把 AxManagerD 设为设备所有者，让它自行打开 ADB 并通过 127.0.0.1 回连。此方式替代电脑 ADB 激活，只需设置一次。</string>
+    <string name="owner_activate_prereq_title">第 1 步 · 将 AxManagerD 设为设备所有者</string>
     <string name="owner_activate_prereq_desc">在电脑（或已有的 shell）中执行一次以下指令：</string>
     <string name="owner_activate_adb_title">第 2 步 · 打开 ADB 并连接</string>
-    <string name="owner_activate_adb_desc">AxManager 将以设备所有者权限打开 ADB（含无线调试），重启 adbd 进入 TCP 模式，然后连接 127.0.0.1 获取 shell。</string>
+    <string name="owner_activate_adb_desc">AxManagerD 将以设备所有者权限打开 ADB（含无线调试），重启 adbd 进入 TCP 模式，然后连接 127.0.0.1 获取 shell。</string>
     <string name="owner_activate_start">打开 ADB 并激活</string>
     <string name="owner_activate_running">正在打开 ADB…</string>
     <string name="owner_activate_need_owner">需要设备所有者权限，请先完成第 1 步。</string>
@@ -637,18 +725,18 @@
     <string name="lockscreen_org_save">应用</string>
     <!-- 开机自动启动（无线调试预热，v1.6.1） -->
     <string name="boot_start_switch">设备所有者自启动</string>
-    <string name="boot_start_switch_desc">开启后会生成并记住一个固定 ADB 端口。重启后设备所有者会自动保持无线调试开启，进入 AxManager 点击「激活」即可直接连接该端口，无需再搜索。需要设备所有者权限。</string>
+    <string name="boot_start_switch_desc">开启后会生成并记住一个固定 ADB 端口。重启后设备所有者会自动保持无线调试开启，进入 AxManagerD 点击「激活」即可直接连接该端口，无需再搜索。需要设备所有者权限。</string>
     <string name="boot_start_channel_name">开机启动</string>
-    <string name="boot_start_channel_desc">开机后自动恢复 AxManager 时显示进度。</string>
-    <string name="boot_start_notification_title">正在启动 AxManager</string>
+    <string name="boot_start_channel_desc">开机后自动恢复 AxManagerD 时显示进度。</string>
+    <string name="boot_start_notification_title">正在启动 AxManagerD</string>
     <string name="boot_start_enabling_adb">正在打开 ADB…</string>
     <string name="boot_start_discovering_port">正在发现无线调试端口…</string>
     <string name="boot_start_connecting">正在连接 127.0.0.1…</string>
     <string name="boot_start_retrying">正在重试…</string>
-    <string name="boot_start_success">AxManager 已启动。</string>
-    <string name="boot_start_failed">开机自启失败。点击打开 AxManager 手动激活。</string>
+    <string name="boot_start_success">AxManagerD 已启动。</string>
+    <string name="boot_start_failed">开机自启失败。点击打开 AxManagerD 手动激活。</string>
     <string name="boot_start_autostart_title">允许自启动</string>
-    <string name="boot_start_autostart_desc">部分系统会拦截开机广播，请到自启动白名单中允许 AxManager。</string>
+    <string name="boot_start_autostart_desc">部分系统会拦截开机广播，请到自启动白名单中允许 AxManagerD。</string>
     <string name="boot_start_autostart_action">打开自启动设置</string>
 
     <!-- 模块核心文件修改权限（Overlay） -->
@@ -678,7 +766,7 @@
     <string name="backup_manage">备份与还原</string>
     <string name="backup_desc_none">尚未备份（首次启动会自动备份一份到手机存储）</string>
     <string name="backup_desc_last">上次备份：%1$s</string>
-    <string name="backup_path_hint">备份位置：/sdcard/AxManagerD/backup/</string>
+    <string name="backup_path_hint">备份位置：%1$s</string>
     <string name="backup_now">立即备份</string>
     <string name="backup_restore">从备份还原</string>
     <string name="backup_done">备份完成</string>
@@ -694,6 +782,9 @@
     <string name="overlay_need_disclaimer">请先阅读并同意免责声明</string>
     <string name="overlay_need_global_switch">请先开启全局开关</string>
     <string name="overlay_axeron_not_running">Axeron 未激活，无法管理模块权限</string>
+    <string name="overlay_install_declares">该模块声明需要修改核心文件</string>
+    <string name="overlay_install_declares_desc">它在 module.prop 里声明了 capabilities=overlay。授权后，该模块可替换 assets 目录下的任意文件（含 lspatch.jar 这类可执行文件）。</string>
+    <string name="overlay_install_grant_now">安装时授予权限</string>
 
     <!-- 临时DO / 权限转移 -->
     <string name="temp_do_title">一键激活设备所有者</string>
@@ -713,4 +804,19 @@
     <string name="owner_transfer_confirm">确定将设备所有者转移给 %s 吗？</string>
     <string name="owner_transfer_success">转移成功</string>
     <string name="owner_transfer_failed">转移失败：%s</string>
+
+    <!-- Profile Owner 独立卡片 / 转移增强 -->
+    <string name="temp_profile_owner_title">一键激活资料所有者</string>
+    <string name="temp_profile_owner_desc">通过 shell 指令一键激活资料所有者（Profile Owner），无需电脑。资料所有者仅作用于当前用户，且与设备所有者互斥。</string>
+    <string name="temp_profile_owner_active">已生效</string>
+    <string name="temp_profile_owner_active_label">资料所有者已激活</string>
+    <string name="temp_profile_owner_inactive">未生效</string>
+    <string name="temp_profile_owner_copy">复制指令</string>
+    <string name="temp_profile_owner_activate_by_shizuku">用 Shizuku 激活</string>
+    <string name="shizuku_activate_owner_desc">整机完整控制：可管理所有用户、全局安装卸载应用、设置策略。</string>
+    <string name="shizuku_activate_profile_owner_desc">仅当前用户：只能管理本用户范围内的策略与应用，权限范围较小。</string>
+    <string name="owner_transfer_target_label">目标应用</string>
+    <string name="owner_transfer_none_hint">未找到具备设备管理接收器的应用。请先安装一个（如 Dhizuku）再进行转移。</string>
+    <string name="owner_transfer_refresh">刷新列表</string>
+    <string name="temp_do_prereq">前置条件：设备上无任何账户，且仅有一个用户。不满足时系统会给出明确错误。</string>
 </resources>

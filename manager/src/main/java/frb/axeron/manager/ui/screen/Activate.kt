@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import frb.axeron.manager.owner.DpDoEscalation
 import rikka.shizuku.Shizuku
 import android.provider.Settings
 import android.service.quicksettings.TileService
@@ -30,11 +31,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
@@ -43,12 +47,15 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Adb
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -59,11 +66,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,8 +86,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
@@ -95,6 +109,8 @@ import frb.axeron.manager.ui.component.rememberLoadingDialog
 import frb.axeron.manager.ui.util.ClipboardUtil
 import frb.axeron.manager.ui.viewmodel.ActivateViewModel
 import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
+// 【v1.4.7】提权界面路由（compose-destinations 生成，位于 generated.destinations 包）。
+import com.ramcosta.composedestinations.generated.destinations.ElevateScreenDestination
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -108,16 +124,17 @@ private const val REQUEST_CODE_SHIZUKU = 7
 fun ActivateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlobal) {
     val activateViewModel = viewModelGlobal.activateViewModel
     val axeronInfo = activateViewModel.axeronInfo
+    val activateStatus = activateViewModel.activateStatus
 
-    // 【v1.1.6 修复】激活后再次进入本页时，服务已在运行，会立即命中 popBackStack()。
-    // 但 LaunchedEffect 在首帧组合期即执行，此时本页的导航事务尚未提交，
-    // 直接 pop 会操作到"正在入栈"的 back stack，触发导航状态崩溃（表现为进入即闪退）。
-    // 用 remember 标记保证只回退一次，并延迟到本页入栈稳定后再执行。
-    val popped = remember { mutableStateOf(false) }
-    LaunchedEffect(axeronInfo) {
-        if (axeronInfo.isRunning() && !axeronInfo.isNeedUpdate() && !popped.value) {
-            popped.value = true
-            delay(600)
+    // 【跳转修复】同时监听 axeronInfo 与 activateStatus：
+    // activation 成功的权威信号是 activateStatus == Running（awaitRunning() 用的也是它），
+    // 而 axeronInfo 只是它的一份快照，个别情况下（如 data class 相等、先 Running 后补齐）
+    // 单独监听 axeronInfo 可能不触发重组，导致「激活成功却不跳回主页」。
+    // 这里任一信号满足条件即返回上一页；不加 delay / popped 标记（那会造成崩溃）。
+    LaunchedEffect(axeronInfo, activateStatus) {
+        val running = activateStatus is ActivateViewModel.ActivateStatus.Running ||
+                (axeronInfo.isRunning() && !axeronInfo.isNeedUpdate())
+        if (running) {
             navigator.popBackStack()
         }
     }
@@ -180,17 +197,44 @@ fun ActivateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 }
             }
 
+            // ─────────────────────────────────────────────────────────────
+            // 【v1.2.0 UI 分区】本页分为两大区：
+            //   ① 授权区（本区）：Shizuku / Dhizuku / DO / PO / 新权限（DP+WS）等一切"权限获取"
+            //   ② 激活区（下方）：默认激活方式与各种激活入口
+            // 注意：本次仅调整顺序 + 新增分区标题卡片，原有卡片一个不删、元件不新建页面。
+            // ─────────────────────────────────────────────────────────────
+
+            SectionHeader(
+                titleRes = R.string.section_title_authorization,
+                descRes = R.string.section_desc_authorization,
+            )
+            PermissionSections(activateViewModel)
+            NewPermissionPathCard(navigator, activateViewModel)
+            // 【v1.6.1】卡片 2：非 ADB 直连激活（无需 Shizuku 宿主身份、无需清账户）。
+            // 按需求放在「授权区」，紧跟卡片 1 之后。
+            DirectActivationCard(navigator, activateViewModel)
+            // 【v1.4.6 UI】「临时设备所有者」「临时资料所有者」两张卡从激活区上移到授权区：
+            // 它们本质是「获取权限身份」的手段，而不是「启动服务」的激活入口，放在授权区更顺。
+            // 本次仅移动调用位置，卡片内部实现一行未改。
+            TempDeviceOwnerCard(activateViewModel)
+            TempProfileOwnerCard(activateViewModel)
+            // 【本次需求】「设备所有者权限转移」卡从激活区上移到授权区末尾。
+            // 仅调整调用位置，卡片内部实现一行未改。
+            OwnerTransferCard(activateViewModel)
+
+            SectionHeader(
+                titleRes = R.string.section_title_activation,
+                descRes = R.string.section_desc_activation,
+            )
+            // —— 激活区：DO/PO 激活入口（v1.3.0：由「授权区」下移至此） ——
+            DeviceOwnerActivateCard(activateViewModel)
+            RootCard(navigator, activateViewModel)
             if (AdbEnvironment.getAdbTcpPort() > 0) {
                 TcpDebuggingCard(navigator, activateViewModel)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 WirelessDebuggingCard(navigator, activateViewModel)
             }
-            RootCard(navigator, activateViewModel)
-            DeviceOwnerActivateCard(activateViewModel)
-            TempDeviceOwnerCard(activateViewModel)
-            OwnerTransferCard(activateViewModel)
-            PermissionSections(activateViewModel)
             ComputerCard()
         }
     }
@@ -255,6 +299,15 @@ fun TcpDebuggingCard(
 
                             if (ai is AdbStateInfo.Success) {
                                 activateViewModel.awaitRunning()
+                                // 【v2.0.1】连接动作成功 ≠ 激活完成：若 Axeron 服务仍未就绪，
+                                // 如实再提示一次，避免「只弹成功却原地不动、也不跳转」误导用户。
+                                if (activateViewModel.activateStatus !is ActivateViewModel.ActivateStatus.Running) {
+                                    Toast.makeText(
+                                        context,
+                                        "已连上 ADB，但 Axeron 服务未就绪（未跳转）。请重试，或查看日志标签 AxManagerBinder。",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
                             }
                             activateViewModel.setTryToActivate(false)
                         }
@@ -646,11 +699,15 @@ fun TempDeviceOwnerCard(activateViewModel: ActivateViewModel) {
     val confirmDialog = rememberConfirmDialog()
 
     // 进入页面时刷新一次临时 DO 状态
-    LaunchedEffect(Unit) {
+    // 【修复④】改为 ON_RESUME 触发：撤销 DO/PO 后从外部页面返回时，
+    // 卡片能重新查询真实状态，避免仍显示「已生效」。
+    OnResumeEffect {
         activateViewModel.refreshTempDoState()
     }
 
-    val cmd = activateViewModel.tempDoCommand
+    // 【v1.9.0】展示 / 复制统一为「电脑端指令」（带 adb shell 前缀）；
+    // 实际执行仍由 ViewModel 内部用裸命令交 Shizuku 执行，两条路径隔离。
+    val cmd = activateViewModel.tempDoPcCommand
     val title = stringResource(R.string.temp_do_title)
     val copied = stringResource(R.string.copied)
     val copy = stringResource(R.string.copy)
@@ -790,6 +847,142 @@ fun TempDeviceOwnerCard(activateViewModel: ActivateViewModel) {
  * 设备管理接收器的应用（`dpm.transferOwnership`，Android 9+）。
  */
 @Composable
+fun TempProfileOwnerCard(activateViewModel: ActivateViewModel) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val loadingDialog = rememberLoadingDialog()
+    // 【修复④】改为 ON_RESUME 触发：撤销 DO/PO 后从外部页面返回时，
+    // 卡片能重新查询真实状态，避免仍显示「已生效」。
+    OnResumeEffect {
+        activateViewModel.refreshProfileOwnerState()
+    }
+    // 【v1.9.0】展示 / 复制统一为电脑端指令（带 adb shell 前缀），执行仍走裸命令
+    val cmd = activateViewModel.tempProfileOwnerPcCommand
+    val title = stringResource(R.string.temp_profile_owner_title)
+    val copied = stringResource(R.string.copied)
+    // 【v1.9.0】统一交互：复制前先弹窗展示指令
+    // （此前本卡片是「点击直接复制」且弹窗标题缺失，与同页其它卡片不一致）
+    val confirmDialog = rememberConfirmDialog()
+    val copyLabel = stringResource(R.string.copy)
+    val cancelLabel = stringResource(R.string.cancel)
+    ElevatedCard(
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.AccountCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(modifier = Modifier.size(20.dp))
+            Text(
+                text = stringResource(R.string.temp_profile_owner_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.size(12.dp))
+
+            Surface(
+                color = if (activateViewModel.isProfileOwnerActive) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                shape = MaterialTheme.shapes.small
+            ) {
+                Text(
+                    text = stringResource(
+                        if (activateViewModel.isProfileOwnerActive) {
+                            R.string.temp_profile_owner_active
+                        } else {
+                            R.string.temp_profile_owner_inactive
+                        }
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (activateViewModel.isProfileOwnerActive) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+            Spacer(modifier = Modifier.size(16.dp))
+            Text(
+                text = cmd,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.size(20.dp))
+
+            Button(
+                onClick = {
+                    // 【v1.9.0】统一为「点击 → 弹窗展示指令 → 确认后复制」
+                    scope.launch {
+                        val result = confirmDialog.awaitConfirm(
+                            title = title,
+                            content = cmd,
+                            markdown = false,
+                            confirm = copyLabel,
+                            dismiss = cancelLabel
+                        )
+                        if (result == ConfirmResult.Confirmed) {
+                            if (ClipboardUtil.put(ctx, cmd)) {
+                                Toast.makeText(ctx, copied, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.temp_profile_owner_copy))
+            }
+            Spacer(modifier = Modifier.size(8.dp))
+
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        loadingDialog.withLoading {
+                            val r = activateViewModel.activateProfileOwnerViaShizuku()
+                            val msg = r.getOrElse { it.message ?: it.toString() }
+                            Toast.makeText(ctx, msg.ifBlank { "OK" }, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.temp_profile_owner_activate_by_shizuku))
+            }
+        }
+    }
+}
+
+@Composable
 fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -845,10 +1038,24 @@ fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
 
             if (targets.isEmpty()) {
                 Text(
-                    text = stringResource(R.string.owner_transfer_no_target),
+                    text = stringResource(R.string.owner_transfer_none_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(modifier = Modifier.size(12.dp))
+                OutlinedButton(
+                    onClick = { activateViewModel.refreshTransferTargets() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        modifier = Modifier
+                            .padding(end = 10.dp)
+                            .size(16.dp),
+                        contentDescription = null
+                    )
+                    Text(stringResource(R.string.owner_transfer_refresh))
+                }
             } else {
                 targets.forEach { t ->
                     OutlinedButton(
@@ -878,7 +1085,17 @@ fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
                     ) {
-                        Text(t.label)
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(t.label)
+                            Text(
+                                text = t.packageName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
@@ -990,6 +1207,28 @@ fun ComputerCard() {
     }
 }
 
+/**
+ * 【修复④】在每次界面回到前台（ON_RESUME）时执行 [onResume]。
+ *
+ * 用于替代 `LaunchedEffect(Unit)`：后者只在 Composable 首次进入组合时执行一次，
+ * 导致「撤销 DO/PO 或外部撤销 Shizuku 授权后返回本页」时状态不刷新、
+ * 仍显示旧的「已生效 / 已授权」。
+ *
+ * 仅使用 androidx.lifecycle 核心库（LocalLifecycleOwner + LifecycleEventObserver），
+ * 不额外引入 lifecycle-runtime-compose 依赖，也不改动任何公共组件。
+ */
+@Composable
+private fun OnResumeEffect(onResume: () -> Unit) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) onResume()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+}
+
 @Composable
 fun DeviceOwnerActivateCard(activateViewModel: ActivateViewModel) {
     val context = LocalContext.current
@@ -1000,7 +1239,9 @@ fun DeviceOwnerActivateCard(activateViewModel: ActivateViewModel) {
     ) { }
 
     // 进入界面时刷新一次真实 Owner 状态，避免激活后回到本页仍显示未激活。
-    LaunchedEffect(Unit) {
+// 【修复④】改为 ON_RESUME 触发：撤销 DO/PO 后从外部页面返回时，
+    // 卡片能重新查询真实状态，避免仍显示「已生效」。
+    OnResumeEffect {
         activateViewModel.refreshOwnerState()
     }
 
@@ -1177,63 +1418,9 @@ fun DeviceOwnerActivateCard(activateViewModel: ActivateViewModel) {
                 )
                 Text(stringResource(R.string.owner_activate_start))
             }
-            // -------- Port Auto Start: reuse the persisted fixed port --------
-            Text(
-                text = stringResource(R.string.port_boot_start),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = stringResource(R.string.port_boot_start_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            val noPortTemplate = stringResource(R.string.port_boot_start_no_port)
-            Button(
-                enabled = activateViewModel.isDeviceOwner &&
-                    !activateViewModel.tryActivate &&
-                    AxeronSettings.getBootStartPort() in 1..65535,
-                onClick = {
-                    scope.launch {
-                        loadingDialog.withLoading {
-                            val ai = activateViewModel.startAdbByFixedPort(context)
-                            when (ai) {
-                                is AdbStateInfo.Success -> {
-                                    activateViewModel.awaitRunning()
-                                }
-                                is AdbStateInfo.Failed -> {
-                                    Toast.makeText(
-                                        context,
-                                        failedTemplate.format(ai.message),
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                                else -> {
-                                    Toast.makeText(context, ai.message, Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                            activateViewModel.setTryToActivate(false)
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    modifier = Modifier
-                        .padding(end = 10.dp)
-                        .size(16.dp),
-                    contentDescription = null
-                )
-                Text(stringResource(R.string.port_boot_start))
-            }
-            if (AxeronSettings.getBootStartPort() !in 1..65535) {
-                Text(
-                    text = noPortTemplate,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
+            // 【v1.9.0 UI 精简】原「端口自启动」区块已按需求整体删除
+            // （字符串 port_boot_start / port_boot_start_desc / port_boot_start_no_port
+            //  仅被此处引用，删除后不再出现在激活页；Settings 里的开机自启开关不受影响）。
         }
     }
 }
@@ -1259,14 +1446,813 @@ fun PermissionSections(activateViewModel: ActivateViewModel) {
     }
 }
 
+// =====================================================================
+// 三段式分区：大标题（授权 / 激活）
+//
+// 【设计约束】仅新增组件，不改动任何既有 Composable 的内部实现。
+// 通过调整 ActivateScreen 中 Column 的调用顺序 + 在两个位置插入本标题，
+// 把原本混杂的「授权」与「激活」两件事在视觉上分开。
+// =====================================================================
+
+/**
+ * 分区大标题：一个大字 + 一行说明。
+ *
+ * @param titleRes 标题文案资源
+ * @param descRes  说明文案资源（可选，传 null 则不显示）
+ */
+@Composable
+fun SectionHeader(
+    titleRes: Int,
+    descRes: Int? = null
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = stringResource(titleRes),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        if (descRes != null) {
+            Text(
+                text = stringResource(descRes),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * 卡片：`DP` 差异化激活设备所有者（**非 ADB 直连路径**）。
+ *
+ * ## 方案说明（v1.6.0 重写）
+ *
+ * 旧实现走「DP Role + Shizuku(ADB)」：Shizuku 以 shell(uid 2000) 身份执行
+ * `dpm set-device-owner`，命中 `setDeviceOwner()` 的 **ADB 分支**，
+ * 必须过三道闸 —— `hasUserSetupCompleted` + `nonTestNonPrecreatedUsersExist`
+ * + `hasIncompatibleAccountsOrNonAdb` → **必须清空全部账户**，否则失败。
+ *
+ * 新实现走 **非 ADB 分支**：拿到 DP Role 后，用**应用自身身份**（`isAdb()=false`）
+ * 反射直连 `DevicePolicyManager`：
+ * ```
+ * forceUpdateUserSetupComplete(0)   ← 反向覆盖内存 mUserSetupComplete，绕开 setup 闸
+ * setActiveAdmin(self, true)        ← MANAGE_DEVICE_ADMINS（DP Role 已含）
+ * setDeviceOwner(self, null, 0)     ← 非 ADB 分支**完全不读账户**
+ * ```
+ * → **不清账户、不删隐藏账号也能激活**。这是 DP 路相对 Dhizuku 的核心差异。
+ *
+ * ## AOSP 依据（A13→A17 五版本逐行取证，语义完全一致）
+ *
+ * - `DevicePolicyManagerService#setDeviceOwner` 的 `if (isAdb) { ... } else { ... }`：
+ *   `hasIncompatibleAccountsOrNonAdb` **只在 `if (isAdb)` 块内被读取**；
+ * - `else` 分支只查 `hasUserSetupCompleted`，返回 `STATUS_USER_SETUP_COMPLETED` 或 `STATUS_OK`；
+ * - `forceUpdateUserSetupComplete` 在 A13/A15/A16/A17 均存在（A17 仅内联重构），
+ *   实现体对 `policy.mUserSetupComplete` **双向赋值**；
+ * - `MANAGE_PROFILE_AND_DEVICE_OWNERS` 自 A13 起 protectionLevel = `signature|role`，
+ *   DP Role 的 `<permissions>` 已显式列出 → 持 Role 即持权限。
+ *
+ * 详见项目文档 `AxManagerD_AOSP_13to17_DP差异化取证.md`。
+ *
+ * ## 版本限制
+ *
+ * - **Android 13+（API 33+）**：`DEVICE_POLICY_MANAGEMENT` Role 自 A13 引入 → 可用；
+ * - **Android 12 及以下**：无该 Role → 卡片置灰，请改用下方纯 Shizuku/Dhizuku 通道。
+ *
+ * 【设计约束】独立卡片，不改动其它既有实现。
+ *
+ * 【v1.4.7 变更】主按钮不再原地执行激活，而是**跳转到独立提权界面**（ElevateScreen）：
+ * 提权界面用 ASCII 大字展示品牌、实时输出全部命令结果，并在结束时给出
+ * 成功（旋转箭头）/ 失败（叉号）的醒目反馈。激活逻辑封装在
+ * `ActivateViewModel.runElevateDirectFlow()`。
+ */
+@Composable
+fun NewPermissionPathCard(
+    navigator: DestinationsNavigator,
+    activateViewModel: ActivateViewModel
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val loadingDialog = rememberLoadingDialog()
+
+    // 【v1.6.3 修复】改为 ON_RESUME 触发。
+    //
+    // 旧写法 `LaunchedEffect(Unit)` 只在**首次进入组合**时执行一次。
+    // 而本卡的激活按钮会 `navigate(ElevateScreenDestination)` 跳到提权页，
+    // 提权完成后 `popBackStack()` 返回本页 —— 此时 ActivateScreen 在返回栈中
+    // **并未被销毁**，`LaunchedEffect(Unit)` 不会重跑，于是 isDpGranted /
+    // isDirectActivationAvailable / isDeviceOwner 全部保持旧值，
+    // 出现「提权明明成功、返回卡片却仍显示未授予」的现象。
+    // 改用本文件既有的 [OnResumeEffect]（ON_RESUME 每次回前台都触发）。
+    //
+    // 注意：`refreshDpDoDiagnostics` / `refreshNewPermissionState` 是 suspend，
+    // 而 OnResumeEffect 的回调是普通 lambda（非挂起），必须用 scope.launch 包裹。
+    OnResumeEffect {
+        activateViewModel.refreshOwnerState()
+        activateViewModel.refreshDirectActivationAvailability()
+        scope.launch {
+            activateViewModel.refreshDpDoDiagnostics()
+            activateViewModel.refreshNewPermissionState()
+        }
+    }
+
+    val versionSupported = activateViewModel.isDpDoVersionSupported
+    val shizukuReady = activateViewModel.isShizukuActive
+    val isDeviceOwner = activateViewModel.isDeviceOwner
+    val directAvailable = activateViewModel.isDirectActivationAvailable
+    val diag = activateViewModel.dpDoDiagnostics
+
+    val activateFailTemplate = stringResource(R.string.dpdo_activate_failed, "%s")
+    val deactivateOkLabel = stringResource(R.string.dpdo_deactivate_ok)
+    val shizukuNeededLabel = stringResource(R.string.new_perm_shizuku_required)
+    val copiedLabel = stringResource(R.string.copied)
+
+    ElevatedCard(
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // —— 标题 ——
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.dpdo_section),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Text(
+                text = stringResource(R.string.dpdo_section_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // —— 版本不满足提示（Android 12 及以下）——
+            if (!versionSupported) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.dpdo_version_unsupported,
+                            Build.VERSION_CODES.TIRAMISU
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            // —— 状态行 ——
+            StatusRow(
+                label = stringResource(R.string.dpdo_status_dp_role),
+                granted = activateViewModel.isDpGranted
+            )
+            StatusRow(
+                label = stringResource(R.string.dpdo_status_shizuku),
+                granted = shizukuReady
+            )
+            // 【v1.6.0】新增：非 ADB 直连通道是否就绪（DP Role 带来的 MAPDO 权限）。
+            StatusRow(
+                label = stringResource(R.string.dpdo_status_direct_channel),
+                granted = directAvailable
+            )
+            StatusRow(
+                label = stringResource(R.string.dpdo_status_device_owner),
+                granted = isDeviceOwner
+            )
+
+            // —— 【v1.6.1】本卡为「DP + Shizuku」路径说明 ——
+            //
+            // 走 shell(ADB) 身份执行 dpm，命中 ADB 分支（需过账户/用户三道闸）。
+            // 因此本卡会在首次失败后**自动自救**：删除隐藏用户 999、
+            // 并临时冻结「非系统」的账户所属应用，重试后自动解冻。
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text(
+                        text = stringResource(R.string.dpdo_rescue_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (diag != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.dpdo_direct_accounts_info, diag.accountCount, diag.userCount
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // —— 主按钮：激活设备所有者（跳转到提权界面）——
+            Button(
+                enabled = versionSupported && !isDeviceOwner && !activateViewModel.tryActivate,
+                onClick = {
+                    if (!shizukuReady) {
+                        Toast.makeText(context, shizukuNeededLabel, Toast.LENGTH_LONG).show()
+                    } else {
+                        // 【v1.6.1】卡片 1 走「DP + Shizuku」模式：
+                        // 先尝试激活，失败则删 999 隐藏用户 + 冻结非系统账户应用后重试。
+                        activateViewModel.setElevateMode(
+                            ActivateViewModel.ELEVATE_MODE_DP_SHIZUKU
+                        )
+                        navigator.navigate(ElevateScreenDestination)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.dpdo_activate))
+            }
+
+            // —— 【v1.9.0】次按钮：撤销 DP 权限 ——
+            // 原「移除设备所有者」按钮已按需求从本卡片移除（该能力仅保留在授权区的
+            // 「设备所有者 / Dhizuku」卡片中），本卡片只保留「撤销 DP 权限」。
+            val revokeDpDialog = rememberConfirmDialog()
+            val revokeDpTitle = stringResource(R.string.new_perm_revoke_dp)
+            val revokeDpDesc = stringResource(R.string.new_perm_revoke_dp_desc)
+            val revokeDpScriptText = activateViewModel.revokeDpScript
+            val revokeDpMsg = revokeDpDesc + "\n\n```sh\n" + revokeDpScriptText + "\n```"
+            val revokeDpCancel = stringResource(R.string.cancel)
+            val revokeDpOk = stringResource(R.string.new_perm_revoke_dp_ok)
+            val revokeDpFail = stringResource(R.string.new_perm_revoke_dp_failed)
+            OutlinedButton(
+                // 撤销经 Shizuku 执行，未运行/未授权时置灰，避免点了没反应
+                enabled = activateViewModel.isShizukuActive,
+                onClick = {
+                    scope.launch {
+                        // 【v1.9.0】统一交互：先弹窗展示指令，确认后再执行（复制 + 撤销）
+                        val result = revokeDpDialog.awaitConfirm(
+                            title = revokeDpTitle,
+                            content = revokeDpMsg,
+                            markdown = true,
+                            confirm = revokeDpTitle,
+                            dismiss = revokeDpCancel,
+                        )
+                        if (result == ConfirmResult.Confirmed) {
+                            ClipboardUtil.put(context, revokeDpScriptText)
+                            loadingDialog.withLoading {
+                                val r = activateViewModel.revokeDpViaShizuku()
+                                val msg = r.getOrElse { it.message ?: it.toString() }
+                                Toast.makeText(
+                                    context,
+                                    if (r.isSuccess) revokeDpOk else revokeDpFail.format(msg),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Stop,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.new_perm_revoke_dp))
+            }
+
+            // —— 辅助按钮：查看 / 复制 shell 指令 ——
+            val scriptDialog = rememberConfirmDialog()
+            val scriptTitle = stringResource(R.string.new_perm_script_title)
+            val scriptDesc = stringResource(R.string.new_perm_script_desc)
+            val copyLabel = stringResource(R.string.copy)
+            val cancelLabel = stringResource(R.string.cancel)
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        val body = scriptDesc + "\n\n```sh\n" +
+                                activateViewModel.grantDpScript + "\n```"
+                        val result = scriptDialog.awaitConfirm(
+                            title = scriptTitle,
+                            content = body,
+                            markdown = true,
+                            confirm = copyLabel,
+                            dismiss = cancelLabel,
+                        )
+                        if (result == ConfirmResult.Confirmed) {
+                            if (ClipboardUtil.put(context, activateViewModel.grantDpScript)) {
+                                Toast.makeText(context, copiedLabel, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Code,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.new_perm_view_script))
+            }
+        }
+    }
+}
+
+/**
+ * 【v1.6.1】卡片 2：`非 ADB 直连`激活设备所有者（**无需删除账号**）。
+ *
+ * ## 与卡片 1「DP + Shizuku」的区别
+ *
+ * | 项 | 卡片 1（DP + Shizuku） | 卡片 2（本卡，非 ADB 直连） |
+ * |---|---|---|
+ * | 执行身份 | shell uid 2000（`isAdb=true`） | **应用自身身份**（`isAdb=false`） |
+ * | 账户要求 | 命中 ADB 分支，需清账户（本卡自动自救） | **完全不读账户，无需清理** |
+ * | 需要 Shizuku | 需要（提供 shell 身份） | 激活本身不需要；但授 DP Role 与置 0/恢复 1 需要 |
+ * | 电脑指令 | 无 | **无**（v1.6.7 起改为 Shizuku 可执行的 shell 指令） |
+ *
+ * ## 界面构成
+ *  - 标题：「激活设备所有者（无需删账号）」
+ *  - **红色危险提示**（v1.6.7 新增）：仅测试 Android 13 + 导航键失灵
+ *  - 状态行：DP 角色 / 直连通道（MAPDO） / 设备所有者
+ *  - **一键激活按钮**：点击即跳转提权界面执行直连激活
+ *  - **复制 shell 指令**按钮（v1.6.7：由「电脑端 adb 指令」改为 Shizuku 指令）
+ *  - 辅助：解除设备所有者（已持有时显示）
+ *
+ * ## AOSP 依据（v1.6.7 更正）
+ *
+ * 非 ADB 分支只查 `hasUserSetupCompleted(USER_SYSTEM)`，**不读 `hasIncompatibleAccountsOrNonAdb`**
+ * —— 所以「清账户」对本卡毫无意义。该闸**可以绕开**（v1.6.6 真机实测）：
+ *   ① shell 身份 `settings put secure user_setup_complete 0`
+ *   ② 应用自身 `forceUpdateUserSetupComplete(0)` 把该值同步进 DPM 内存态
+ *   ③ `setActiveAdmin` → `setDeviceOwner` 放行
+ *   ④ shell 身份 `settings put secure user_setup_complete 1` 恢复
+ *
+ * **⚠️ v1.6.7 关键修复**：以上 4 步必须**先置 0 再激活**。旧版（v1.6.6）是
+ * 「先激活 → 失败 → 再置 0 重试」，而 `activate()` 的向导预检位于
+ * `forceUpdateUserSetupComplete` 之前，首次调用必定因预检发现向导已完成而
+ * 直接返回，第 3 步从未执行 —— 这就是「激活前没有运行 settings put ... 0」
+ * 导致的失败根因。现在改为「激活前先置 0」（见
+ * `ActivateViewModel#runElevateDirectFlow` 的 ④ 段）。
+ *
+ * A13→A16 逐版本取证见 `AxManagerD_AOSP_13to17_DP差异化取证.md`。
+ */
+@Composable
+fun DirectActivationCard(
+    navigator: DestinationsNavigator,
+    activateViewModel: ActivateViewModel
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val loadingDialog = rememberLoadingDialog()
+
+    // 【v1.6.3 修复】与卡片 1 同理：`LaunchedEffect(Unit)` 在从提权页返回时
+    // 不会重跑（ActivateScreen 未被销毁），导致状态行停留在旧值。
+    // 改用 ON_RESUME 触发，回到本页即重新查询真实权限状态。
+    // 注意 suspend 的两个刷新必须用 scope.launch 包裹（回调非挂起）。
+    OnResumeEffect {
+        activateViewModel.refreshOwnerState()
+        activateViewModel.refreshDirectActivationAvailability()
+        scope.launch {
+            activateViewModel.refreshDpDoDiagnostics()
+            activateViewModel.refreshNewPermissionState()
+            // 【v1.7.0】回到本页时刷新「开机向导闸」状态（走 Shizuku 回读）。
+            // 应用自身读不到该 @hide 键，必须经 shell 身份读，故放在 suspend 作用域里。
+            activateViewModel.refreshSetupGateState()
+        }
+    }
+
+    val versionSupported = activateViewModel.isDpDoVersionSupported
+    val directAvailable = activateViewModel.isDirectActivationAvailable
+    val isDeviceOwner = activateViewModel.isDeviceOwner
+    // 【v1.6.5】向导已完成 → 非 ADB 分支硬闸关闭，本卡直接不可用（如实在卡片上说明）。
+    val setupCompleted = activateViewModel.isSetupCompleted
+    // 【v1.7.0】「开机向导闸」是否已打开（经 Shizuku 回读，见 refreshSetupGateState）。
+    // 这是「激活」按钮灰化的唯一依据 —— 不能用 setupCompleted（应用侧读不到该键）。
+    val setupGateOpen = activateViewModel.isSetupGateOpen
+    val setupGateBusy = activateViewModel.isSetupGateBusy
+    val setupGateMsg = activateViewModel.setupGateMessage
+
+    val copiedLabel = stringResource(R.string.copied)
+    val shizukuNeededLabel = stringResource(R.string.new_perm_shizuku_required)
+    val activateFailTemplate = stringResource(R.string.dpdo_activate_failed, "%s")
+    val deactivateOkLabel = stringResource(R.string.dpdo_deactivate_ok)
+    val pcScript = activateViewModel.pcAdbCommands
+
+    ElevatedCard(
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // —— 标题 ——
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.dpdo_direct_section),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Text(
+                text = stringResource(R.string.dpdo_direct_section_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // —— 版本不满足提示 ——
+            if (!versionSupported) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.dpdo_version_unsupported,
+                            Build.VERSION_CODES.TIRAMISU
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            // —— 【v1.6.5 新增 / v1.6.6 语义更新】向导已完成时的说明 ——
+            //
+            // 旧版这里是红色「本卡不可用」提示，并同时置灰按钮。
+            // 【v1.6.6】起本卡改为**自动处理**该硬闸（临时置 0 → 激活 → 恢复 1），
+            // 因此改为中性色的「注意事项」，按钮也不再置灰 —— 否则会出现
+            // 「红字说不可用、按钮却能点」的自相矛盾。
+            if (setupCompleted) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = stringResource(R.string.dpdo_direct_setup_done_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            // —— 【v1.7.0】原「危险提示（红色）」改为中性操作说明 ——
+            //
+            // 旧文案讲的是「本流程会自动临时置 0，期间导航键失灵」，v1.7.0 起置 0
+            // 已移到用户手动点击的「第一步：准备」按钮，激活过程本身不再让导航键失灵，
+            // 因此红色危险提示改为中性的**操作顺序说明**（仍是本卡最需要注意的一句话）。
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = stringResource(R.string.dpdo_direct_danger_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+
+            // —— 状态行 ——
+            //
+            // 【v1.6.3 修复】旧版此卡只显示「DP 角色 / 直连通道 / 设备所有者」三项，
+            // 而「直连通道」用的是 MAPDO 权限判据、「DP 角色」用的是 role holder 判据，
+            // 两者可能一个 ✓ 一个 ✗，用户看到并排的矛盾状态却没有任何解释
+            // （这正是「前面说已获得 DP、后面说未持有 MAPDO」的视觉来源）。
+            // 现在把「DP 角色（已授予）」与「直连权限（MAPDO 已落地）」拆开命名，
+            // 并在存在差异时追加一行说明，让用户能自己判断卡在哪一步。
+            StatusRow(
+                label = stringResource(R.string.dpdo_status_dp_role),
+                granted = activateViewModel.isDpGranted
+            )
+            StatusRow(
+                label = stringResource(R.string.dpdo_status_direct_channel),
+                granted = directAvailable
+            )
+            // DP 角色已授予、但 MAPDO 未落地 → 明确提示这是「角色已授、权限未生效」。
+            if (activateViewModel.isDpGranted && !directAvailable) {
+                Text(
+                    text = stringResource(R.string.dpdo_direct_role_granted_perm_missing),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            StatusRow(
+                label = stringResource(R.string.dpdo_status_device_owner),
+                granted = isDeviceOwner
+            )
+
+            // —— 无需清账户说明 ——
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = stringResource(R.string.dpdo_direct_no_account_needed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+
+            // —— 【v1.7.0 新增】第一步：准备（打开「开机向导」闸）——
+            //
+            // 背景（用户要求）：置 0 从激活流程里删掉，改由用户手动点本按钮完成；
+            // 「激活」按钮默认置灰，只有确认 user_setup_complete == 0 之后才可点。
+            //
+            // 为什么必须走 Shizuku：`settings put secure` 受 WRITE_SECURE_SETTINGS 保护，
+            // 应用自身（untrusted_app）持不到；同理，回读也必须借 shell(uid 2000) 身份。
+            Button(
+                enabled = versionSupported && !isDeviceOwner &&
+                        !setupGateBusy && !activateViewModel.tryActivate,
+                onClick = {
+                    if (!activateViewModel.isShizukuActive) {
+                        Toast.makeText(context, shizukuNeededLabel, Toast.LENGTH_LONG).show()
+                    } else {
+                        activateViewModel.openSetupGate()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Build,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.dpdo_direct_gate_prepare))
+            }
+            Text(
+                text = stringResource(R.string.dpdo_direct_gate_prepare_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // —— 闸状态提示 ——
+            // 绿底 = 已就绪（可点激活）；灰底 = 未打开（激活按钮置灰）。
+            Surface(
+                color = if (setupGateOpen) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = setupGateMsg?.takeIf { it.isNotBlank() }
+                        ?: stringResource(
+                            if (setupGateOpen) R.string.dpdo_direct_gate_open
+                            else R.string.dpdo_direct_gate_closed
+                        ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (setupGateOpen) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+
+            // —— 一键激活按钮（【v1.6.2】由 Switch 改为与卡片 1 同款的
+            //    「激活 + 竖三角」按钮；用 Filled.PlayArrow 与同页其它按钮图标一致）——
+            Button(
+                // 【v1.7.0】新增「闸已打开」作为前置条件：默认置灰，
+                // 用户先点上面的「第一步：准备」把 user_setup_complete 置 0，
+                // 经 Shizuku 回读确认为 0（isSetupGateOpen）后才允许点击。
+                enabled = versionSupported && !isDeviceOwner &&
+                        setupGateOpen &&
+                        !activateViewModel.tryActivate,
+                onClick = {
+                    // 一键激活：跳转提权界面执行「非 ADB 直连」流程。
+                    // 【v1.7.0】置 0 已由上面的「第一步：准备」完成，本流程只做激活，
+                    //          并在 finally 中把 user_setup_complete 恢复为 1。
+                    // 直连的激活本身不需要 Shizuku，但辅助链路（DP Role 授予、闸的开关）
+                    // 需要，因此这里统一要求 Shizuku 可用，否则给明确提示（不静默失败）。
+                    if (!activateViewModel.isShizukuActive) {
+                        Toast.makeText(context, shizukuNeededLabel, Toast.LENGTH_LONG).show()
+                    } else {
+                        activateViewModel.setElevateMode(
+                            ActivateViewModel.ELEVATE_MODE_DIRECT
+                        )
+                        navigator.navigate(ElevateScreenDestination)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.dpdo_direct_activate))
+            }
+            Text(
+                text = stringResource(R.string.dpdo_direct_switch_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // —— 查看激活指令（弹窗形式，与「通过电脑命令行激活」卡片保持一致）——
+            //
+            // 【v1.6.7 重做】旧版是「点一下直接复制 + 卡片内常驻等宽预览」，
+            // 与同页「通过电脑命令行激活」的交互不一致；而且预览里塞了大量
+            // 说明性中文（“本路径以应用自身身份执行…”），用户无法直接粘贴使用。
+            // 现在统一为：点击 → 弹窗展示完整指令 → 弹窗内「复制 / 发送 / 取消」。
+            val cmdDialog = rememberConfirmDialog()
+            val shareCmdLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.StartActivityForResult()
+            ) {
+                // 仅用于「发送」指令，无需处理返回值
+            }
+            val cmdTitle = stringResource(R.string.dpdo_direct_copy_pc_cmd)
+            val cmdContent = stringResource(R.string.dpdo_direct_cmd_message, pcScript)
+            val cmdConfirm = stringResource(R.string.copy)
+            val cmdDismiss = stringResource(R.string.cancel)
+            val cmdNeutral = stringResource(R.string.send)
+            val cmdShare = stringResource(R.string.share_command)
+
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        val result = cmdDialog.awaitConfirm(
+                            title = cmdTitle,
+                            content = cmdContent,
+                            markdown = true,
+                            confirm = cmdConfirm,
+                            dismiss = cmdDismiss,
+                            neutral = cmdNeutral
+                        )
+                        if (result == ConfirmResult.Confirmed) {
+                            if (ClipboardUtil.put(context, pcScript)) {
+                                Toast.makeText(context, copiedLabel, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        if (result == ConfirmResult.Neutral) {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, pcScript)
+                            }
+                            shareCmdLauncher.launch(Intent.createChooser(intent, cmdShare))
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Code,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = cmdTitle
+                )
+                Text(cmdTitle)
+            }
+
+            // —— 【v1.9.0】撤销 DP 权限 ——
+            // 原「移除设备所有者」按钮已按需求从本卡片移除（该能力仅保留在授权区的
+            // 「设备所有者 / Dhizuku」卡片中），本卡片只保留「撤销 DP 权限」。
+            val revokeDpDialog = rememberConfirmDialog()
+            val revokeDpTitle = stringResource(R.string.new_perm_revoke_dp)
+            val revokeDpDesc = stringResource(R.string.new_perm_revoke_dp_desc)
+            val revokeDpScriptText = activateViewModel.revokeDpScript
+            val revokeDpMsg = revokeDpDesc + "\n\n```sh\n" + revokeDpScriptText + "\n```"
+            val revokeDpCancel = stringResource(R.string.cancel)
+            val revokeDpOk = stringResource(R.string.new_perm_revoke_dp_ok)
+            val revokeDpFail = stringResource(R.string.new_perm_revoke_dp_failed)
+            OutlinedButton(
+                // 撤销经 Shizuku 执行，未运行/未授权时置灰
+                enabled = activateViewModel.isShizukuActive,
+                onClick = {
+                    scope.launch {
+                        // 【v1.9.0】统一交互：先弹窗展示指令，确认后再执行（复制 + 撤销）
+                        val result = revokeDpDialog.awaitConfirm(
+                            title = revokeDpTitle,
+                            content = revokeDpMsg,
+                            markdown = true,
+                            confirm = revokeDpTitle,
+                            dismiss = revokeDpCancel,
+                        )
+                        if (result == ConfirmResult.Confirmed) {
+                            ClipboardUtil.put(context, revokeDpScriptText)
+                            loadingDialog.withLoading {
+                                val r = activateViewModel.revokeDpViaShizuku()
+                                val msg = r.getOrElse { it.message ?: it.toString() }
+                                Toast.makeText(
+                                    context,
+                                    if (r.isSuccess) revokeDpOk else revokeDpFail.format(msg),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Stop,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.new_perm_revoke_dp))
+            }
+        }
+    }
+}
+
+/** 一行状态指示（已授予 / 未授予）。 */
+@Composable
+private fun StatusRow(label: String, granted: Boolean) {
+    Surface(
+        color = if (granted) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                modifier = Modifier.size(14.dp),
+                imageVector = if (granted) Icons.Filled.CheckCircle else Icons.Filled.Security,
+                contentDescription = null,
+                tint = if (granted) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = stringResource(
+                    if (granted) R.string.new_perm_granted else R.string.new_perm_not_granted
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 @Composable
 fun ShizukuSection(activateViewModel: ActivateViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // 进入界面时刷新状态
-    LaunchedEffect(Unit) {
+    // 【修复④】ON_RESUME 刷新，保证外部撤销 Shizuku 授权后返回时状态同步。
+    OnResumeEffect {
         activateViewModel.refreshOwnerState()
+        activateViewModel.refreshShizukuState()
     }
 
     ElevatedCard(
@@ -1300,42 +2286,60 @@ fun ShizukuSection(activateViewModel: ActivateViewModel) {
             Spacer(Modifier.height(16.dp))
 
             val isActive = activateViewModel.isShizukuActive
-            Button(
-                onClick = {
-                    scope.launch {
-                        if (!Shizuku.pingBinder()) {
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.shizuku_not_running),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        } else if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.shizuku_granted),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        } else {
+            val requestError = activateViewModel.shizukuRequestError
+            // 【修复②】Shizuku 官方 API 未提供「撤销授权」能力（updateFlagsForUid 被
+            // @RestrictTo(LIBRARY_GROUP_PREFIX) 限定，第三方应用无法调用），撤销只能在
+            // Shizuku 应用内由用户操作。因此这里不再渲染无效的「撤销」按钮：
+            // 已授权时仅展示状态，未授权时才提供明确的「申请」按钮。
+            if (!isActive) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            // 不做任何前置过滤/分支判断：直接发起授权请求，
+                            // 由 Shizuku 的结果回调决定成败；授权不了就如实提示。
                             activateViewModel.requestShizukuPermission(REQUEST_CODE_SHIZUKU)
                         }
                     }
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        modifier = Modifier
+                            .padding(end = 10.dp)
+                            .size(16.dp),
+                        contentDescription = null
+                    )
+                    Text(stringResource(R.string.shizuku_grant))
                 }
-            ) {
-                Icon(
-                    imageVector = if (isActive) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                    modifier = Modifier
-                        .padding(end = 10.dp)
-                        .size(16.dp),
-                    contentDescription = null
-                )
-                Text(
-                    if (isActive) {
-                        stringResource(R.string.shizuku_revoke)
-                    } else {
-                        stringResource(R.string.shizuku_grant)
-                    }
-                )
             }
+            // 授权失败：如实提示失败原因（不做过滤策略的配套反馈）。
+            if (!isActive && requestError != null) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Cancel,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = requestError,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+            // 【修复】已授权时只保留唯一一处「已授权」提示（此前存在重复渲染，
+            // 会出现两个 CheckCircle 图标）。
             if (isActive) {
                 Spacer(Modifier.height(12.dp))
                 Surface(
@@ -1362,11 +2366,6 @@ fun ShizukuSection(activateViewModel: ActivateViewModel) {
                         )
                     }
                 }
-
-                // Shizuku 已授权：提供「选择激活方式」入口。
-                // 用户可在此选择用 Shizuku 激活「设备所有者」（完整权限）。
-                Spacer(Modifier.height(12.dp))
-                ShizukuActivateChooser(activateViewModel)
             }
         }
     }
@@ -1437,7 +2436,17 @@ fun ShizukuActivateChooser(activateViewModel: ActivateViewModel) {
                                 .size(16.dp),
                             contentDescription = null
                         )
-                        Text(stringResource(R.string.shizuku_activate_owner))
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(stringResource(R.string.shizuku_activate_owner))
+                            Text(
+                                text = stringResource(R.string.shizuku_activate_owner_desc),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
 
                     OutlinedButton(
@@ -1460,7 +2469,17 @@ fun ShizukuActivateChooser(activateViewModel: ActivateViewModel) {
                                 .size(16.dp),
                             contentDescription = null
                         )
-                        Text(stringResource(R.string.shizuku_activate_profile_owner))
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(stringResource(R.string.shizuku_activate_profile_owner))
+                            Text(
+                                text = stringResource(R.string.shizuku_activate_profile_owner_desc),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             },

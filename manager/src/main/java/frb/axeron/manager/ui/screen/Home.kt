@@ -190,6 +190,9 @@ fun HomeScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGloba
 
                     }
                     Spacer(modifier = Modifier.padding(end = 12.dp))
+
+                    // 【v1.3.0】主页右上角「软件管理」入口已迁移至
+                    // 底部导航栏「特权」页（PrivilegeScreen）内，此处不再提供入口。
                 },
                 scrollBehavior = scrollBehavior,
             )
@@ -244,46 +247,6 @@ fun HomeScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGloba
             SupportCard()
             LearnCard()
             IssueReportCard()
-            WebsiteCard()
-        }
-    }
-}
-
-@Composable
-fun WebsiteCard() {
-    val uriHandler = LocalUriHandler.current
-    val websiteUrl = "https://axmd.cc.cd"
-
-    ElevatedCard(
-        onClick = {
-            uriHandler.openUri(websiteUrl)
-        }
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "官方网站",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "axmd.cc.cd",
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                )
-            }
-            Icon(
-                modifier = Modifier.padding(end = 10.dp, start = 24.dp),
-                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                contentDescription = "Official website",
-            )
         }
     }
 }
@@ -650,11 +613,14 @@ fun StatusPermissionTile(
     val dhizukuGranted = activateViewModel.isDhizukuGranted
     // 临时DO（role holder）状态：重启即失效，但需在界面上如实反映。
     val tempDoActive = activateViewModel.isTempDoActive
+    // 资料所有者状态（与临时DO 互斥显示）
+    val profileOwnerActive = activateViewModel.isProfileOwnerActive
     // Refresh permission state whenever the home screen enters/resumes, so that
     // granting or revoking in the external Dhizuku / Shizuku app is reflected.
     LaunchedEffect(Unit) {
         activateViewModel.refreshAllStates()
         activateViewModel.refreshTempDoState()
+        activateViewModel.refreshProfileOwnerState()
     }
     ElevatedCard(
         modifier = modifier,
@@ -737,6 +703,8 @@ fun StatusPermissionTile(
                         when {
                             activateViewModel.isDeviceOwner -> R.string.device_owner_active
                             activateViewModel.isProfileOwner -> R.string.profile_owner_active
+                            activateViewModel.isDpGranted -> R.string.new_perm_dp_role
+                            activateViewModel.isWsGranted -> R.string.new_perm_ws
                             dhizukuGranted -> R.string.dhizuku_granted
                             else -> R.string.device_owner_not_active
                         }
@@ -745,8 +713,11 @@ fun StatusPermissionTile(
                     color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            // 【修复⑦】原来此处对 DP Role 状态重复渲染了第二行（tertiary 粉色），
+            // 与上方主状态行的 new_perm_dp_role 文案重复，且配色与应用主题不一致。
+            // 主状态行（上方 when 分支）已完整表达 DP 状态，故删除此重复块。
             // 临时DO 指示（role holder）：与 DO 状态独立显示，因为它是重启即失效的临时身份。
-            if (tempDoActive) {
+            if (tempDoActive && !activateViewModel.isDeviceOwner && !activateViewModel.isProfileOwner) {
                 Spacer(Modifier.height(2.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -760,6 +731,26 @@ fun StatusPermissionTile(
                     )
                     Text(
                         text = stringResource(R.string.temp_do_active_label),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+            }
+            // 资料所有者（Profile Owner）指示：与 DO 互斥，单独一行显示。
+            if (profileOwnerActive && !tempDoActive) {
+                Spacer(Modifier.height(2.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        modifier = Modifier.size(14.dp),
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                    Text(
+                        text = stringResource(R.string.temp_profile_owner_active_label),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.tertiary
                     )
@@ -940,6 +931,9 @@ fun InfoCard(activateViewModel: ActivateViewModel) {
 @Composable
 fun IssueReportCard() {
     val feedbackEmail = "xx1112z@qq.com"
+    val uriHandler = LocalUriHandler.current
+    val telegramUrl = "https://t.me/axManagerD"
+    val qqGroupUrl = "https://qun.qq.com/universal-share/share?ac=1&authKey=d7sQ4bPq9T2YrL4C0ruZJBoX7DjJJ95yLYHpw%2BOFCldG%2BWsZZFap%2FrC%2BZHNC2Nct&busi_data=eyJncm91cENvZGUiOiI2NzQyNjM3NzgiLCJ0b2tlbiI6Imo2b1dWTXdVK2tYQXk1Z0hPNUpqOU9PSXc4cWtyVWpRNVVKVjRQK0hscTdJMFZSVkN6R2lJK2N5NmVaMjM3T2kiLCJ1aW4iOiIzNjM3MjY5MDM0In0%3D&data=1dbLzn9aN3Dk2XP5imCU2oQXSvyu_JjceIr7kJHyVbCqeaqTGVd4azMIoELzvNU-uSzT2T-TlDACdKf9AGxIHA&svctype=4&tempid=h5_group_info"
 
     ElevatedCard {
         Row(
@@ -975,6 +969,28 @@ fun IssueReportCard() {
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+            Row(
+                modifier = Modifier.padding(start = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                IconButton(onClick = { uriHandler.openUri(telegramUrl) }) {
+                    Icon(
+                        modifier = Modifier.size(28.dp),
+                        painter = painterResource(R.drawable.ic_telegram),
+                        contentDescription = "Telegram",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = { uriHandler.openUri(qqGroupUrl) }) {
+                    Icon(
+                        modifier = Modifier.size(28.dp),
+                        painter = painterResource(R.drawable.ic_qq),
+                        contentDescription = "QQ Group",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -1056,6 +1072,8 @@ fun PermissionStatusCard(
                         when {
                             activateViewModel.isDeviceOwner -> R.string.device_owner_active
                             activateViewModel.isProfileOwner -> R.string.profile_owner_active
+                            activateViewModel.isDpGranted -> R.string.new_perm_dp_role
+                            activateViewModel.isWsGranted -> R.string.new_perm_ws
                             dhizukuGranted -> R.string.dhizuku_granted
                             else -> R.string.device_owner_not_active
                         }

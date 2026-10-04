@@ -221,8 +221,85 @@ object AxeronPluginService {
             val compatFlag = if (pluginCompat) "true" else "false"
             val backupFlag = if (installer.backupInstall) "true" else "false"
             val runtimeFlag = if (installer.runtimeModule) "true" else "false"
-            val cmd =
-                "ZIPFILE=${file.absolutePath}; . functions.sh; install_plugin ${installer.autoEnable} $compatFlag $backupFlag $runtimeFlag; exit 0"
+            // 【加固】用绝对路径 source functions.sh，并带一道自检：
+            //   - 旧写法 `. functions.sh` 依赖 cwd/PATH 解析，且 overlay 一旦把该
+            //     脚本掏空，install_plugin 就会「函数不存在」，shell 直接退出码 2；
+            //   - 现在改为显式取 AXERONBIN/functions.sh；若文件缺失或函数不可用，
+            //     直接从 APK assets 里抽出完整版覆盖后再 source。
+            //   这样即使 overlay 曾经破坏过 bin/functions.sh，也能自愈。
+            val functionsPath = "$AXERONBIN/functions.sh"
+            // 【加固 2】显式注入 AXERONDIR / AXERONVER。
+            //   busybox sh 的环境来自 Axeron.getEnvironment()，若服务端环境拉取失败
+            //   （返回 null）则 shell 里这两个变量为空，导致：
+            //     - MODROOT="$AXERONDIR/plugins" 退化成 "/plugins"
+            //     - [ "$MODPLUGIN" -gt "$AXERONVER" ] 空值触发算术错误 → exit 2
+            //   这里用 API 侧已知值兜底，保证安装链路不依赖环境注入是否成功。
+            val safeAxeronDir = AXERONDIR
+            val safeAxeronVer = try {
+                AxeronApiConstant.server.VERSION_CODE.toString()
+            } catch (t: Throwable) {
+                "0"
+            }
+            // 【v1.4.0 关键修复 · 安装 exit 2 的真根因】
+            //   execWithIO(standAlone=true) 最终是把这条命令**写成一行字符串**送进
+            //   「外层 busybox sh」的 stdin，形如：
+            //       <busybox> sh -o standalone -c "<本命令>"
+            //   外层 ash 解析这一行时，会**先展开双引号内部的 `$VAR` / `$(...)`**，
+            //   而本命令里的 shell 变量（FUNC/AXERONDIR…）在外层根本不存在 →
+            //   展开为空串，于是出现 `> `、`< `、`if ... ; then fi` 这类**语法残缺**，
+            //   外层 ash 在**解析阶段**就报 syntax error 并退出 → **退出码 2**，
+            //   且没有任何 stdout（错误信息在 stderr，被 hideStderr 吞掉）。
+            //   这正是真机日志里「install exit=2、耗时 21ms、零输出」的原因。
+            //
+            //   两条铁律（务必遵守）：
+            //     1) 命令里**不能出现裸双引号**（会提前闭合外层引号）；
+            //     2) 命令里**不能出现裸 `$`**：要留给内层 shell 的必须写成 `\$`，
+            //        其它一律直接用 Kotlin 侧已知的绝对路径内联，不用变量。
+            val bootstrapCmd = buildString {
+                append("AXERONDIR='").append(safeAxeronDir).append("'; export AXERONDIR; ")
+                append("AXERONVER='").append(safeAxeronVer).append("'; export AXERONVER; ")
+                append("export BUSYBOX='").append(BUSYBOX).append("'; ")
+                append("echo PREFLIGHT PATH=\\\$PATH; ")
+                append("command -v unzip >/dev/null 2>&1 || echo MISSING unzip; ")
+                append("command -v dos2unix >/dev/null 2>&1 || echo MISSING dos2unix; ")
+                append("echo ENV AXERONDIR=\\\$AXERONDIR AXERONVER=\\\$AXERONVER FUNC='")
+                append(functionsPath).append("'; ")
+                // functions.sh 自愈：内容缺失 install_plugin 时从 APK assets 抽一份覆盖
+                append("if ! grep -F install_plugin '").append(functionsPath)
+                append("' >/dev/null 2>&1; then ")
+                append("'").append(BUSYBOX).append("' unzip -p '").append(BASEAPK)
+                append("' assets/scripts/functions.sh > '").append(functionsPath)
+                append("' && chmod 755 '").append(functionsPath).append("'; ")
+                append("echo SELFHEAL_DONE; fi; ")
+                append("if [ ! -f '").append(functionsPath).append("' ]; then ")
+                append("echo '! functions.sh missing'; exit 2; fi; ")
+                append("wc -l '").append(functionsPath).append("'; ")
+                append("export ZIPFILE='").append(file.absolutePath).append("'; ")
+                append(". '").append(functionsPath).append("'; ")
+                append("type install_plugin >/dev/null 2>&1 || { echo '! install_plugin missing'; exit 2; }; ")
+                append("install_plugin ").append(installer.autoEnable).append(' ')
+                append(compatFlag).append(' ').append(backupFlag).append(' ').append(runtimeFlag)
+                append("; ")
+                // 透出 install_plugin 的真实退出码（不再无条件 exit 0）
+                append("__axrc=\\\$?; echo INSTALL_RC=\\\$__axrc; exit \\\$__axrc")
+            }
+            val cmd = bootstrapCmd
+
+            // ---- 运行时日志（软件内可查看/导出）----
+            runCatching {
+                AxeronRuntimeLog.init(application)
+                AxeronRuntimeLog.section("install module")
+                AxeronRuntimeLog.i(
+                    TAG,
+                    "uri=${installer.uri} autoEnable=${installer.autoEnable} compat=$compatFlag backup=$backupFlag runtime=$runtimeFlag"
+                )
+                AxeronRuntimeLog.i(
+                    TAG,
+                    "env AXERONDIR=$AXERONDIR AXERONBIN=$AXERONBIN ROOT_MODE=$ROOT_MODE"
+                )
+                AxeronRuntimeLog.i(TAG, "cmd=$cmd")
+            }
+            // ---- 日志结束 ----
 
             // ---- AI 拦截挂钩（方案 A，安装场景）----
             // 运行时模块（installer.runtimeModule=true）不做拦截分析，直接安装。
@@ -248,6 +325,11 @@ object AxeronPluginService {
             val result = execWithIO(cmd, onStdout, onStderr, standAlone = true)
 
             Log.i(TAG, "install module ${installer.uri} result: $result")
+            runCatching {
+                AxeronRuntimeLog.i(TAG, "install exit=${result.code}")
+                if (result.out.isNotBlank()) AxeronRuntimeLog.i(TAG, "stdout:\n${result.out}")
+                if (result.err.isNotBlank()) AxeronRuntimeLog.e(TAG, "stderr:\n${result.err}")
+            }
 
             fs.delete(file.absolutePath)
 
@@ -996,6 +1078,45 @@ object AxeronPluginService {
         }
     }
 
+    /**
+     * 核心脚本的 overlay 最低完整性要求。
+     *
+     * key = 脚本文件名（放进 bin/ 的名字），value = 该脚本必须包含的符号列表。
+     * 只有列在这里的脚本才会被校验；未列出的脚本 overlay 行为完全不变，
+     * 保证不污染其它脚本的既有语义。
+     *
+     * 之所以只校验「必需符号是否存在」，而不是比对 hash：
+     *   - overlay 的本意就是允许模块改写核心脚本（如自定义 install 流程）；
+     *   - 但改写不能掏空功能。只要关键函数还在，就认为这是一个合法的替代实现。
+     */
+    private val REQUIRED_OVERLAY_SYMBOLS: Map<String, List<String>> = mapOf(
+        "functions.sh" to listOf("install_plugin"),
+    )
+
+    /**
+     * 判断某个 overlay 脚本是否可以安全采用。
+     *
+     * - 未在 [REQUIRED_OVERLAY_SYMBOLS] 里声明的脚本：一律放行（保持原行为）；
+     * - 已声明的脚本：逐条检查必需符号是否出现，全部命中才放行。
+     *
+     * 读取走 `grep`（busybox），避免把整文件拉进内存。
+     * 任何异常都返回 false（宁可回退 assets，也不能让残缺 overlay 上线）。
+     */
+    private suspend fun isOverlayScriptUsable(filename: String, overlayPath: String): Boolean {
+        val required = REQUIRED_OVERLAY_SYMBOLS[filename] ?: return true
+        if (required.isEmpty()) return true
+        return runCatching {
+            // 用 grep -F 逐个符号精确匹配字符串（不做正则解释），
+            // 全命中时输出 READY。任一缺失即输出 MISSING。
+            val patterns = required.joinToString(" ") { "'$it'" }
+            val cmd = "for s in $patterns; do " +
+                "grep -F \"\$s\" $overlayPath >/dev/null 2>&1 || { echo MISSING; exit 0; }; " +
+                "done; echo READY"
+            val r = execWithIO(cmd, hideStderr = true)
+            r.out.contains("READY")
+        }.getOrDefault(false)
+    }
+
     private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {
         val fs = axFS ?: return@withContext false
         val files = application.assets.list("scripts") ?: return@withContext false
@@ -1016,29 +1137,47 @@ object AxeronPluginService {
             val overlayPath = findOverlayScript(filename)
 
             if (overlayPath != null) {
-                val needUpdate = run {
-                    val hashCmd =
-                        "src=\$($BUSYBOX sha256sum $overlayPath | $BUSYBOX cut -d' ' -f1); " +
-                            "cur=\$([ -f ${dstFile.absolutePath} ] && $BUSYBOX sha256sum ${dstFile.absolutePath} | $BUSYBOX cut -d' ' -f1 || echo NONE); " +
-                            "[ \"\$src\" = \"\$cur\" ] && echo SAME || echo DIFF"
-                    val r = execWithIO(hashCmd, hideStderr = true)
-                    r.out.trim() != "SAME"
-                }
-                if (!needUpdate) {
-                    Log.i(TAG, "$filename overlay unchanged, skip")
+                // 【保护】核心脚本 overlay 完整性校验。
+                //
+                // 背景（真实 bug）：overlay 机制允许模块覆盖 bin/ 下的核心脚本。
+                // 若某模块把 functions.sh 当作「overlay 是否生效」的探针（内容只有
+                // 几行 echo，不含 install_plugin 等函数），一旦它被授权，就会把
+                // 完整的 functions.sh 覆盖成残缺版，导致安装模块时
+                // `. functions.sh; install_plugin ...` 找不到函数，
+                // shell 直接以退出码 2 失败（表现为「装任何模块都报返回值 2」）。
+                //
+                // 因此：对声明了必需符号的核心脚本，校验 overlay 内容；不满足则
+                // 忽略该 overlay，回退到 APK assets 的正常释放路径。
+                if (!isOverlayScriptUsable(filename, overlayPath)) {
+                    Log.w(
+                        TAG,
+                        "overlay $filename rejected (missing required symbols), fallback to assets"
+                    )
+                } else {
+                    val needUpdate = run {
+                        val hashCmd =
+                            "src=\$($BUSYBOX sha256sum $overlayPath | $BUSYBOX cut -d' ' -f1); " +
+                                "cur=\$([ -f ${dstFile.absolutePath} ] && $BUSYBOX sha256sum ${dstFile.absolutePath} | $BUSYBOX cut -d' ' -f1 || echo NONE); " +
+                                "[ \"\$src\" = \"\$cur\" ] && echo SAME || echo DIFF"
+                        val r = execWithIO(hashCmd, hideStderr = true)
+                        r.out.trim() != "SAME"
+                    }
+                    if (!needUpdate) {
+                        Log.i(TAG, "$filename overlay unchanged, skip")
+                        continue
+                    }
+                    Log.i(TAG, "$filename overlay changed, updating from $overlayPath")
+                    fs.delete(dstFile.absolutePath)
+
+                    val copyCmd =
+                        "cp $overlayPath ${dstFile.absolutePath} && chmod 755 ${dstFile.absolutePath}"
+                    execWithIO(copyCmd)
+
+                    if (isProbablyText(dstFile)) {
+                        execWithIO("$BUSYBOX dos2unix ${dstFile.absolutePath}")
+                    }
                     continue
                 }
-                Log.i(TAG, "$filename overlay changed, updating from $overlayPath")
-                fs.delete(dstFile.absolutePath)
-
-                val copyCmd =
-                    "cp $overlayPath ${dstFile.absolutePath} && chmod 755 ${dstFile.absolutePath}"
-                execWithIO(copyCmd)
-
-                if (isProbablyText(dstFile)) {
-                    execWithIO("$BUSYBOX dos2unix ${dstFile.absolutePath}")
-                }
-                continue
             }
             // ---- overlay 优先结束 ----
 

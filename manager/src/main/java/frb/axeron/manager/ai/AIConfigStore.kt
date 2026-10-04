@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import frb.axeron.api.core.AxeronSettings
+import frb.axeron.manager.BuildConfig
 
 /**
  * AI 相关配置的持久化存储（基于 AxeronSettings.getPreferences()）。
@@ -39,6 +40,22 @@ object AIConfigStore {
     fun setMicroAnalysisEnabled(enabled: Boolean) {
         _isMicroAnalysisEnabled = enabled
         prefs.edit().putBoolean(KEY_MICRO_ANALYSIS, enabled).apply()
+    }
+
+    /**
+     * 【合并后的 AI 引擎总开关】
+     *
+     * 原先「AI 引擎」与「微型分析模型」是两个互不联动的开关，但拦截链路里
+     * 任一开关为 false 都会直接放行，导致用户看到的现象是“两个开关都没用”。
+     * 现在 UI 只暴露这一个开关，读值取两者之与，写入同时落到两个 key 上，
+     * 保证旧的持久化数据（只开了一个）也能被正确归一。
+     */
+    val aiEngineEnabled: Boolean
+        get() = _aiMasterEnabled && _isMicroAnalysisEnabled
+
+    fun setAiEngineEnabled(enabled: Boolean) {
+        setAiMasterEnabled(enabled)
+        setMicroAnalysisEnabled(enabled)
     }
 
     // ============ 白名单 ============
@@ -223,10 +240,61 @@ object AIConfigStore {
         "自定义",
     )
 
-    // ============ 官方默认 AI（英伟达 NVIDIA NIM） ============
-    /** 官方默认服务的固定配置：英伟达 nemotron 模型（OpenAI 兼容）。 */
+    // ============ 官方默认 AI（英伟达 NVIDIA NIM 托管） ============
+    /**
+     * 官方默认服务的固定配置（OpenAI 兼容接口）。
+     *
+     * 【修复】原模型 `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` 在 NIM 上持续返回
+     * 503 `ResourceExhausted: Worker local total request limit reached (49/16)`，
+     * 实测（2026-10-03）已无法使用，导致「官方默认 AI」整条链路失败。
+     * 换为本账号实测稳定的 `openai/gpt-oss-20b`（开源 20B 模型，非旗舰，
+     * 在不传 max_tokens 的默认请求下 content 即为最终答案，finish_reason=stop）。
+     */
     const val OFFICIAL_AI_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
-    const val OFFICIAL_AI_API_KEY = "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"
-    const val OFFICIAL_AI_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+    const val OFFICIAL_AI_MODEL = "openai/gpt-oss-20b"
     const val OFFICIAL_AI_PROVIDER = "英伟达 (NVIDIA)"
+
+    /**
+     * 官方默认 AI 的 API Key。
+     *
+     * 【不再硬编码】密钥由构建期注入（见 manager/build.gradle.kts 的
+     * `officialAiKeyBlob()` -> BuildConfig.OFFICIAL_AI_KEY_BLOB）：
+     *   - 源码与 git 仓库内没有明文；
+     *   - APK 的 dex 里只有 XOR+十六进制混淆后的字节，`strings` 无法直接提取；
+     *   - 未注入（未配置 CI Secret/Variable 且本地未写 local.properties）时为空串，
+     *     由 [officialAiKeyAvailable] 判定不可用，回退到用户自定义配置。
+     */
+    val OFFICIAL_AI_API_KEY: String by lazy { decodeOfficialAiKey(BuildConfig.OFFICIAL_AI_KEY_BLOB) }
+
+    /** 官方默认 AI 是否真的可用（构建期密钥是否已注入）。 */
+    val officialAiKeyAvailable: Boolean get() = OFFICIAL_AI_API_KEY.isNotBlank()
+
+    /** 与 manager/build.gradle.kts:OFFICIAL_AI_KEY_SEED 严格对应（改一处必须同步改另一处）。 */
+    private const val OFFICIAL_AI_KEY_SEED = "frb.axeron.manager|AxManagerD/axkey/v1"
+
+    /**
+     * 解码构建期注入的密钥 blob（小写十六进制）；失败返回空串
+     * （当作未配置，避免把垃圾串当 key 发出去）。
+     *
+     * 与 manager/build.gradle.kts 的 `officialAiKeyBlob()` 严格对应：
+     * XOR（掩码按 seed 循环）-> 小写十六进制。改一处必须同步改另一处。
+     * 不使用 java.util.Base64：十六进制自解码无任何依赖，也避开 Base64 的 API 级别限制。
+     */
+    private fun decodeOfficialAiKey(blob: String): String {
+        val hex = blob.trim()
+        if (hex.isEmpty() || hex.length % 2 != 0) return ""
+        return try {
+            val cipher = ByteArray(hex.length / 2) { i ->
+                hex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+            }
+            val mask = OFFICIAL_AI_KEY_SEED.toByteArray(Charsets.UTF_8)
+            if (mask.isEmpty() || cipher.isEmpty()) return ""
+            val plain = ByteArray(cipher.size) { i ->
+                (cipher[i].toInt() xor mask[i % mask.size].toInt()).toByte()
+            }
+            String(plain, Charsets.UTF_8)
+        } catch (t: Throwable) {
+            ""
+        }
+    }
 }

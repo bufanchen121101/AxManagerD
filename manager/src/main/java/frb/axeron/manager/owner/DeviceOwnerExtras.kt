@@ -134,6 +134,17 @@ object DeviceOwnerExtras {
                 if (appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) {
                     return@mapNotNull null
                 }
+                // 【v1.9.0 修复 · 发送方向】只保留**声明支持接收 DO 转移**的目标。
+                //
+                // AOSP `DevicePolicyManagerService#transferOwnership`（A13 L16088）有一道硬断言：
+                //   Preconditions.checkArgument(incomingDeviceInfo.supportsTransferOwnership(),
+                //           "Provided target does not support ownership transfer.");
+                // 目标未在自己的 device_admin.xml 声明 `<support-transfer-ownership />` 时，
+                // 调用必然抛 IllegalArgumentException，用户却只能看到一个英文报错。
+                // 因此在候选阶段就过滤掉这类目标 —— 宁可列表短，也不给必然失败的按钮。
+                if (!supportsTransferOwnership(adminInfo)) {
+                    return@mapNotNull null
+                }
                 try {
                     TransferTarget(
                         label = appInfo.loadLabel(pm).toString(),
@@ -167,11 +178,28 @@ object DeviceOwnerExtras {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
             ?: return TransferResult(false, "DevicePolicyManager 不可用")
 
-        // 前置校验：必须自己是 DO 才能转移
+        // 前置校验①：必须自己是 DO 才能转移
         val selfIsOwner = runCatching { dpm.isDeviceOwnerApp(DeviceOwnerState.admin.packageName) }
             .getOrDefault(false)
         if (!selfIsOwner) {
             return TransferResult(false, "当前应用不是设备所有者，无法转移")
+        }
+
+        // 【v1.9.0 修复 · 发送方向】前置校验②：目标必须**已被系统激活为设备管理员**。
+        //
+        // 依据 AOSP `DevicePolicyManagerService#transferOwnership`（A13 L16085-16087）：
+        //   final DeviceAdminInfo incomingDeviceInfo = findAdmin(target, callingUserId, true);
+        //   checkActiveAdminPrecondition(target, incomingDeviceInfo, policy);
+        // 目标未激活时会直接抛出 "No active admin ..."，用户只看到一个英文异常。
+        // 这里提前拦截，给出可执行的中文原因（含目标组件名，便于直接用命令激活）。
+        val targetActive = runCatching { dpm.isAdminActive(target) }.getOrDefault(false)
+        if (!targetActive) {
+            return TransferResult(
+                false,
+                "目标应用尚未启用「设备管理员」，无法接收转移。请先在目标应用内启用设备管理员，" +
+                        "或在电脑上执行：adb shell dpm set-active-admin " +
+                        target.flattenToShortString() + " ，然后重试。"
+            )
         }
 
         return try {
@@ -226,4 +254,22 @@ object DeviceOwnerExtras {
      * `dpm set-device-owner` 自 Android 5.0（API 21）起可用。
      */
     fun isTempDoSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+
+    /**
+     * 【v1.9.0 新增】查询某个设备管理接收器是否声明了「支持接收所有者身份转移」。
+     *
+     * 对应 AOSP `DeviceAdminInfo#supportsTransferOwnership()`（API 28 起存在，
+     * 解析自 device_admin.xml 的 `<support-transfer-ownership />` 空标签）。
+     *
+     * 这里用反射而非直接调用：该方法虽为 public，但在不同 SDK 的 `android.jar`
+     * 中可见性并不一致，反射可 100% 规避编译期差异（本项目已全局豁免 hiddenapi）。
+     * 任何异常一律按「不支持」处理 —— 宁可少列一个目标，也不给用户一个必然失败的按钮。
+     */
+    private fun supportsTransferOwnership(info: android.app.admin.DeviceAdminInfo): Boolean = try {
+        android.app.admin.DeviceAdminInfo::class.java
+            .getMethod("supportsTransferOwnership")
+            .invoke(info) as? Boolean ?: false
+    } catch (t: Throwable) {
+        false
+    }
 }

@@ -107,17 +107,32 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
 
             // App 启动后 SP 与 shell 域 global.json 可能不一致（例如文件被手工改动），
             // 这里做一次反向校准：以 shell 域为准补齐 SP（只在磁盘上明确为 true 时才覆盖）。
+            //
+            // 【v1.9.1 BUG 修复】原实现只改了内存里的 `enabled / disclaimerAccepted`
+            // 两个 Compose 状态，**没有写回 SP** —— 注释说「补齐 SP」但代码没补，
+            // 于是下一次任何一次正向同步（setEnabled → syncGlobalJson）都会拿旧的
+            // SP 值把 global.json 覆盖回去，校准等于白做。现在真正写回 SP。
             runCatching {
                 OverlayPermissionStore.readGlobalJson(app)?.let { (e, d) ->
                     if (e && !enabled) {
                         enabled = true
+                        OverlayPermissionStore.setEnabled(app, true)
                     }
                     if (d && !disclaimerAccepted) {
                         disclaimerAccepted = true
+                        OverlayPermissionStore.acceptDisclaimer(app)
                     }
                     OverlayLog.d("readGlobalJson enabled=$e disclaimer=$d")
                 }
             }
+
+            // 【v1.9.1 BUG 修复】正向同步一次，保证 shell 域 perm/global.json
+            // **一定存在**且与 App SP 一致。
+            // 真机实测（2026-10-01）：SP 里 enabled=true/disclaimer=true，但
+            // perm/global.json 缺失 → 模块侧 `axoverlay check` 恒返回 denied，
+            // 用户「打开了开关，模块却完全用不了」，且没有任何自愈路径。
+            runCatching { OverlayPermissionStore.syncGlobalJson(app) }
+                .onFailure { OverlayLog.w("refresh 同步 global.json 失败: $it") }
 
             val list = withContext(Dispatchers.IO) { loadRows() }
             rows = list

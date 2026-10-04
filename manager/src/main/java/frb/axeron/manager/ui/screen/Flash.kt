@@ -52,6 +52,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -82,6 +83,9 @@ import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.core.Starter
 import frb.axeron.api.utils.AnsiFilter
 import frb.axeron.manager.R
+import frb.axeron.manager.features.overlay.InstallerModuleProbe
+import frb.axeron.manager.features.overlay.OverlayInstallConsent
+import frb.axeron.manager.features.overlay.OverlayPermissionStore
 import frb.axeron.manager.features.runtime.RuntimeModuleService
 import frb.axeron.manager.ui.component.AxSnackBarHost
 import frb.axeron.manager.ui.component.KeyEventBlocker
@@ -177,6 +181,34 @@ fun InstallDialog(
                         addAll(flashIt.installers)
                     }
                 }
+
+                // ------------------------------------------------------------------
+                // 【v1.9.2 第三期】安装期能力声明 → 安装时弹窗授权
+                //
+                // 模块在 module.prop 里用 `capabilities=overlay` 声明「需要修改核心文件」。
+                // 这里在**安装确认弹窗**内解析待安装包并展示授权项：
+                //   - 声明了 overlay 的模块：显示声明 + 授权开关（默认不勾选，
+                //     必须用户主动同意，才在安装成功后写授权记录）；
+                //   - 未声明的模块：不展示、不授权（对应「其他模块不授权」）。
+                // 探测失败（包不可读等）一律按「未声明」处理，属安全默认。
+                // ------------------------------------------------------------------
+                val probeContext = LocalContext.current
+                val probes = remember { mutableStateMapOf<String, InstallerModuleProbe.Probed?>() }
+                val consent = remember { mutableStateMapOf<String, Boolean>() }
+                LaunchedEffect(Unit) {
+                    flashIt.installers.forEach { inst ->
+                        val key = inst.uri.toString()
+                        val p = runCatching { InstallerModuleProbe.probe(probeContext, inst.uri) }
+                            .getOrNull()
+                        probes[key] = p
+                        val id = p?.id.orEmpty()
+                        if (p != null && p.declaresOverlay && id.isNotBlank() && consent[id] == null) {
+                            // 默认不勾选：必须用户主动授权
+                            consent[id] = false
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(4.dp))
 
                 LazyColumn(
@@ -228,6 +260,40 @@ fun InstallDialog(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+
+                                    // ------------------------------------------------------------------
+                                    // 【v1.9.2 第三期】安装期声明展示 + 授权开关
+                                    // 只有 module.prop 里声明了 capabilities=overlay 的模块才会出现，
+                                    // 未声明的模块这里什么都不显示，安装后也不会被授权。
+                                    // ------------------------------------------------------------------
+                                    val instKey = pluginInstaller.uri.toString()
+                                    val probed = probes[instKey]
+                                    val overlayId = probed?.id.orEmpty()
+                                    if (probed?.declaresOverlay == true && overlayId.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = stringResource(R.string.overlay_install_declares),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.overlay_install_declares_desc),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = stringResource(R.string.overlay_install_grant_now),
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Switch(
+                                                checked = consent[overlayId] == true,
+                                                onCheckedChange = { c -> consent[overlayId] = c }
+                                            )
+                                        }
+                                    }
                                 }
 
                                 // SWITCH
@@ -255,6 +321,21 @@ fun InstallDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     TextButton(
                         onClick = {
+                            // ----------------------------------------------------------
+                            // 【v1.9.2 第三期】把安装弹窗里的授权勾选转存到进程内单例。
+                            //
+                            // 不能挂在 FlashIt / PluginInstaller 上：它们是 Parcelable，
+                            // 经导航参数往返会丢字段（项目已有先例，runtimeModule 实测恒为
+                            // false），因此授权意向同样改用进程内单例传递，
+                            // 安装成功后由 FlashScreen 取出并写授权记录。
+                            //
+                            // 未勾选（含未声明 overlay 的模块）→ 一律不写入，
+                            // 保持「未声明的模块不授权」。
+                            // ----------------------------------------------------------
+                            consent.forEach { (id, granted) ->
+                                if (granted) OverlayInstallConsent.agree(id)
+                                else OverlayInstallConsent.disagree(id)
+                            }
                             val updated = installers.map {
                                 it.copy(backupInstall = false)
                             }
@@ -338,6 +419,8 @@ fun FlashScreen(
             flashing = FlashingStatus.FLASHING
         },
         onDismiss = {
+            // 取消安装：丢弃本次安装期授权意向，避免下一次安装被旧意向误授权。
+            OverlayInstallConsent.clear()
             flashing = FlashingStatus.FAILED
             navigator.popBackStack()
             if (finishIntent) activity?.finish()
@@ -394,6 +477,40 @@ fun FlashScreen(
                 onStderr = {
                     logContent.append(it).append("\n")
                 })
+
+            // ------------------------------------------------------------------
+            // 【v1.9.2 第三期】安装成功后写入「安装期授权」。
+            //
+            // 只处理用户在安装确认弹窗里主动勾选过的模块（OverlayInstallConsent），
+            // 且 putGrant 自身还有一道声明卡点（module.prop 未声明
+            // capabilities=overlay 一律拒绝），因此「未声明 / 未勾选」的模块在这里
+            // 都拿不到授权，对应需求「其他模块不授权」。
+            // 安装失败：丢弃意向，不写任何授权记录。
+            // ------------------------------------------------------------------
+            if (result.code == 0) {
+                val agreed = OverlayInstallConsent.takeAll()
+                if (agreed.isNotEmpty()) {
+                    val appContext = context.applicationContext
+                    agreed.forEach { id ->
+                        val err: String? = runCatching {
+                            OverlayPermissionStore.putGrant(
+                                appContext,
+                                id,
+                                OverlayPermissionStore.GrantMode.ALWAYS,
+                                reason = "install"
+                            )
+                        }.getOrElse { e -> "异常: ${e.message}" }
+                        if (err == null) {
+                            Log.d("FlashScreen", "安装期授权成功: id=$id mode=ALWAYS")
+                        } else {
+                            Log.w("FlashScreen", "安装期授权失败: id=$id err=$err")
+                        }
+                    }
+                }
+            } else {
+                // 安装失败：丢弃本次意向，避免下次安装被旧意向误授权。
+                OverlayInstallConsent.clear()
+            }
 
             // After the background task is done, switch to the main thread to update the final state
             withContext(Dispatchers.Main) {

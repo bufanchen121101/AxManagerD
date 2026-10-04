@@ -39,7 +39,7 @@
     <string name="plugin_update_json_empty">Kosong</string>
     <string name="ignite">Ignite</string>
     <string name="what_is_ignite">Apa Itu Ignite?</string>
-    <string name="what_is_ignite_msg"><![CDATA[Ignite adalah metode pengganti reboot di AxManager, Anda dapat melakukan ignite di Beranda > Reignite]]></string>
+    <string name="what_is_ignite_msg"><![CDATA[Ignite adalah metode pengganti reboot di AxManagerD, Anda dapat melakukan ignite di Beranda > Reignite]]></string>
     <string name="understand">Saya Mengerti</string>
     <string name="re_ignite_now">Re-ignite sekarang</string>
     <string name="install">Instal</string>
@@ -73,14 +73,14 @@
     <string name="connect_tcp_debugging">Hubungkan ke TCP</string>
     <string name="stop_tcp_debugging">Hentikan TCP</string>
     <string name="enable_wireless_debugging">Aktifkan Wireless Debugging</string>
-    <string name="enable_wireless_debugging_msg">Silakan aktifkan \"Wireless debugging\" di \"Opsi pengembang\". \"Wireless debugging\" otomatis dinonaktifkan saat jaringan berubah.\n\nCatatan, jangan menonaktifkan \"Opsi pengembang\" atau \"USB debugging\", jika tidak AxManager akan terhenti.</string>
+    <string name="enable_wireless_debugging_msg">Silakan aktifkan \"Wireless debugging\" di \"Opsi pengembang\". \"Wireless debugging\" otomatis dinonaktifkan saat jaringan berubah.\n\nCatatan, jangan menonaktifkan \"Opsi pengembang\" atau \"USB debugging\", jika tidak AxManagerD akan terhenti.</string>
     <string name="open_developer_opt">Pengembang</string>
     <string name="step_by_step">Langkah demi Langkah</string>
     <string name="instruction">Instruksi</string>
     <string name="enable_notification">Aktifkan Notifikasi</string>
     <string name="start_pairing">Mulai Penyandingan</string>
     <string name="activate_by_root">Mulai (untuk perangkat root)</string>
-    <string name="activate_by_root_msg"><![CDATA[Selain itu, AxManager dapat dimulai secara otomatis saat booting. Jika tidak, silakan periksa apakah sistem atau alat pihak ketiga membatasi AxManager.<br>Anda dapat merujuk ke %s.]]></string>
+    <string name="activate_by_root_msg"><![CDATA[Selain itu, AxManagerD dapat dimulai secara otomatis saat booting. Jika tidak, silakan periksa apakah sistem atau alat pihak ketiga membatasi AxManagerD.<br>Anda dapat merujuk ke %s.]]></string>
     <string name="adb_tcp_not_ready">ADB TCP belum siap pada port %d</string>
     <string name="adb_tcp_stopped">ADB TCP Berhasil Dihentikan</string>
     <string name="failed_to_stop_adb_tcp">Gagal menghentikan ADB TCP</string>
@@ -113,7 +113,7 @@
     <string name="install_backup">Instal backup</string>
     <string name="install_backup_desc">Instal ke direktori backup terpisah dan snapshot status awal sehingga perubahan dapat dikembalikan saat uninstall.</string>
     <string name="export_running_log">Ekspor log berjalan</string>
-    <string name="export_running_log_desc">Salin semua log AxManager di bawah axeron/logs/ ke folder Download.</string>
+    <string name="export_running_log_desc">Salin semua log AxManagerD di bawah axeron/logs/ ke folder Download.</string>
     <string name="export_running_log_empty">Tidak ada log yang dapat diekspor</string>
     <string name="failed_to_save_log">Gagal menyimpan log: %s</string>
     <string name="ask_install_plugin">Instal Plugin?</string>
@@ -129,9 +129,9 @@
     <string name="idle">Siaga</string>
     <string name="support_me">Dukung Saya</string>
     <string name="not_available_yet">Belum tersedia</string>
-    <string name="support_me_msg">AxManager sepenuhnya gratis dan open-source. Jika menurut Anda ini berguna, silakan ikuti proyek ini dan pertimbangkan untuk memberikan bintang di GitHub.</string>
-    <string name="learn_more">Pelajari AxManager</string>
-    <string name="learn_more_msg">Pelajari cara menggunakan AxManager dan cara membuat plugin</string>
+    <string name="support_me_msg">AxManagerD sepenuhnya gratis dan open-source. Jika menurut Anda ini berguna, silakan ikuti proyek ini dan pertimbangkan untuk memberikan bintang di GitHub.</string>
+    <string name="learn_more">Pelajari AxManagerD</string>
+    <string name="learn_more_msg">Pelajari cara menggunakan AxManagerD dan cara membuat plugin</string>
     <string name="updating">Memperbarui…</string>
     <string name="server_updating_version" formatted="false"><![CDATA[Memperbarui: %d > %d]]></string>
     <string name="version_pid" formatted="false">Versi: %d | Pid: %d</string>
@@ -140,7 +140,7 @@
     <string name="home_need_fix">Perlu langkah tambahan</string>
     <string name="home_need_fix_msg">Klik untuk melihat cara memperbaikinya</string>
     <string name="home_not_running">Perlu Aktivasi</string>
-    <string name="home_not_running_msg">Klik untuk mengaktivasi AxManager</string>
+    <string name="home_not_running_msg">Klik untuk mengaktivasi AxManagerD</string>
     <string name="home_update">Perlu Re-Aktivasi</string>
     <string name="new_version_available">Versi baru %s tersedia, klik untuk memperbarui.</string>
     <string name="android_version">Versi Android</string>
@@ -153,7 +153,7 @@
     <string name="search_label_apps">Cari Aplikasi</string>
     <string name="quick_shell">QuickShell</string>
     <string name="quick_shell_short">QShell</string>
-    <string name="quick_shell_not_supported">Silakan aktivasi AxManager terlebih dahulu</string>
+    <string name="quick_shell_not_supported">Silakan aktivasi AxManagerD terlebih dahulu</string>
     <string name="save">Simpan</string>
     <string name="exec">Jalankan</string>
     <string name="send">Kirim</string>
@@ -173,7 +173,7 @@
     <string name="axeron_permission">Cegat AX-Permission</string>
     <string name="axeron_permission_desc">Cegat manajer izin yang dibangun di atas Shizuku-API menggunakan Ax-Environment</string>
     <string name="tcp_mode">Mode TCP</string>
-    <string name="tcp_mode_desc">Memungkinkan AxManager untuk memulai ulang tanpa Wi-Fi (AxManager harus pernah dimulai sekali sejak booting)</string>
+    <string name="tcp_mode_desc">Memungkinkan AxManagerD untuk memulai ulang tanpa Wi-Fi (AxManagerD harus pernah dimulai sekali sejak booting)</string>
     <string name="invalid_port">Port harus antara 1024 dan 65535</string>
     <string name="reactive_to_apply">Re-Aktivasi untuk menerapkan perubahan</string>
     <string name="active_on_boot">Aktifkan saat Booting</string>
@@ -182,17 +182,17 @@
     <string name="please_wait">Harap tunggu…</string>
     <string name="view_command_message">`%s`\n\nAda beberapa pertimbangan lain, harap konfirmasi bahwa Anda telah membaca bantuan terlebih dahulu.</string>
     <string name="activate_by_computer">Mulai dengan menghubungkan ke komputer</string>
-    <string name="activate_by_computer_desc">Untuk perangkat tanpa root, Anda perlu menggunakan adb untuk memulai AxManager (memerlukan koneksi komputer). Proses ini perlu diulangi setiap kali perangkat dimulai ulang.</string>
+    <string name="activate_by_computer_desc">Untuk perangkat tanpa root, Anda perlu menggunakan adb untuk memulai AxManagerD (memerlukan koneksi komputer). Proses ini perlu diulangi setiap kali perangkat dimulai ulang.</string>
     <string name="activate_by_wireless">Mulai melalui Wireless Debugging</string>
-    <string name="activate_by_wireless_desc">Pada Android 11 atau lebih baru, Anda dapat mengaktifkan Wireless debugging dan memulai AxManager langsung dari perangkat Anda, tanpa terhubung ke komputer.\n\nSilakan lihat panduan langkah demi langkah terlebih dahulu.</string>
+    <string name="activate_by_wireless_desc">Pada Android 11 atau lebih baru, Anda dapat mengaktifkan Wireless debugging dan memulai AxManagerD langsung dari perangkat Anda, tanpa terhubung ke komputer.\n\nSilakan lihat panduan langkah demi langkah terlebih dahulu.</string>
     <string name="view_command">Lihat Perintah</string>
     <string name="share_command">Bagikan Perintah</string>
-    <string name="active_on_boot_desc">Otomatis aktivasi AxManager saat booting (Root / ADB pada Android 11+ (Eksperimental))</string>
+    <string name="active_on_boot_desc">Otomatis aktivasi AxManagerD saat booting (Root / ADB pada Android 11+ (Eksperimental))</string>
     <string name="ignite_when_relog">Relog untuk Ignite</string>
-    <string name="ignite_when_relog_desc">Saat Anda masuk kembali, AxManager akan Re-Ignite</string>
-    <string name="reset_path">Reset AxManager</string>
+    <string name="ignite_when_relog_desc">Saat Anda masuk kembali, AxManagerD akan Re-Ignite</string>
+    <string name="reset_path">Reset AxManagerD</string>
     <string name="reset_path_desc">Tindakan ini akan menonaktifkan dan menghapus semua plugin Anda</string>
-    <string name="ask_reset_path">Reset AxManager Sekarang?</string>
+    <string name="ask_reset_path">Reset AxManagerD Sekarang?</string>
     <string name="ask_reset_path_desc">Tindakan ini akan menonaktifkan dan menghapus semua plugin Anda\n\ndi %s</string>
     <string name="reset">Reset</string>
     <string name="settings_editor">Editor Pengaturan</string>
@@ -225,10 +225,10 @@
     <string name="other_permission_config">Konfigurasi Izin Lain</string>
     <!-- Keep Alive -->
     <string name="keep_alive">Keep-Alive Latar Belakang</string>
-    <string name="keep_alive_desc">Jaga AxManager tetap berjalan di latar belakang agar tidak dimatikan (perlu Device Owner)</string>
-    <string name="keep_alive_title">AxManager sedang berjalan</string>
+    <string name="keep_alive_desc">Jaga AxManagerD tetap berjalan di latar belakang agar tidak dimatikan (perlu Device Owner)</string>
+    <string name="keep_alive_title">AxManagerD sedang berjalan</string>
     <string name="keep_alive_channel">Keep-Alive</string>
-    <string name="keep_alive_channel_desc">Menjaga AxManager tetap hidup di latar belakang</string>
+    <string name="keep_alive_channel_desc">Menjaga AxManagerD tetap hidup di latar belakang</string>
 
     <!-- Xposed / LSP module injection -->
     <string name="xposed">Xposed</string>
@@ -271,4 +271,19 @@
     <string name="owner_transfer_confirm">Transfer Device Owner ke %s?</string>
     <string name="owner_transfer_success">Transfer berhasil</string>
     <string name="owner_transfer_failed">Transfer gagal: %s</string>
+
+    <!-- Profile Owner 独立卡片 / 转移增强 -->
+    <string name="temp_profile_owner_title">Aktifkan Profile Owner</string>
+    <string name="temp_profile_owner_desc">Aktifkan Profile Owner (pengguna tunggal) dengan satu perintah shell — tanpa komputer. Profile Owner hanya berlaku untuk pengguna saat ini, dan saling eksklusif dengan Device Owner.</string>
+    <string name="temp_profile_owner_active">Aktif</string>
+    <string name="temp_profile_owner_active_label">Profile Owner aktif</string>
+    <string name="temp_profile_owner_inactive">Tidak aktif</string>
+    <string name="temp_profile_owner_copy">Salin perintah</string>
+    <string name="temp_profile_owner_activate_by_shizuku">Aktifkan via Shizuku</string>
+    <string name="shizuku_activate_owner_desc">Kontrol penuh perangkat: kelola semua pengguna, pasang/hapus aplikasi secara global, atur kebijakan.</string>
+    <string name="shizuku_activate_profile_owner_desc">Hanya pengguna saat ini: kelola kebijakan dan aplikasi dalam profil Anda sendiri, hak lebih terbatas.</string>
+    <string name="owner_transfer_target_label">Aplikasi tujuan</string>
+    <string name="owner_transfer_none_hint">Tidak ada aplikasi dengan receiver admin perangkat. Pasang satu terlebih dahulu (mis. Dhizuku) untuk mentransfer kepemilikan.</string>
+    <string name="owner_transfer_refresh">Segarkan daftar</string>
+    <string name="temp_do_prereq">Prasyarat: tidak ada akun di perangkat, dan hanya satu pengguna. Jika tidak terpenuhi, sistem akan melaporkan kesalahan yang jelas.</string>
 </resources>
