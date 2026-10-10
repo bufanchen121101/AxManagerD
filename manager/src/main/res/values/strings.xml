@@ -164,6 +164,12 @@
     <string name="home_need_fix_msg">Click to see how to fix</string>
     <string name="home_not_running">Need to Activate</string>
     <string name="home_not_running_msg">Click to activating AxManagerD</string>
+    <!-- v1.3.1 home layout v4 / v6: status stats, device info section, device owner chip -->
+    <string name="home_stats">%1$d Privileges · %2$d Modules</string>
+    <string name="home_device_info">Device Info</string>
+    <string name="home_service_version">Service Version</string>
+    <string name="home_manager_version">Manager Version</string>
+    <string name="home_device_owner_chip">Device Owner</string>
     <string name="home_update">Need Re-Activate</string>
     <string name="new_version_available">New version %s is available, click to update.</string>
     <string name="android_version">Android Version</string>
@@ -174,6 +180,20 @@
     <string name="report_issue_msg2">Report it as soon as possible!</string>
     <string name="privilege_manager">Privilege Manager</string>
     <string name="search_label_apps">Search Apps</string>
+    <string name="privilege_user">Privilege user</string>
+    <string name="privilege_adb_desc">Grant ADB privileges to this app</string>
+    <string name="privilege_owner">Owner privileges</string>
+    <string name="privilege_owner_desc">Manage the Device Owner privileges this app is allowed to use</string>
+    <string name="privilege_owner_unavailable">This app has not requested Device Owner authorization</string>
+    <string name="privilege_action_freeze_desc">Disable the app while keeping its data</string>
+    <string name="privilege_action_suspend_desc">Suspend the app; its notifications and background work stop</string>
+    <string name="privilege_action_hide_desc">Hide the app from the launcher and other apps</string>
+    <string name="privilege_action_block_network_desc">Block all network access for this app</string>
+    <string name="privilege_uid_format">UID %1$d</string>
+    <string name="privilege_confirm_title">Confirm %1$s?</string>
+    <string name="privilege_confirm_uninstall">This will force-uninstall %1$s and delete its data. Force-uninstalling a system app may break the device. Continue?</string>
+    <string name="privilege_confirm_clear_data">This will erase all user data of %1$s, and it cannot be recovered. Continue?</string>
+    <string name="privilege_confirm_generic">This will run “%2$s” on %1$s. Continue?</string>
     <string name="quick_shell">QuickShell</string>
     <string name="quick_shell_short">QShell</string>
     <string name="quick_shell_not_supported">Please activate AxManagerD first</string>
@@ -325,9 +345,13 @@
     <string name="keep_alive_title">AxManagerD is running</string>
     <string name="keep_alive_channel">Keep-Alive</string>
     <string name="keep_alive_channel_desc">Keeps AxManagerD alive in background</string>
+    <!-- 【v1.3.1】"Stop" action shown when the keep-alive notification is expanded. -->
+    <string name="keep_alive_action_stop">Stop</string>
     <!-- Module process keep-alive: removed（功能已按需求移除） -->
-    <string name="do_keep_alive">设备所有者保活加固</string>
-    <string name="do_keep_alive_desc">利用设备所有者（Device Owner）权限降低被系统冻结、回收的概率（放宽电池优化与应用待机）。仅在手机已授予本应用「设备所有者」权限时生效；其他情况下打开此开关不会报错，也不会有任何作用。</string>
+    <!-- 【v1.3.1】Renamed from "Device Owner keep-alive hardening" and its function replaced:
+         it now controls the keep-alive notification (and the "Stop" action inside it). -->
+    <string name="do_keep_alive">Keep-Alive Notification</string>
+    <string name="do_keep_alive_desc">Shows a persistent keep-alive notification in the status bar. Expand it with the arrow to reveal a "Stop" action, which ends keep-alive right away — you decide whether it keeps running. Turning this on starts keep-alive and shows the notification immediately.</string>
     <string name="axmanagerd_modules">AxManagerD 模块</string>
     <string name="axmanagerd_modules_desc">此链接内的模块都是经过官方测试的模块</string>
     <!-- Terminal mode -->
@@ -766,6 +790,13 @@
     <string name="shizuku_activate_chooser_desc">Choose what to activate with Shizuku:</string>
     <string name="shizuku_activate_owner">Activate Device Owner (full privileges)</string>
     <string name="shizuku_activate_profile_owner">Activate Profile Owner (single user)</string>
+    <!-- Activate the service with Shizuku (same idea as Scene's up.sh: run one launch command as Shizuku) -->
+    <string name="shizuku_launch_title">Activate via Shizuku</string>
+    <string name="shizuku_launch_desc">Once Shizuku is granted, start the AxManagerD service directly with the Shizuku (shell) identity — no computer, no reboot required.</string>
+    <string name="shizuku_launch_action">Activate with Shizuku</string>
+    <string name="shizuku_launch_copy">Copy command</string>
+    <string name="shizuku_launch_ready">Shizuku granted — one tap to activate</string>
+    <string name="shizuku_launch_not_ready">Shizuku permission not granted</string>
     <string name="owner_transfer_title">Transfer ownership</string>
     <string name="owner_transfer_desc">Transfer the Device Owner identity to another app. This app will no longer be the Device Owner.</string>
     <string name="owner_transfer_no_target">No eligible target app found</string>

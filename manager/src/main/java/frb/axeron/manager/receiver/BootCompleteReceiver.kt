@@ -45,6 +45,19 @@ class BootCompleteReceiver : BroadcastReceiver() {
                 Log.e(TAG, "Failed to start keep-alive service", e)
             }
         }
+        // 【开机自启动修复】「开机自动启动（无线调试预热）」是**独立开关**
+        // （见 AxeronSettings.BOOT_START_SERVICE 的注释），旧实现却把它放在下面的
+        // `getStartOnBoot()` 之后 —— 用户一旦关掉「开机自激活」，预热分支就永远
+        // 执行不到。这里先按独立开关处理，保证两者互不牵连。
+        if (AxeronSettings.getBootStartService() &&
+            !context.packageManager.isSafeMode &&
+            !Axeron.pingBinder()
+        ) {
+            Log.d(TAG, "start BootStartService (independent boot-start switch)")
+            BootStartService.start(context)
+            return
+        }
+
         if (!AxeronSettings.getStartOnBoot()) {
             return
         }

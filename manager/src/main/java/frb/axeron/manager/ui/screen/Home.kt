@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -19,34 +20,31 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.filled.Android
-import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.Cancel
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Update
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -65,9 +63,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
@@ -89,11 +87,7 @@ import frb.axeron.api.AxeronPluginService
 import frb.axeron.api.core.Starter
 import frb.axeron.manager.BuildConfig
 import frb.axeron.manager.R
-import frb.axeron.manager.ui.component.ExtraLabel
-import frb.axeron.manager.ui.component.ExtraLabelDefaults
-import frb.axeron.manager.ui.component.PluginCard
 import frb.axeron.manager.ui.component.PowerDialog
-import frb.axeron.manager.ui.component.PrivilegeCard
 import frb.axeron.manager.ui.component.rememberConfirmDialog
 import frb.axeron.manager.ui.component.rememberLoadingDialog
 import frb.axeron.manager.ui.util.checkNewVersion
@@ -220,24 +214,12 @@ fun HomeScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGloba
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             StatusCard(
-                activateViewModel = activateViewModel
+                activateViewModel = activateViewModel,
+                moduleCount = pluginViewModel.plugins.size,
+                privilegeCount = privilegeViewModel.privilegedCount
             ) {
                 if (!it) {
                     navigator.navigate(ActivateScreenDestination)
-                }
-            }
-            AnimatedVisibility(visible = isRunning) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    PluginCard(
-                        Modifier.weight(1f),
-                        pluginViewModel
-                    )
-                    PrivilegeCard(
-                        Modifier.weight(1f),
-                        privilegeViewModel
-                    )
                 }
             }
 
@@ -283,7 +265,7 @@ fun SupportCard() {
             }
             Icon(
                 modifier = Modifier.padding(end = 10.dp, start = 24.dp),
-                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                painter = painterResource(R.drawable.ic_github),
                 contentDescription = "Support to github",
             )
         }
@@ -322,7 +304,7 @@ fun LearnCard() {
             }
             Icon(
                 modifier = Modifier.padding(end = 10.dp, start = 24.dp),
-                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = "Support to github",
             )
         }
@@ -332,6 +314,8 @@ fun LearnCard() {
 @Composable
 fun StatusCard(
     activateViewModel: ActivateViewModel,
+    moduleCount: Int = 0,
+    privilegeCount: Int = 0,
     onClick: (Boolean) -> Unit = {}
 ) {
     val axeronInfo = activateViewModel.axeronInfo
@@ -343,6 +327,14 @@ fun StatusCard(
     val uriHandler = LocalUriHandler.current
     val extraStepUrl =
         "https://fahrez182.github.io/AxManager/guide/faq.html#start-via-wireless-debugging-start-by-connecting-to-a-computer-the-permission-of-adb-is-limited"
+
+    // 【v1.3.1】主页状态卡进入/恢复时刷新权限状态，
+    // 外部 Dhizuku / Shizuku 应用中的授予或撤销能及时反映。
+    LaunchedEffect(Unit) {
+        activateViewModel.refreshAllStates()
+        activateViewModel.refreshTempDoState()
+        activateViewModel.refreshProfileOwnerState()
+    }
 
     ElevatedCard(
         colors = CardDefaults.elevatedCardColors(
@@ -486,26 +478,70 @@ fun StatusCard(
                 }
 
                 isRunning -> {
+                    val ownerChip = when {
+                        activateViewModel.isDeviceOwner -> {
+                            stringResource(R.string.home_device_owner_chip)
+                        }
+
+                        activateViewModel.isTempDoActive && !activateViewModel.isProfileOwner -> {
+                            stringResource(R.string.temp_do_active_label)
+                        }
+
+                        activateViewModel.isProfileOwnerActive && !activateViewModel.isTempDoActive -> {
+                            stringResource(R.string.temp_profile_owner_active_label)
+                        }
+
+                        else -> null
+                    }
+
+                    var time by remember { mutableLongStateOf(0) }
+                    LaunchedEffect(Unit) {
+                        while (true) {
+                            time = SystemClock.elapsedRealtime() - axeronInfo.serverInfo.starting
+                            delay(1000)
+                        }
+                    }
+
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            StatusRunningTile(
-                                modifier = Modifier.weight(1f).aspectRatio(1f),
-                                axeronInfo = axeronInfo
+                            StatusRing(
+                                icon = Icons.Filled.Check,
+                                tint = LocalContentColor.current
                             )
-                            StatusPermissionTile(
-                                modifier = Modifier.weight(1f).aspectRatio(1f),
-                                activateViewModel = activateViewModel,
-                                onOpenPermissions = { onClick(false) }
+                            Text(
+                                text = stringResource(id = R.string.home_running),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold
                             )
+                            ownerChip?.let {
+                                StatusChip(text = it)
+                            }
                         }
+                        Text(
+                            text = stringResource(
+                                R.string.home_stats,
+                                privilegeCount,
+                                moduleCount
+                            ),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = formatUptime(
+                                time,
+                                stringResource(R.string.day_singular),
+                                stringResource(R.string.day_plural)
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                 }
 
@@ -515,16 +551,31 @@ fun StatusCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        PermissionStatusCard(
-                            modifier = Modifier.weight(1f),
-                            activateViewModel = activateViewModel,
-                            onOpenPermissions = { onClick(false) }
+                        StatusRing(
+                            icon = Icons.Filled.Close,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        ActivationStatusCard(
-                            modifier = Modifier.weight(1f),
-                            onClickActivate = { onClick(false) }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.home_not_running),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.home_not_running_msg),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            modifier = Modifier.size(22.dp),
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -533,252 +584,6 @@ fun StatusCard(
     }
 }
 
-@Composable
-fun StatusRunningTile(
-    modifier: Modifier = Modifier,
-    axeronInfo: frb.axeron.api.AxeronInfo
-) {
-    ElevatedCard(
-        modifier = modifier,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    modifier = Modifier.size(22.dp),
-                    painter = painterResource(R.drawable.ic_axeron),
-                    contentDescription = null
-                )
-                Text(
-                    text = stringResource(id = R.string.home_running),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-            val versionPid = stringResource(R.string.version_pid)
-            Text(
-                text = versionPid.format(axeronInfo.getVersionCode(), axeronInfo.serverInfo.pid),
-                style = MaterialTheme.typography.bodySmall
-            )
-            Spacer(Modifier.weight(1f))
-            var time by remember { mutableLongStateOf(0) }
-            LaunchedEffect(Unit) {
-                while (true) {
-                    time = SystemClock.elapsedRealtime() - axeronInfo.serverInfo.starting
-                    delay(1000)
-                }
-            }
-            val daySingular = stringResource(R.string.day_singular)
-            val dayPlural = stringResource(R.string.day_plural)
-            fun formatUptime(millis: Long): String {
-                val totalSeconds = millis / 1000
-                val days = totalSeconds / 86400
-                val hours = (totalSeconds % 86400) / 3600
-                val minutes = (totalSeconds % 3600) / 60
-                val seconds = totalSeconds % 60
-                val dayPart = when {
-                    days == 1L -> "1 $daySingular "
-                    days > 1 -> "$days $dayPlural "
-                    else -> ""
-                }
-                return "T+$dayPart%02d:%02d:%02d".format(hours, minutes, seconds)
-            }
-            Text(
-                text = formatUptime(time),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontFamily = FontFamily.Monospace
-            )
-        }
-    }
-}
-
-@Composable
-fun StatusPermissionTile(
-    modifier: Modifier = Modifier,
-    activateViewModel: ActivateViewModel,
-    onOpenPermissions: () -> Unit
-) {
-    val fullyActivated = activateViewModel.isFullyActivated
-    val shizukuActive = activateViewModel.isShizukuActive
-    val dhizukuGranted = activateViewModel.isDhizukuGranted
-    // 临时DO（role holder）状态：重启即失效，但需在界面上如实反映。
-    val tempDoActive = activateViewModel.isTempDoActive
-    // 资料所有者状态（与临时DO 互斥显示）
-    val profileOwnerActive = activateViewModel.isProfileOwnerActive
-    // Refresh permission state whenever the home screen enters/resumes, so that
-    // granting or revoking in the external Dhizuku / Shizuku app is reflected.
-    LaunchedEffect(Unit) {
-        activateViewModel.refreshAllStates()
-        activateViewModel.refreshTempDoState()
-        activateViewModel.refreshProfileOwnerState()
-    }
-    ElevatedCard(
-        modifier = modifier,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = if (fullyActivated) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            }
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    modifier = Modifier.size(22.dp),
-                    imageVector = if (fullyActivated) Icons.Filled.CheckCircle else Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = if (fullyActivated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(id = R.string.permission_status),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = stringResource(
-                    if (fullyActivated) R.string.fully_activated else R.string.not_fully_activated
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (fullyActivated) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (fullyActivated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // Shizuku indicator (independent of the owner identity below).
-            Spacer(Modifier.height(8.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(
-                    modifier = Modifier.size(14.dp),
-                    imageVector = if (shizukuActive) Icons.Filled.CheckCircle else Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = if (shizukuActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(
-                        if (shizukuActive) R.string.shizuku_granted else R.string.shizuku_not_granted
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (shizukuActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            // Mutual-exclusive privilege row: Device Owner > Dhizuku > none.
-            // When AxManager itself is the owner, do NOT also show the Dhizuku line.
-            Spacer(Modifier.height(2.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                val ownerActive =
-                    activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner
-                val active = ownerActive || dhizukuGranted
-                Icon(
-                    modifier = Modifier.size(14.dp),
-                    imageVector = if (active) Icons.Filled.CheckCircle else Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(
-                        when {
-                            activateViewModel.isDeviceOwner -> R.string.device_owner_active
-                            activateViewModel.isProfileOwner -> R.string.profile_owner_active
-                            activateViewModel.isDpGranted -> R.string.new_perm_dp_role
-                            activateViewModel.isWsGranted -> R.string.new_perm_ws
-                            dhizukuGranted -> R.string.dhizuku_granted
-                            else -> R.string.device_owner_not_active
-                        }
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            // 【修复⑦】原来此处对 DP Role 状态重复渲染了第二行（tertiary 粉色），
-            // 与上方主状态行的 new_perm_dp_role 文案重复，且配色与应用主题不一致。
-            // 主状态行（上方 when 分支）已完整表达 DP 状态，故删除此重复块。
-            // 临时DO 指示（role holder）：与 DO 状态独立显示，因为它是重启即失效的临时身份。
-            if (tempDoActive && !activateViewModel.isDeviceOwner && !activateViewModel.isProfileOwner) {
-                Spacer(Modifier.height(2.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        modifier = Modifier.size(14.dp),
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary
-                    )
-                    Text(
-                        text = stringResource(R.string.temp_do_active_label),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                }
-            }
-            // 资料所有者（Profile Owner）指示：与 DO 互斥，单独一行显示。
-            if (profileOwnerActive && !tempDoActive) {
-                Spacer(Modifier.height(2.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        modifier = Modifier.size(14.dp),
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary
-                    )
-                    Text(
-                        text = stringResource(R.string.temp_profile_owner_active_label),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenPermissions() },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = stringResource(id = R.string.other_permission_config),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Icon(
-                    modifier = Modifier.size(14.dp),
-                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-    }
-}
 @Composable
 fun UpdateCard() {
     val latestVersionInfo = LatestVersionInfo()
@@ -835,8 +640,16 @@ fun WarningCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(onClick?.let { Modifier.clickable { it() } } ?: Modifier)
-                .padding(24.dp)
+                .padding(24.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            Icon(
+                modifier = Modifier
+                    .padding(end = 10.dp)
+                    .size(18.dp),
+                imageVector = Icons.Outlined.Info,
+                contentDescription = null
+            )
             Text(
                 text = message, style = MaterialTheme.typography.bodyMedium
             )
@@ -847,84 +660,158 @@ fun WarningCard(
 @Composable
 fun InfoCard(activateViewModel: ActivateViewModel) {
     val axeronInfo = activateViewModel.axeronInfo
+    val versionPid = stringResource(R.string.version_pid)
 
-    ElevatedCard(
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = 1.dp
-        ),
-        modifier = Modifier.fillMaxWidth()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(all = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        Text(
+            modifier = Modifier.padding(start = 8.dp),
+            text = stringResource(R.string.home_device_info),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        ElevatedCard(
+            elevation = CardDefaults.cardElevation(
+                defaultElevation = 1.dp
+            ),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            @Composable
-            fun InfoCardItem(label: String, content: String, icon: Any? = null) {
-                Card {
-                    Row(
-                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (icon != null) {
-                            when (icon) {
-                                is ImageVector -> Icon(
-                                    imageVector = icon,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .padding(end = 22.dp)
-                                        .size(22.dp)
-                                )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                InfoCardItem(
+                    label = stringResource(R.string.home_device),
+                    content = "${Build.MANUFACTURER} ${Build.MODEL}"
+                )
 
-                                is Painter -> Icon(
-                                    painter = icon,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .padding(end = 22.dp)
-                                        .size(22.dp)
-                                )
-                            }
-                        }
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            modifier = Modifier.fillMaxWidth(),
-                            text = content,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.End,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
+                InfoCardDivider()
+
+                InfoCardItem(
+                    label = stringResource(R.string.android_version),
+                    content = "${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})"
+                )
+
+                InfoCardDivider()
+
+                InfoCardItem(
+                    label = stringResource(R.string.abi_supported),
+                    content = Build.SUPPORTED_ABIS.joinToString(", ")
+                )
+
+                InfoCardDivider()
+
+                InfoCardItem(
+                    label = stringResource(R.string.selinux_context),
+                    content = axeronInfo.serverInfo.selinuxContext
+                )
+
+                InfoCardDivider()
+
+                InfoCardItem(
+                    label = stringResource(R.string.home_service_version),
+                    content = versionPid.format(axeronInfo.getVersionCode(), axeronInfo.serverInfo.pid)
+                )
+
+                InfoCardDivider()
+
+                InfoCardItem(
+                    label = stringResource(R.string.home_manager_version),
+                    content = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+                )
             }
-
-            InfoCardItem(
-                label = stringResource(R.string.android_version),
-                content = "${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
-                icon = Icons.Filled.Android,
-            )
-
-            InfoCardItem(
-                label = stringResource(R.string.abi_supported),
-                content = Build.SUPPORTED_ABIS.joinToString(", "),
-                icon = Icons.Filled.Memory,
-            )
-
-            InfoCardItem(
-                label = stringResource(R.string.selinux_context),
-                content = axeronInfo.serverInfo.selinuxContext,
-                icon = Icons.Filled.Security,
-            )
-
         }
     }
+}
+
+@Composable
+private fun InfoCardItem(label: String, content: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 13.dp, horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(
+            modifier = Modifier.weight(1f),
+            text = content,
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.End,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+private fun InfoCardDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .height(1.dp)
+            .background(MaterialTheme.colorScheme.outlineVariant)
+    )
+}
+
+@Composable
+private fun StatusRing(icon: ImageVector, tint: Color) {
+    Box(
+        modifier = Modifier
+            .size(26.dp)
+            .border(width = 2.dp, color = tint, shape = CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            modifier = Modifier.size(14.dp),
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint
+        )
+    }
+}
+
+@Composable
+private fun StatusChip(text: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(percent = 50))
+            .background(MaterialTheme.colorScheme.onPrimaryContainer)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primaryContainer
+        )
+    }
+}
+
+private fun formatUptime(millis: Long, daySingular: String, dayPlural: String): String {
+    val totalSeconds = millis / 1000
+    val days = totalSeconds / 86400
+    val hours = (totalSeconds % 86400) / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    val dayPart = when {
+        days == 1L -> "1 $daySingular "
+        days > 1 -> "$days $dayPlural "
+        else -> ""
+    }
+    return "T+$dayPart%02d:%02d:%02d".format(hours, minutes, seconds)
 }
 
 
@@ -996,162 +883,3 @@ fun IssueReportCard() {
     }
 }
 
-@Composable
-fun PermissionStatusCard(
-    modifier: Modifier = Modifier,
-    activateViewModel: ActivateViewModel,
-    onOpenPermissions: () -> Unit
-) {
-    val shizukuActive = activateViewModel.isShizukuActive
-    val dhizukuGranted = activateViewModel.isDhizukuGranted
-    LaunchedEffect(Unit) {
-        activateViewModel.refreshAllStates()
-    }
-    ElevatedCard(
-        modifier = modifier,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    modifier = Modifier.size(22.dp),
-                    imageVector = Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(id = R.string.permission_status),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    modifier = Modifier.size(16.dp),
-                    imageVector = if (shizukuActive) Icons.Filled.CheckCircle else Icons.Filled.Cancel,
-                    contentDescription = null,
-                    tint = if (shizukuActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(
-                        if (shizukuActive) R.string.shizuku_granted else R.string.shizuku_not_granted
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (shizukuActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                val ownerActive =
-                    activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner
-                val active = ownerActive || dhizukuGranted
-                Icon(
-                    modifier = Modifier.size(16.dp),
-                    imageVector = if (active) Icons.Filled.CheckCircle else Icons.Filled.Cancel,
-                    contentDescription = null,
-                    tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(
-                        when {
-                            activateViewModel.isDeviceOwner -> R.string.device_owner_active
-                            activateViewModel.isProfileOwner -> R.string.profile_owner_active
-                            activateViewModel.isDpGranted -> R.string.new_perm_dp_role
-                            activateViewModel.isWsGranted -> R.string.new_perm_ws
-                            dhizukuGranted -> R.string.dhizuku_granted
-                            else -> R.string.device_owner_not_active
-                        }
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenPermissions() },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = stringResource(id = R.string.other_permission_config),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Icon(
-                    modifier = Modifier.size(14.dp),
-                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun ActivationStatusCard(
-    modifier: Modifier = Modifier,
-    onClickActivate: () -> Unit
-) {
-    ElevatedCard(
-        modifier = modifier,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-        ),
-        onClick = onClickActivate
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                modifier = Modifier.size(48.dp),
-                imageVector = Icons.Outlined.Cancel,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = stringResource(R.string.home_not_running),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = stringResource(R.string.home_not_running_msg),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = stringResource(R.string.activate),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-    }
-}

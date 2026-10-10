@@ -13,7 +13,6 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
@@ -330,49 +329,67 @@ class AxActivity : ComponentActivity() {
                             dependency(viewModelGlobal)
                         },
                         defaultTransitions = object : NavHostAnimatedDestinationStyle() {
+                            // M3 官方动效规格（StandardMotionTokens 真值）：
+                            // spatial → 位移/尺寸（0.9 / 700）；effects → 透明度（1.0 / 1600）
+                            private val spatial = spring<IntOffset>(dampingRatio = 0.9f, stiffness = 700f)
+                            private val effects = spring<Float>(dampingRatio = 1.0f, stiffness = 1600f)
+
+                            private fun bottomBarIndex(route: String?): Int =
+                                BottomBarDestination.entries.find { it.direction.route == route }?.ordinal ?: -1
+
+                            // 进入：新页整幅滑入 + 淡入；旧页小幅位移 + 淡出（M3 共享轴）
                             override val enterTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition
                                 get() = {
-                                    val initialState = initialState.destination.route
-                                    val targetState = targetState.destination.route
-
-                                    // Cari indeks destinasi di BottomBar
-                                    val initialIndex = BottomBarDestination.entries.find { it.direction.route == initialState }?.ordinal ?: -1
-                                    val targetIndex = BottomBarDestination.entries.find { it.direction.route == targetState }?.ordinal ?: -1
+                                    val initialIndex = bottomBarIndex(initialState.destination.route)
+                                    val targetIndex = bottomBarIndex(targetState.destination.route)
 
                                     if (initialIndex != -1 && targetIndex != -1) {
-                                        // Jika pindah antar tab BottomBar
+                                        // 底栏 Tab 之间：按方向横滑
                                         if (targetIndex > initialIndex) {
-                                            // Geser ke kiri (masuk dari kanan)
-                                            slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(300)) + fadeIn()
+                                            slideInHorizontally(animationSpec = spatial) { it } +
+                                                    fadeIn(animationSpec = effects)
                                         } else {
-                                            // Geser ke kanan (masuk dari kiri)
-                                            slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(300)) + fadeIn()
+                                            slideInHorizontally(animationSpec = spatial) { -it } +
+                                                    fadeIn(animationSpec = effects)
                                         }
                                     } else {
-                                        // Animasi default jika bukan antar tab (misal masuk ke detail)
-                                        fadeIn(animationSpec = tween(300))
+                                        // 进入子页面（详情等）：新页从右滑入
+                                        slideInHorizontally(animationSpec = spatial) { it } +
+                                                fadeIn(animationSpec = effects)
                                     }
                                 }
 
                             override val exitTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition
                                 get() = {
-                                    val initialState = initialState.destination.route
-                                    val targetState = targetState.destination.route
-
-                                    val initialIndex = BottomBarDestination.entries.find { it.direction.route == initialState }?.ordinal ?: -1
-                                    val targetIndex = BottomBarDestination.entries.find { it.direction.route == targetState }?.ordinal ?: -1
+                                    val initialIndex = bottomBarIndex(initialState.destination.route)
+                                    val targetIndex = bottomBarIndex(targetState.destination.route)
 
                                     if (initialIndex != -1 && targetIndex != -1) {
                                         if (targetIndex > initialIndex) {
-                                            // Keluar ke kiri
-                                            slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(300)) + fadeOut()
+                                            slideOutHorizontally(animationSpec = spatial) { -it / 4 } +
+                                                    fadeOut(animationSpec = effects)
                                         } else {
-                                            // Keluar ke kanan
-                                            slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(300)) + fadeOut()
+                                            slideOutHorizontally(animationSpec = spatial) { it / 4 } +
+                                                    fadeOut(animationSpec = effects)
                                         }
                                     } else {
-                                        fadeOut(animationSpec = tween(300))
+                                        slideOutHorizontally(animationSpec = spatial) { -it / 4 } +
+                                                fadeOut(animationSpec = effects)
                                     }
+                                }
+
+                            // 返回：上一层页面从左侧小幅滑回 + 淡入
+                            override val popEnterTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition
+                                get() = {
+                                    slideInHorizontally(animationSpec = spatial) { -it / 4 } +
+                                            fadeIn(animationSpec = effects)
+                                }
+
+                            // 返回：当前页面向右滑出 + 淡出
+                            override val popExitTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition
+                                get() = {
+                                    slideOutHorizontally(animationSpec = spatial) { it } +
+                                            fadeOut(animationSpec = effects)
                                 }
                         }
                     )

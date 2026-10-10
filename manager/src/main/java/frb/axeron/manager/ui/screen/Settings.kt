@@ -1,6 +1,11 @@
 package frb.axeron.manager.ui.screen
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -29,12 +34,12 @@ import androidx.compose.material.icons.filled.Coffee
 import androidx.compose.material.icons.filled.Dangerous
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderDelete
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -77,6 +82,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.rememberLifecycleOwner
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
@@ -118,6 +124,13 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
     val confirmDialog = rememberConfirmDialog()
     val scope = rememberCoroutineScope()
     val settingsContext = LocalContext.current
+    // 【v1.3.1 仿 shevery 通知栏保活】保活通知要用到通知权限：Android 13（API 33）
+    // 起若未授权，前台服务的通知**不会**出现在消息栏 —— 用户也就看不到展开区的
+    // 「停止」按钮。因此打开「保活通知」开关时顺带申请一次。
+    // 被拒绝也不阻塞开关本身：服务照常运行，用户之后在系统设置里授权即可看到通知。
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* 无需处理结果：授权后系统会立即显示已存在的保活通知 */ }
     val uriHandler = LocalUriHandler.current
     val moduleRepoUrl = "https://1852775966.share.123pan.cn/123pan/J03gvd-3ed8h"
 
@@ -462,11 +475,25 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 }
             )
             SettingsItem(
-                iconVector = Icons.Filled.Shield,
+                iconVector = Icons.Filled.Notifications,
                 label = stringResource(R.string.do_keep_alive),
                 description = stringResource(R.string.do_keep_alive_desc),
                 checked = settings.isDoKeepAliveEnabled,
                 onSwitchChange = { enabled ->
+                    // 【v1.3.1 仿 shevery 通知栏保活】该开关已改名换功能：
+                    // 不再是「设备所有者保活加固」，而是「保活通知」——
+                    //   打开：启动保活服务，通知栏出现一条可展开、带「停止」按钮的通知；
+                    //   关闭：把通知重建成普通状态通知（服务是否继续交给「后台保活」开关）。
+                    // 【v1.3.1】Android 13+ 先要通知权限，否则通知栏看不到这条通知。
+                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(
+                            settingsContext,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    // 具体动作（含联动「后台保活」总开关）都在 ViewModel 里，UI 只转发。
                     settings.setDoKeepAlive(enabled)
                 }
             )

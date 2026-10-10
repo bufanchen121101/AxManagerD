@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import frb.axeron.api.core.AxeronSettings
+import frb.axeron.manager.features.keepalive.KeepAliveService
 import frb.axeron.manager.util.PortHelper
 import frb.axeron.manager.ui.theme.basePrimaryDefault
 import frb.axeron.manager.ui.theme.toHexString
@@ -139,20 +140,36 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
     /**
-     * 设备所有者保活加固开关。
+     * 「保活通知」开关（v1.3.1：由原「设备所有者保活加固」**改名并替换功能**）。
      *
-     * 仅当本应用是 Device Owner 时才生效；非 DO 设备上打开开关不会报错，
-     * 但加固动作会被 [frb.axeron.manager.owner.DeviceOwnerKeepAlive] 静默跳过。
+     * 打开时：
+     *   ① 把「后台保活」总开关一并打开 —— 两者是同一套机制的「总闸」与
+     *      「可操作的通知」两个面。只开通知而不允许保活，会出现
+     *      「通知在、重启后却不再保活」的自相矛盾状态；
+     *   ② 立即启动 [KeepAliveService]，消息栏马上出现一条可展开、
+     *      带「停止」按钮的保活通知 —— 用户随时能从通知里结束保活。
+     *
+     * 关闭时：只把通知重建成普通状态通知（去掉展开区的「停止」按钮）。
+     * 是否继续保活交给「后台保活」开关，本开关不负责停服务。
+     *
+     * 注意：DO 保活加固（电池白名单等）已不再挂在开关上，而是由
+     * [KeepAliveService.onCreate] 在服务启动时自动尝试（非 DO 设备静默跳过），
+     * 因此这里去掉旧的 `DeviceOwnerKeepAlive.apply` 调用**不会**丢功能。
      */
     fun setDoKeepAlive(enabled: Boolean) {
         viewModelScope.launch {
             isDoKeepAliveEnabled = enabled
             AxeronSettings.setEnableDoKeepAlive(enabled)
+            val app: Application = getApplication()
             if (enabled) {
-                // 立即应用一次，用户不必等到下次开机。
-                frb.axeron.manager.owner.DeviceOwnerKeepAlive.apply(
-                    context = getApplication(),
-                )
+                if (!AxeronSettings.getEnableKeepAlive()) {
+                    AxeronSettings.setEnableKeepAlive(true)
+                    isKeepAliveEnabled = true
+                }
+                KeepAliveService.refreshNotification(app)
+            } else if (KeepAliveService.isRunning(app)) {
+                // 服务已在运行：只需重建通知，让它退回「不带停止按钮」的普通形态。
+                KeepAliveService.refreshNotification(app)
             }
         }
     }

@@ -229,6 +229,12 @@
     <string name="keep_alive_title">AxManagerD sedang berjalan</string>
     <string name="keep_alive_channel">Keep-Alive</string>
     <string name="keep_alive_channel_desc">Menjaga AxManagerD tetap hidup di latar belakang</string>
+    <!-- 【v1.3.1】Teks tombol "Hentikan" pada notifikasi keep-alive yang dibentangkan. -->
+    <string name="keep_alive_action_stop">Hentikan</string>
+    <!-- 【v1.3.1】Dulu "pengerasan keep-alive Device Owner", kini diganti nama dan fungsinya:
+         menjadi sakelar notifikasi keep-alive (beserta tombol "Hentikan" di dalamnya). -->
+    <string name="do_keep_alive">Notifikasi Keep-Alive</string>
+    <string name="do_keep_alive_desc">Menampilkan notifikasi keep-alive permanen di bilah notifikasi. Bentangkan dengan tanda panah untuk melihat tombol "Hentikan", yang langsung mengakhiri keep-alive — Anda yang menentukan apakah tetap berjalan. Mengaktifkan sakelar ini langsung menjalankan keep-alive dan menampilkan notifikasi.</string>
 
     <!-- Xposed / LSP module injection -->
     <string name="xposed">Xposed</string>
@@ -265,6 +271,13 @@
     <string name="shizuku_activate_chooser_desc">Pilih apa yang akan diaktifkan dengan Shizuku:</string>
     <string name="shizuku_activate_owner">Aktifkan Device Owner (hak penuh)</string>
     <string name="shizuku_activate_profile_owner">Aktifkan Profile Owner (pengguna tunggal)</string>
+    <!-- Aktifkan layanan dengan Shizuku (ide sama seperti up.sh milik Scene) -->
+    <string name="shizuku_launch_title">Aktifkan via Shizuku</string>
+    <string name="shizuku_launch_desc">Setelah Shizuku diberikan, jalankan layanan AxManagerD langsung dengan identitas Shizuku (shell) — tanpa komputer, tanpa reboot.</string>
+    <string name="shizuku_launch_action">Aktifkan dengan Shizuku</string>
+    <string name="shizuku_launch_copy">Salin perintah</string>
+    <string name="shizuku_launch_ready">Shizuku diberikan — satu ketuk untuk aktif</string>
+    <string name="shizuku_launch_not_ready">Izin Shizuku belum diberikan</string>
     <string name="owner_transfer_title">Transfer kepemilikan</string>
     <string name="owner_transfer_desc">Transfer identitas Device Owner ke aplikasi lain. Aplikasi ini tidak lagi menjadi Device Owner.</string>
     <string name="owner_transfer_no_target">Tidak ada aplikasi tujuan yang memenuhi syarat</string>

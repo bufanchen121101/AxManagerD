@@ -81,6 +81,16 @@ class BootStartService : Service() {
         private const val PROBE_ATTEMPTS = 16
         private const val PROBE_INTERVAL_MS = 500L
 
+        /**
+         * SystemProperties 残留端口的快速探测参数。
+         *
+         * `service.adb.tcp.port` 是非持久属性，但「关闭无线调试 / 重启 adbd」后它的值
+         * 不会自动清空，很容易读到「有值却没人监听」的端口（真机实测残留 7134）。
+         * 这种情况必须快速失败并回落到 mDNS，不能把 45s 的发现窗口耗在死端口上。
+         */
+        private const val SYSTEM_PORT_PROBE_ATTEMPTS = 3
+        private const val SYSTEM_PORT_PROBE_INTERVAL_MS = 300L
+
         /** 启动服务（幂等：重复调用不会产生多个实例）。 */
         fun start(context: Context) {
             val intent = Intent(context, BootStartService::class.java).apply {
@@ -215,34 +225,52 @@ class BootStartService : Service() {
      *   ② WRITE_SECURE_SETTINGS —— Root / ADB 激活场景下的常规写法。
      */
     private fun ensureAdbEnabled(): Boolean {
-        // ① Device Owner 路径
+        // ① Device Owner 路径。
+        // 【开机自启动修复】DPM 的 setGlobalSetting 只放行白名单内的键：`adb_enabled`
+        // 在名单内，而**无线调试开关 `adb_wifi_enabled` 不在**。旧实现在 `adb_enabled`
+        // 写成功时就 `return true`，于是永远不会执行下面的 ② —— 实测后果正是
+        // `adb_enabled=1` 但 `adb_wifi_enabled=0`：开机后 adbd 不监听任何 TCP 端口
+        // （`service.adb.tcp.port` 是非持久属性，重启即失效），端口发现必然全失败，
+        // 「开机自动打开无线调试并回连」整条链路就此断掉。这里只记录结果，不再提前返回。
+        var doOk = false
         if (DeviceOwnerAdbActivator.isOwner(this)) {
             val r = DeviceOwnerAdbActivator.enableAdb(this)
             Log.i(TAG, "enableAdb via DeviceOwner: success=${r.first} ${r.second ?: ""}")
-            if (r.first) return true
+            doOk = r.first
         }
 
-        // ② WRITE_SECURE_SETTINGS 路径（尽力而为）
+        // ② WRITE_SECURE_SETTINGS 路径。
+        // 【关键】本应用通过 DP Role 持有该权限（实测 granted=true），它是唯一能把
+        // `adb_wifi_enabled` / `adb_allowed_connection_time` 真正写进去的通道，
+        // 所以 DO 场景下**同样必须执行**，不能因为 ① 成功就跳过。
         val granted = checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (!granted) {
-            Log.w(TAG, "WRITE_SECURE_SETTINGS not granted and not a device owner")
-            // 即便是 DO 失败、权限也没有，仍返回 true 让流程继续尝试端口发现，
-            // 因为「无线调试已被系统自动打开」的情况下端口可能是活的。
-            return DeviceOwnerAdbActivator.getAdbTcpPort() > 0
+        if (granted) {
+            val wrote = runCatching {
+                val cr = contentResolver
+                Settings.Global.putInt(cr, Settings.Global.ADB_ENABLED, 1)
+                Settings.Global.putInt(cr, "adb_wifi_enabled", 1)
+                // 关闭自动断开（必须是 MAX_VALUE；0 = 沿用系统默认超时，见
+                // DeviceOwnerAdbActivator.enableAdb 的注释）。
+                Settings.Global.putLong(cr, "adb_allowed_connection_time", Int.MAX_VALUE.toLong())
+                true
+            }.getOrElse {
+                Log.e(TAG, "putGlobal failed", it)
+                false
+            }
+            // 以「无线调试是否真的开着」为准，而不是看调用有没有抛异常。
+            val wifiOn = runCatching {
+                Settings.Global.getInt(contentResolver, "adb_wifi_enabled", 0) == 1
+            }.getOrDefault(false)
+            Log.i(TAG, "enableAdb via WRITE_SECURE_SETTINGS: wrote=$wrote wifiOn=$wifiOn")
+            if (wifiOn) return true
+        } else {
+            Log.w(TAG, "WRITE_SECURE_SETTINGS not granted")
         }
-        return runCatching {
-            val cr = contentResolver
-            Settings.Global.putInt(cr, Settings.Global.ADB_ENABLED, 1)
-            Settings.Global.putInt(cr, "adb_wifi_enabled", 1)
-            // 关闭自动断开（必须是 MAX_VALUE；0 = 沿用系统默认超时，见
-            // DeviceOwnerAdbActivator.enableAdb 的注释）。
-            Settings.Global.putLong(cr, "adb_allowed_connection_time", Int.MAX_VALUE.toLong())
-            true
-        }.getOrElse {
-            Log.e(TAG, "putGlobal failed", it)
-            false
-        }
+
+        // ③ 兜底：DO 路径已写成功（adb_enabled=1），或端口本来就是活的。
+        if (doOk) return true
+        return DeviceOwnerAdbActivator.getAdbTcpPort() > 0
     }
 
     /**
@@ -287,9 +315,18 @@ class BootStartService : Service() {
         return if (probeLocalPort(fixedPort)) fixedPort else -1
     }
 
-    /** 探测 127.0.0.1:port 是否可连（adbd 是否真的在监听）。 */
-    private suspend fun probeLocalPort(port: Int): Boolean {
-        repeat(PROBE_ATTEMPTS) { i ->
+    /**
+     * 探测 127.0.0.1:port 是否可连（adbd 是否真的在监听）。
+     *
+     * @param attempts 轮询次数（默认沿用固定端口场景的 [PROBE_ATTEMPTS]）
+     * @param intervalMs 轮询间隔（默认沿用 [PROBE_INTERVAL_MS]）
+     */
+    private suspend fun probeLocalPort(
+        port: Int,
+        attempts: Int = PROBE_ATTEMPTS,
+        intervalMs: Long = PROBE_INTERVAL_MS
+    ): Boolean {
+        repeat(attempts) { i ->
             val ok = runCatching {
                 java.net.Socket().use { s ->
                     s.connect(java.net.InetSocketAddress("127.0.0.1", port), 250)
@@ -297,7 +334,7 @@ class BootStartService : Service() {
                 true
             }.getOrDefault(false)
             if (ok) return true
-            if (i < PROBE_ATTEMPTS - 1) delay(PROBE_INTERVAL_MS)
+            if (i < attempts - 1) delay(intervalMs)
         }
         return false
     }
@@ -327,10 +364,18 @@ class BootStartService : Service() {
         }
 
         // ② SystemProperties（service.adb.tcp.port → persist.adb.tcp.port）
+        // 【开机自启动修复】该属性是非持久属性，但「关闭无线调试 / 重启 adbd」后它的
+        // 值不会自动清空，很容易读到一个「有值却没人监听」的残留端口（真机实测残留
+        // 7134）。旧实现读到 >0 就直接采用，于是每次都拿死端口去回连，失败后 ③ 的
+        // mDNS 兜底永远轮不到 —— 无线调试开着也发现不了真正的端口。
+        // 这里必须**先探测可达**再采用。
         val sysPort = AdbEnvironment.getAdbTcpPort()
         if (sysPort > 0) {
-            Log.i(TAG, "port from SystemProperties: $sysPort")
-            return sysPort
+            if (probeLocalPort(sysPort, SYSTEM_PORT_PROBE_ATTEMPTS, SYSTEM_PORT_PROBE_INTERVAL_MS)) {
+                Log.i(TAG, "port from SystemProperties (verified): $sysPort")
+                return sysPort
+            }
+            Log.w(TAG, "SystemProperties port $sysPort not reachable, fallback to mDNS")
         }
 
         // ③ mDNS 发现无线调试端口（_adb-tls-connect._tcp）
@@ -367,7 +412,14 @@ class BootStartService : Service() {
         val channel = Channel<AdbStateInfo>(1)
         val job = serviceScope.launch {
             runCatching {
-                AdbStarter.startAdbClient(this@BootStartService, port) { state ->
+                // 【开机自启动修复】必须显式指定 forceTcpPort = port：
+                // startAdbClient 在 forceTcpPort == null 时会回落到全局 TCP 设置
+                // （`getTcpMode()` 默认 true、端口取 `getTcpPort()`），于是「发现到的
+                // 端口 != 全局端口」几乎恒成立，它会先连上再执行 `tcpip:<全局端口>`
+                // 强制切换，**切换失败即 return**，把本来可用的连接也一并放弃 ——
+                // 开机自启动因此必失败。这里告知「目标端口就是发现到的这个」，
+                // 让它跳过切换、直接在该端口完成握手。
+                AdbStarter.startAdbClient(this@BootStartService, port, forceTcpPort = port) { state ->
                     Log.d(TAG, "startAdbClient state: ${state.message}")
                     channel.trySend(state)
                 }

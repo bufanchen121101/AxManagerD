@@ -90,23 +90,35 @@ class AdbMdns(
     /**
      * 判断 mDNS 发现的端口是否「可用」。
      *
-     * 【激活修复】恢复为 1.0.1（用户验证可正常激活的版本）的实现：
-     * 用 `ServerSocket().bind(127.0.0.1, port)` 判断端口是否被占用 ——
-     * 无线调试场景下该端口正是 adbd 自己监听的，bind 必然抛
-     * 「Address already in use」→ 返回 true（可用）。
-     *
-     * 1.2.0 曾改为「尝试 connect，能连上则 true」。该改动在 adbd 尚未完全就绪
-     * （或在 MIUI/HyperOS 上对本地回环连接有限制）时会判为不可用，从而反复
-     * 重启 discovery 直至超时，导致「无线调试/TCP 激活」失败。
-     * 现回退到经真机验证过的 bind 语义，保证激活成功率。
+     * 判定采用**两种都接受**的策略（两个场景都能过）：
+     *   ① `ServerSocket().bind(127.0.0.1, port)` 失败（端口已被占用）
+     *      → 端口上确有服务在监听 → 可用。
+     *      这是 1.0.1 起一直沿用的、经真机验证能保证「无线调试/TCP 激活」成功的判定。
+     *   ② bind 成功（本机 IPv4 回环未被占用）时**再尝试 connect**：
+     *      真机实测 adbd 监听在 **IPv6 的 `::`**（`/proc/net/tcp6` 可见），此时
+     *      对 IPv4 的 `127.0.0.1` 做 bind 并不会冲突 → 旧判定会返回 false（不可用），
+     *      于是 mDNS 反复重启 discovery 直至 45s 超时 —— 这正是「开机自启动
+     *      拿不到无线调试端口」的卡点。双栈系统上 `::` 接受 IPv4-mapped 连接，
+     *      所以这里 connect 能连上就同样算可用。
      */
-    private fun isPortAvailable(port: Int) = try {
-        ServerSocket().use {
-            it.bind(InetSocketAddress("127.0.0.1", port), 1)
+    private fun isPortAvailable(port: Int): Boolean {
+        val occupied = try {
+            ServerSocket().use {
+                it.bind(InetSocketAddress("127.0.0.1", port), 1)
+                false
+            }
+        } catch (e: IOException) {
+            true
+        }
+        if (occupied) return true
+        return try {
+            java.net.Socket().use {
+                it.connect(InetSocketAddress("127.0.0.1", port), 250)
+            }
+            true
+        } catch (e: IOException) {
             false
         }
-    } catch (e: IOException) {
-        true
     }
 
     internal class DiscoveryListener(private val adbMdns: AdbMdns) : NsdManager.DiscoveryListener {

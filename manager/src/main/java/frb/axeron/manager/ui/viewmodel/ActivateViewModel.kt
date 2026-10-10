@@ -33,6 +33,8 @@ import frb.axeron.manager.owner.DeviceOwnerState
 import frb.axeron.manager.owner.NewPermissionPaths
 import frb.axeron.manager.owner.DpDoDirectActivation
 import frb.axeron.manager.owner.DpDoEscalation
+// 【v1.3.1】原版 Shizuku 通道修复：主动拉取 binder（详见该类文档）。
+import frb.axeron.manager.shizuku.ShizukuBinderPuller
 import frb.axeron.manager.adb.AdbStarter.stopTcp
 import rikka.shizuku.Shizuku
 import frb.axeron.manager.adb.AdbStateInfo
@@ -45,6 +47,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * 【v1.3.1】原版 Shizuku 主动拉取 binder 后，等待管理器回写的时长。
+ *
+ * 管理器是用 binder 单向往回调（`transact(1, ...)`）把服务 binder 写回来的，
+ * 实测耗时在毫秒级；350ms 足以覆盖跨进程调度，又不会让用户感到卡顿。
+ *
+ * 仅被 [ActivateViewModel.refreshShizukuState] / [ActivateViewModel.requestShizukuPermission]
+ * 使用，放在文件级是为了不新增第二个 companion object（一个类只允许有一个）。
+ */
+private const val SHIZUKU_PULL_WAIT_MS = 350L
 
 class ActivateViewModel : ViewModel() {
 
@@ -95,6 +108,16 @@ class ActivateViewModel : ViewModel() {
     /** 刷新真实 Shizuku 授权状态（不触碰 axCompanion 伪服务机制）。 */
     fun refreshShizukuState() {
         viewModelScope.launch(Dispatchers.Main) {
+            // 【v1.3.1】原版 Shizuku 通道修复：
+            // 若当前没有可用 binder（推送通道漏发 / 先到那台管理器已退出），
+            // 先主动向原版 Shizuku 管理器「要」一次 binder，再读状态。
+            // 拉取是异步的，因此这里等一小段再判定；已有 binder 时此分支不执行，
+            // 行为与改动前完全一致。
+            if (!checkShizukuRealPermission()) {
+                val ctx = AxeronApplication.axeronApp
+                withContext(Dispatchers.IO) { ShizukuBinderPuller.pull(ctx) }
+                delay(SHIZUKU_PULL_WAIT_MS)
+            }
             isShizukuActive = checkShizukuRealPermission()
         }
     }
@@ -116,6 +139,15 @@ class ActivateViewModel : ViewModel() {
     fun requestShizukuPermission(requestCode: Int) {
         viewModelScope.launch(Dispatchers.Main) {
             shizukuRequestError = null
+            // 【v1.3.1】原版 Shizuku 通道修复：发起授权请求前，若当前还没有 binder，
+            // 先主动拉取一次再请求 —— 否则 `Shizuku.requestPermission()` 会因为
+            // 「没有收到 binder」直接抛异常，用户看到的就是「点了没反应 / 没有授权入口」。
+            // 已有 binder 时本段完全不执行，行为与改动前完全一致。
+            if (!Shizuku.pingBinder()) {
+                withContext(Dispatchers.IO) { ShizukuBinderPuller.pull(AxeronApplication.axeronApp) }
+                delay(SHIZUKU_PULL_WAIT_MS)
+                isShizukuActive = checkShizukuRealPermission()
+            }
             // 不做 pingBinder/权限过滤：直接尝试请求，由 Shizuku 回调决定结果。
             if (shizukuPermissionListener == null) {
                 shizukuPermissionListener =
@@ -2039,5 +2071,69 @@ class ActivateViewModel : ViewModel() {
                 onDone?.invoke(result.success, result.error)
             }
         }
+    }
+
+    // =====================================================================
+    // 【v1.3.1】用 Shizuku 直接启动 Axeron 服务（激活页「通过 Shizuku 激活」卡片）
+    //
+    // 原理参照 Scene（com.omarea.vtools）的 `up.sh`：激活的本质就是「以 shell
+    // 身份把服务进程拉起来」，我们的等价物是 [Starter.internalCommand]：
+    //
+    //     <nativeLibraryDir>/libaxeron.so --apk=<apk 路径>
+    //
+    // 与卡片 1（DP + Shizuku）、卡片 2（非 ADB 直连）的区别：
+    //   · 不做 Device Owner / DP Role 的任何操作，只负责「启动服务」；
+    //   · 因此不需要电脑、不需要重启、不碰账户，只要有 Shizuku 授权即可。
+    //
+    // 【隔离约定】本段全部为新增成员，不改动上方任何既有状态与方法。
+    // =====================================================================
+
+    /**
+     * 「通过 Shizuku 激活」卡片展示 / 复制的命令原文。
+     *
+     * 与 UI 展示保持一致：这里刻意用 `Starter.internalCommand`（裸命令），
+     * **不带 `adb shell` 前缀** —— 前缀属于电脑端，交给设备内 shell 执行会失败
+     * （与 [tempDoPcCommand] 的处理约定相同）。
+     */
+    val shizukuLaunchCommand: String
+        get() = Starter.internalCommand
+
+    /**
+     * 用 Shizuku（shell 身份）启动 Axeron 服务。
+     *
+     * ## 为什么命令要「脱离会话」再执行
+     *
+     * `libaxeron.so` 启动后**本身就是常驻的服务进程**，不是执行完就退出的短命令。
+     * 若直接把它交给 `sh -c` 前台执行，Shizuku 侧的子进程会一直不结束，
+     * `execViaShizuku` 就会一直等（等于卡死）。因此这里用与
+     * [AxeronCommandSession.getQuickCmd] 同样的思路，用 `setsid` 把它放进
+     * **新的会话**并转入后台，再立即重定向标准流：
+     *
+     *     setsid <命令> >/dev/null 2>&1 &
+     *
+     * `setsid` 使服务成为新会话的首进程，脱离我们这条 shell 会话 ——
+     * 外层 shell 退出时它不会被连带杀死，Binder 也能正常注册。
+     *
+     * @return 成功（命令已发出）或失败信息（未授权 / Shizuku 未运行 / 执行报错）
+     */
+    suspend fun activateViaShizuku(): Result<String> = withContext(Dispatchers.IO) {
+        // ① 先确保有 binder：没有就主动拉一次（原版 Shizuku 通道修复，见 ShizukuBinderPuller）
+        //    注意：拉取失败**不能**直接返回 —— 交给下面的 execViaShizuku 抛出可读原因
+        //    （「Shizuku 未运行」/「未获得 Shizuku 授权」），否则用户只看到拉取异常。
+        if (!Shizuku.pingBinder()) {
+            runCatching { ShizukuBinderPuller.pull(AxeronApplication.axeronApp) }
+            delay(SHIZUKU_PULL_WAIT_MS)
+        }
+        // ② 授权检查交给 execViaShizuku 内部统一处理（未授权时抛出可读错误）
+        //    此处**不能**再套一层 runCatching：execViaShizuku 已返回 Result<String>，
+        //    再包会变成 Result<Result<String>>，与函数声明的返回类型不符（CI 编译报错 2120:9）。
+        val detached = "setsid ${Starter.internalCommand} >/dev/null 2>&1 &"
+        execViaShizuku(detached)
+            .onSuccess {
+                Log.i("AxManager", "activateViaShizuku: 已通过 Shizuku 拉起 Axeron 服务")
+            }
+            .onFailure {
+                Log.w("AxManager", "activateViaShizuku 失败: ${it.message}", it)
+            }
     }
 }

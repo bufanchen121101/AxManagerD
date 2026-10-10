@@ -145,6 +145,12 @@
     <string name="home_need_fix_msg">点击查看修复方法</string>
     <string name="home_not_running">未激活</string>
     <string name="home_not_running_msg">点击以激活 AxManagerD</string>
+    <!-- 【v1.3.1】主页布局稿 v4 / v6：状态卡统计、设备信息小节、设备所有者徽标 -->
+    <string name="home_stats">%1$d 个特权 · %2$d 个模块</string>
+    <string name="home_device_info">设备信息</string>
+    <string name="home_service_version">服务版本</string>
+    <string name="home_manager_version">管理器版本</string>
+    <string name="home_device_owner_chip">设备所有者</string>
     <string name="home_update">需要重启</string>
     <string name="new_version_available">发现新版本 %s，点击更新。</string>
     <string name="android_version">Android 版本</string>
@@ -155,6 +161,20 @@
     <string name="report_issue_msg2">欢迎反馈！</string>
     <string name="privilege_manager">权限管理</string>
     <string name="search_label_apps">搜索应用</string>
+    <string name="privilege_user">特权用户</string>
+    <string name="privilege_adb_desc">授予软件 ADB权限</string>
+    <string name="privilege_owner">所有者权限</string>
+    <string name="privilege_owner_desc">管理该应用可使用的设备所有者权限</string>
+    <string name="privilege_owner_unavailable">该应用尚未申请设备所有者授权</string>
+    <string name="privilege_action_freeze_desc">停用应用，但保留其数据</string>
+    <string name="privilege_action_suspend_desc">挂起应用，通知与后台运行一并停止</string>
+    <string name="privilege_action_hide_desc">在桌面和其他应用中隐藏该应用</string>
+    <string name="privilege_action_block_network_desc">禁止该应用访问网络</string>
+    <string name="privilege_uid_format">UID %1$d</string>
+    <string name="privilege_confirm_title">确认%1$s？</string>
+    <string name="privilege_confirm_uninstall">将强制卸载「%1$s」并删除其数据。卸载系统应用可能导致设备异常。是否继续？</string>
+    <string name="privilege_confirm_clear_data">将清除「%1$s」的全部用户数据，且不可恢复。是否继续？</string>
+    <string name="privilege_confirm_generic">将对「%1$s」执行「%2$s」。是否继续？</string>
     <string name="quick_shell">快速终端</string>
     <string name="quick_shell_short">QShell</string>
     <string name="quick_shell_not_supported">请先激活 AxManagerD</string>
@@ -358,6 +378,8 @@
     <string name="keep_alive_title">AxManagerD 正在运行</string>
     <string name="keep_alive_channel">后台保活</string>
     <string name="keep_alive_channel_desc">让 AxManagerD 在后台保持运行</string>
+    <!-- 【v1.3.1】保活通知展开后的「停止」按钮文案（仿 shevery 的通知栏保活） -->
+    <string name="keep_alive_action_stop">停止</string>
 
     <!-- Xposed / LSP 模块注入 -->
     <string name="xposed">Xposed</string>
@@ -662,8 +684,10 @@
     <string name="command_block_unsupported">此命令不可执行，已拦截。</string>
     <string name="command_block_dangerous">此命令有危险，已拦截。</string>
     <!-- module_keep_alive: removed -->
-    <string name="do_keep_alive">设备所有者保活加固</string>
-    <string name="do_keep_alive_desc">利用设备所有者（Device Owner）权限降低被系统冻结、回收的概率（放宽电池优化与应用待机）。仅在手机已授予本应用「设备所有者」权限时生效；其他情况下打开此开关不会报错，也不会有任何作用。</string>
+    <!-- 【v1.3.1】原「设备所有者保活加固」已改名换功能：
+         不再是 DO 加固开关，改为「保活通知」开关（控制通知栏保活通知及其「停止」按钮）。 -->
+    <string name="do_keep_alive">保活通知</string>
+    <string name="do_keep_alive_desc">在消息栏常驻显示保活通知：点通知右侧箭头展开后可以看到「停止」按钮，点一下即结束保活，由你自己决定保活是否继续。打开此开关会立即启动保活并显示通知。</string>
     <string name="axmanagerd_modules">AxManagerD 模块</string>
     <string name="axmanagerd_modules_desc">此链接内的模块都是经过官方测试的模块</string>
     <string name="plugin_compat">插件兼容</string>
@@ -798,6 +822,13 @@
     <string name="shizuku_activate_chooser_desc">选择要用 Shizuku 激活的能力：</string>
     <string name="shizuku_activate_owner">激活设备所有者（完整权限）</string>
     <string name="shizuku_activate_profile_owner">激活资料所有者（单用户）</string>
+    <!-- Shizuku 一键激活服务（参考星野 Scene 的 up.sh 思路：用 Shizuku 身份跑一条启动命令） -->
+    <string name="shizuku_launch_title">通过 Shizuku 激活</string>
+    <string name="shizuku_launch_desc">已授予 Shizuku 权限时，可直接用 Shizuku（shell）身份启动 AxManagerD 服务，无需电脑、无需重启设备。</string>
+    <string name="shizuku_launch_action">用 Shizuku 激活</string>
+    <string name="shizuku_launch_copy">复制指令</string>
+    <string name="shizuku_launch_ready">Shizuku 已授权，可一键激活</string>
+    <string name="shizuku_launch_not_ready">尚未授予 Shizuku 权限</string>
     <string name="owner_transfer_title">权限转移</string>
     <string name="owner_transfer_desc">将设备所有者身份转移给其他应用。转移后本应用将不再是设备所有者。</string>
     <string name="owner_transfer_no_target">未找到可转移的目标应用</string>

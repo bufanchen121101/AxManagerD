@@ -235,6 +235,10 @@ fun ActivateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 WirelessDebuggingCard(navigator, activateViewModel)
             }
+            // 【v1.3.1 仿 Scene】新增「通过 Shizuku 激活」卡片：
+            // 用 Shizuku 的 shell(2000) 身份直接拉起 Axeron 服务（libaxeron.so），
+            // 等效于在电脑上执行卡片里那条命令，省掉电脑与数据线。
+            ShizukuLaunchCard(activateViewModel)
             ComputerCard()
         }
     }
@@ -835,6 +839,156 @@ fun TempDeviceOwnerCard(activateViewModel: ActivateViewModel) {
                     contentDescription = "Start"
                 )
                 Text(stringResource(R.string.temp_do_activate_by_shizuku))
+            }
+        }
+    }
+}
+
+/**
+ * 【v1.3.1 仿星野 Scene】「通过 Shizuku 激活」卡片。
+ *
+ * 与 [TempDeviceOwnerCard] 的本质区别：本卡片**不涉及 DO/PO 身份**，
+ * 只是借用 Shizuku 提供的 shell(2000) 身份把 Axeron 服务（`libaxeron.so`）
+ * 拉起来 —— 等效于在电脑上执行卡片里展示的那条命令，省掉电脑与数据线。
+ *
+ * 布局与同页其它卡片完全一致：ElevatedCard + （图标 + 标题）+ 描述 +
+ * 状态块 + 「复制指令」按钮 + 「用 Shizuku 激活」按钮；
+ * 复制走与同页一致的确认弹窗（[rememberConfirmDialog]）。
+ */
+@Composable
+fun ShizukuLaunchCard(activateViewModel: ActivateViewModel) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val loadingDialog = rememberLoadingDialog()
+    val confirmDialog = rememberConfirmDialog()
+    // 进入页面时刷新一次 Shizuku 真实授权状态。
+    // 【v1.3.1】该刷新内部含原版 Shizuku 的主动拉取通道修复（ShizukuBinderPuller）：
+    // 推送通道漏发 binder 时，这里会主动「要」一次，避免状态误判为未授权。
+    OnResumeEffect {
+        activateViewModel.refreshShizukuState()
+    }
+    // 展示 / 复制统一为裸命令（不带 `adb shell` 前缀）：
+    // 前缀属于电脑端，交给设备内 shell 执行会失败；与 [TempDeviceOwnerCard] 约定相同。
+    val cmd = activateViewModel.shizukuLaunchCommand
+    val title = stringResource(R.string.shizuku_launch_title)
+    val copied = stringResource(R.string.copied)
+    val copy = stringResource(R.string.copy)
+    val cancel = stringResource(R.string.cancel)
+    ElevatedCard(
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.Code,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(modifier = Modifier.size(20.dp))
+            Text(
+                text = stringResource(R.string.shizuku_launch_desc),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.size(12.dp))
+            // 状态指示：Shizuku 是否已授权
+            // 注意：未授权时下方按钮**不禁用** —— 点击会先走主动拉取 + 授权请求，
+            // 避免「没有 binder 就静默失败」这一老问题。
+            Surface(
+                color = if (activateViewModel.isShizukuActive) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                shape = MaterialTheme.shapes.small
+            ) {
+                Text(
+                    text = stringResource(
+                        if (activateViewModel.isShizukuActive) {
+                            R.string.shizuku_launch_ready
+                        } else {
+                            R.string.shizuku_launch_not_ready
+                        }
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (activateViewModel.isShizukuActive) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.size(16.dp))
+            // 指令展示
+            Text(
+                text = cmd,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.size(20.dp))
+            // ① 复制指令
+            Button(
+                onClick = {
+                    scope.launch {
+                        val result = confirmDialog.awaitConfirm(
+                            title = title,
+                            content = cmd,
+                            markdown = false,
+                            confirm = copy,
+                            dismiss = cancel
+                        )
+                        if (result == ConfirmResult.Confirmed) {
+                            if (ClipboardUtil.put(ctx, cmd)) {
+                                Toast.makeText(ctx, copied, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = "Copy"
+                )
+                Text(stringResource(R.string.shizuku_launch_copy))
+            }
+            Spacer(modifier = Modifier.size(8.dp))
+            // ② 用 Shizuku 激活
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        loadingDialog.withLoading {
+                            val r = activateViewModel.activateViaShizuku()
+                            val msg = r.getOrElse { it.message ?: it.toString() }
+                            Toast.makeText(ctx, msg.ifBlank { "OK" }, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = "Start"
+                )
+                Text(stringResource(R.string.shizuku_launch_action))
             }
         }
     }
