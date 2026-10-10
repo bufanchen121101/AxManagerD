@@ -207,7 +207,9 @@ fun RuntimeLogScreen(navigator: DestinationsNavigator) {
             SelectionContainer(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(rememberScrollState())
+                    // 悬浮底栏：滚动内容底部留白（滚到底时最后一项不被玻璃栏遮住）
+                    .padding(bottom = 120.dp),
             ) {
                 Text(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),

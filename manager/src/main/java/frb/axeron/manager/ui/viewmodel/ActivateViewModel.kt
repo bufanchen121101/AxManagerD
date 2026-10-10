@@ -197,6 +197,18 @@ class ActivateViewModel : ViewModel() {
         private set
 
     /**
+     * 【Bug 修复】「设备所有者特权」是否可用 —— 本应用自身为 DO/PO，或已通过第三方
+     * （Dhizuku 授权 / Android 14+ 的 Device Policy Role）取得经转发的设备所有者特权。
+     *
+     * 与 [isDeviceOwner] / [isProfileOwner]（判「本应用是不是 DO 本体」）不同，本字段判的是
+     * 「能不能发出 DO 特权命令」，口径与 [DeviceOwnerAdbActivator.hasOwnerPrivilege] 完全一致：
+     * 激活页「用设备所有者激活」卡片的前置条件与执行入口都看它，
+     * 修复「改用别的软件授权后，被误提示未授予设备所有者权限」。
+     */
+    var isOwnerPrivilegeAvailable by mutableStateOf(false)
+        private set
+
+    /**
      * 当前是否已获得 root 权限（通过 superuser Shell）。
      *
      * 注意：初值必须为 false，不能在构造时同步调用 [Shell.getShell]——
@@ -248,6 +260,12 @@ class ActivateViewModel : ViewModel() {
             // 「已授权却显示未获得」的 bug。
             com.rosan.dhizuku.api.Dhizuku.init(context) &&
                 com.rosan.dhizuku.api.Dhizuku.isPermissionGranted()
+        }.getOrDefault(false)
+        // 【Bug 修复】与上面同时刷新「设备所有者特权可用性」：
+        // 除自我 DO/PO 外，经第三方授权（Dhizuku / DP Role）的转发通道也算可用，
+        // 供激活页「用设备所有者激活」卡片的前置条件使用。
+        isOwnerPrivilegeAvailable = runCatching {
+            DeviceOwnerAdbActivator.hasOwnerPrivilege(context)
         }.getOrDefault(false)
     }
 
@@ -616,7 +634,9 @@ class ActivateViewModel : ViewModel() {
         resetStatus()
 
         // ① 身份校验（失败原因直接透传给 UI 做提示）
-        if (!DeviceOwnerAdbActivator.isOwner(context)) {
+        // 【Bug 修复】接受两种通道：本应用自身为 DO/PO，或经第三方（Dhizuku / DP Role）
+        // 授权转发到设备所有者特权——后者在旧版本同样能走通本条链路。
+        if (!DeviceOwnerAdbActivator.hasOwnerPrivilege(context)) {
             setTryToActivate(false)
             return@withContext AdbStateInfo.Failed("Device Owner not active")
         }

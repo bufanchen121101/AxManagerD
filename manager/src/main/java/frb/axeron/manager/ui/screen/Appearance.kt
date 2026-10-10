@@ -1,6 +1,20 @@
 package frb.axeron.manager.ui.screen
 
 import android.app.Activity
+import android.graphics.Bitmap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalConfiguration
+import frb.axeron.manager.ui.component.BackgroundCropDialog
+import frb.axeron.manager.ui.component.BackgroundImageStore
+import frb.axeron.manager.ui.theme.BackgroundImageSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -79,6 +93,36 @@ fun AppearanceScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
     val snackBarHost = LocalSnackbarHost.current
     var showColorPicker by remember { mutableStateOf(false) }
 
+    // —— 自定义背景（设置 → 外观）——
+    // 流程：开关开启 → 系统照片选择器（免权限）→ 裁剪界面（锁定手机屏幕比例）→ 落应用私有目录 → 全局生效。
+    // 全程不需要任何存储权限：只读取选择器返回的那一条 Uri，写也只写自己的 filesDir。
+    val appContext = LocalContext.current
+    var backgroundEnabled by remember { mutableStateOf(BackgroundImageSettings.isEnabled(appContext)) }
+    // 待裁剪的原图（已降采样）；非空 → 弹出裁剪界面
+    var cropSource by remember { mutableStateOf<Bitmap?>(null) }
+    val backgroundScope = rememberCoroutineScope()
+    val backgroundFailedHint = stringResource(R.string.custom_background_failed)
+    // 裁剪取景框 = 手机屏幕比例（宽/高）
+    val screenAspectRatio = LocalConfiguration.current.let {
+        it.screenWidthDp.toFloat() / it.screenHeightDp.coerceAtLeast(1).toFloat()
+    }
+
+    val pickBackgroundImage = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        backgroundScope.launch {
+            val bitmap = withContext(Dispatchers.IO) {
+                BackgroundImageStore.decodeForCrop(appContext, uri)
+            }
+            if (bitmap == null) {
+                snackBarHost.showSnackbar(backgroundFailedHint)
+            } else {
+                cropSource = bitmap
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopBar(
@@ -96,7 +140,9 @@ fun AppearanceScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
             modifier = Modifier
                 .padding(paddingValues)
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                // 悬浮底栏：滚动内容底部留白（滚到底时最后一项不被玻璃栏遮住）
+                .padding(bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             val context = LocalContext.current
@@ -343,6 +389,56 @@ fun AppearanceScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
                 }
             )
 
+            // —— 自定义背景 ——
+            // 开启后：页面底色转为透明（底图透出），所有卡片自动变为「玻璃卡片 + 一圈柔和白色描边」；
+            // 文字颜色保持不变，另外叠一层极淡色罩保证可读性。
+            SettingsItem(
+                iconVector = Icons.Filled.Wallpaper,
+                label = stringResource(R.string.custom_background_title),
+                description = stringResource(R.string.custom_background_desc),
+                checked = backgroundEnabled,
+                onSwitchChange = { checked ->
+                    if (checked) {
+                        if (BackgroundImageSettings.hasImage(appContext)) {
+                            // 已经有图：直接开，不重复要求选图
+                            BackgroundImageSettings.setEnabled(appContext, true)
+                            backgroundEnabled = true
+                        } else {
+                            // 首次开启：直接拉起系统照片选择器（无需任何权限）
+                            pickBackgroundImage.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }
+                    } else {
+                        // 只关开关，保留已选图片，下次开启不必重选
+                        BackgroundImageSettings.setEnabled(appContext, false)
+                        backgroundEnabled = false
+                    }
+                }
+            ) { _, checked ->
+                if (checked) {
+                    Row(
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        TextButton(onClick = {
+                            pickBackgroundImage.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }) {
+                            Text(text = stringResource(R.string.custom_background_change))
+                        }
+                        TextButton(onClick = {
+                            // 移除：删掉落盘文件 + 关开关，外观立即回到默认
+                            BackgroundImageSettings.clear(appContext)
+                            backgroundEnabled = false
+                        }) {
+                            Text(text = stringResource(R.string.custom_background_remove))
+                        }
+                    }
+                }
+            }
+
             SettingsItem(
                 iconVector = Icons.Filled.Palette,
                 label = stringResource(R.string.color_palette),
@@ -373,6 +469,32 @@ fun AppearanceScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
             }
 
         }
+        // 裁剪界面（全屏对话框）：取景框锁定手机屏幕比例，双指缩放 / 拖动调整；
+        // 确认后按屏幕宽度缩放并以 JPEG 落到应用私有目录，随后立刻生效。
+        cropSource?.let { source ->
+            BackgroundCropDialog(
+                source = source,
+                aspectRatio = screenAspectRatio,
+                onDismiss = { cropSource = null },
+                onConfirm = { cropped ->
+                    cropSource = null
+                    backgroundScope.launch {
+                        val targetWidth = appContext.resources.displayMetrics.widthPixels
+                        val path = withContext(Dispatchers.IO) {
+                            BackgroundImageStore.save(appContext, cropped, targetWidth)
+                        }
+                        if (path != null) {
+                            BackgroundImageSettings.setPath(appContext, path)
+                            BackgroundImageSettings.setEnabled(appContext, true)
+                            backgroundEnabled = true
+                        } else {
+                            snackBarHost.showSnackbar(backgroundFailedHint)
+                        }
+                    }
+                }
+            )
+        }
+
         if (showColorPicker) {
             PaletteDialog(
                 initialColor = currentColor,

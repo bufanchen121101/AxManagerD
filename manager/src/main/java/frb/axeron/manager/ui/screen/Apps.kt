@@ -23,7 +23,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.ElevatedCard
+import frb.axeron.manager.ui.component.LocalBottomBarInset
+import frb.axeron.manager.ui.component.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -100,6 +101,8 @@ fun AppsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGloba
                 ) + fadeOut(animationSpec = tween(400))
             ) {
             ExtendedFloatingActionButton(
+                // 悬浮底栏占位：不让悬浮入口落进底栏区域被盖住（见 ui/component/BottomBarInset.kt）
+                modifier = Modifier.padding(bottom = LocalBottomBarInset.current),
                 text = { Text(text = "Add App") },
                 icon = {
                     Icon(Icons.Filled.Add, contentDescription = "Add App")
@@ -143,7 +146,8 @@ fun AppsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGloba
                     .padding(paddingValues)
                     .padding(vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp)
+                // 悬浮底栏：滚动内容底部留出玻璃栏的高度，滚到底时最后一项不会被遮住
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 120.dp)
             ) {
                 items(
                     appsViewModel.addedList,

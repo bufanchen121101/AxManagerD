@@ -264,7 +264,9 @@ fun ElevateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGl
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(12.dp)
-                        .verticalScroll(scroll),
+                        .verticalScroll(scroll)
+                        // 悬浮底栏：滚动内容底部留白
+                        .padding(bottom = 120.dp),
                     text = vm.elevateLog.ifBlank { "> 初始化 ..." },
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,

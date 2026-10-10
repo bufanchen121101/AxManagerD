@@ -17,6 +17,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -44,7 +45,8 @@ import androidx.compose.material.icons.outlined.Output
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
+import frb.axeron.manager.ui.component.LocalBottomBarInset
+import frb.axeron.manager.ui.component.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -222,6 +224,8 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
         },
         floatingActionButton = {
             Column(
+                // 悬浮底栏占位：不让终端页的悬浮按钮落进底栏区域被盖住（见 ui/component/BottomBarInset.kt）
+                modifier = Modifier.padding(bottom = LocalBottomBarInset.current),
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -411,6 +415,8 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
                 ) {
                     LazyColumn(
                         state = listState,
+                        // 悬浮底栏：滚动内容底部留白
+                        contentPadding = PaddingValues(bottom = 120.dp)
                     ) {
                         item {
                             Spacer(modifier = Modifier.size(70.dp))

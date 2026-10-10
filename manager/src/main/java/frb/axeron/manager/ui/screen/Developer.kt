@@ -56,7 +56,9 @@ fun DeveloperScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModel
             modifier = Modifier
                 .padding(paddingValues)
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                // 悬浮底栏：滚动内容底部留白（滚到底时最后一项不被玻璃栏遮住）
+                .padding(bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
 

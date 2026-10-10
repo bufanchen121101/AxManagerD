@@ -39,7 +39,8 @@ import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
+import frb.axeron.manager.ui.component.LocalBottomBarInset
+import frb.axeron.manager.ui.component.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -194,6 +195,8 @@ fun HomeScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGloba
         floatingActionButton = {
             AnimatedVisibility(visible = isRunning) {
                 FloatingActionButton(
+                    // 悬浮底栏占位：不让「运行指令」入口落进底栏区域被盖住（见 ui/component/BottomBarInset.kt）
+                    modifier = Modifier.padding(bottom = LocalBottomBarInset.current),
                     onClick = {
                         navigator.navigate(QuickShellScreenDestination)
                     }
@@ -489,6 +492,12 @@ fun StatusCard(
 
                         activateViewModel.isProfileOwnerActive && !activateViewModel.isTempDoActive -> {
                             stringResource(R.string.temp_profile_owner_active_label)
+                        }
+
+                        // 【新增】已激活（Shizuku / Root / DP / WS 等）但本应用不是设备所有者：
+                        // 此时 Axeron 服务以 shell 身份运行，如实标注。
+                        activateViewModel.isFullyActivated -> {
+                            stringResource(R.string.home_shell_chip)
                         }
 
                         else -> null

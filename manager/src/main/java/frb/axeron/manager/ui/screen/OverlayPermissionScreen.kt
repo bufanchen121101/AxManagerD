@@ -1,5 +1,6 @@
 package frb.axeron.manager.ui.screen
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,9 +15,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -37,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -45,10 +49,14 @@ import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.manager.R
+import frb.axeron.manager.features.overlay.OverlayAssets
 import frb.axeron.manager.features.overlay.OverlayPermissionStore
 import frb.axeron.manager.ui.component.OverlayDisclaimerDialog
 import frb.axeron.manager.ui.component.OverlayDisclaimerReadOnlyDialog
+import frb.axeron.manager.ui.component.rememberConfirmDialog
 import frb.axeron.manager.ui.viewmodel.OverlayPermissionViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 模块核心文件修改权限 —— 授权页。
@@ -67,13 +75,39 @@ fun OverlayPermissionScreen(
 ) {
     val vm: OverlayPermissionViewModel = viewModel()
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    val context = LocalContext.current
 
     // 首次进入需同意免责；未同意则不展示列表内容
     var showDisclaimer by remember { mutableStateOf(false) }
     var showReview by remember { mutableStateOf(false) }
 
+    // ---- 学习入口（模块开发入门）----
+    // 教程正文放在 assets/docs/module_dev_guide.md，进入页面时一次性读入内存，
+    // 点击入口时以 Markdown 形式弹出展示。读取失败时 guideText 保持 null，
+    // 此时点击只提示「暂不可用」，绝对不影响授权页自身的刷新与操作。
+    val guideDialog = rememberConfirmDialog()
+    var guideText by remember { mutableStateOf<String?>(null) }
+
+    fun openGuide() {
+        val body = guideText
+        guideDialog.showConfirm(
+            title = "模块开发入门",
+            content = body?.takeIf { it.isNotBlank() } ?: "教程暂时不可用，请稍后再试。",
+            markdown = !body.isNullOrBlank(),
+            confirm = "知道了",
+        )
+    }
+
     LaunchedEffect(Unit) {
         vm.refresh()
+        guideText = withContext(Dispatchers.IO) {
+            runCatching {
+                // overlay 优先：模块也可以替换这份教程（走与其它 assets 相同的覆盖链路）。
+                OverlayAssets.open(context, "docs/module_dev_guide.md")
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+            }.getOrNull()
+        }
     }
 
     LaunchedEffect(vm.disclaimerAccepted) {
@@ -184,6 +218,43 @@ fun OverlayPermissionScreen(
                         }
                     }
                 }
+            }
+
+            // ---- 学习入口：模块开发入门 ----
+            item(key = "guide") {
+                ListItem(
+                    modifier = Modifier
+                        .padding(end = 6.dp, top = 6.dp)
+                        .clickable { openGuide() },
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Outlined.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    },
+                    headlineContent = {
+                        Text(
+                            text = "模块开发入门",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    },
+                    supportingContent = {
+                        Text(
+                            text = "了解模块结构、写法，以及核心文件修改能力",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    },
+                    trailingContent = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                )
             }
 
             // ---- 全局总开关 ----

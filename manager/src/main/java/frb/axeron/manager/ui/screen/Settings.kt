@@ -273,7 +273,8 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                 .padding(paddingValues)
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
                 .verticalScroll(rememberScrollState())
-                .padding(top = 16.dp, bottom = 32.dp),
+                // 悬浮底栏：bottom 由 32dp 提到 120dp，滚到底时最后一项不被玻璃栏遮住
+                .padding(top = 16.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
 

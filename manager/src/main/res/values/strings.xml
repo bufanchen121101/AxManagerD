@@ -170,6 +170,7 @@
     <string name="home_service_version">Service Version</string>
     <string name="home_manager_version">Manager Version</string>
     <string name="home_device_owner_chip">Device Owner</string>
+    <string name="home_shell_chip">shell</string>
     <string name="home_update">Need Re-Activate</string>
     <string name="new_version_available">New version %s is available, click to update.</string>
     <string name="android_version">Android Version</string>
@@ -705,7 +706,16 @@
     <string name="liquid_glass_requires_13"></string>
     <string name="liquid_glass_press_title">Liquid press effect</string>
     <string name="liquid_glass_press_desc">Bulge and glow slightly when a glass element is pressed.</string>
-
+    <!-- 自定义背景（设置 → 外观） -->
+    <string name="custom_background_title">Custom background</string>
+    <string name="custom_background_desc">Pick a photo as the app background. Cards become frosted glass with a soft white edge; text stays readable.</string>
+    <string name="custom_background_crop_title">Crop background</string>
+    <string name="custom_background_crop_hint">Pinch to zoom, drag to move. The frame matches your screen ratio.</string>
+    <string name="custom_background_crop_cancel">Cancel</string>
+    <string name="custom_background_crop_confirm">Use this photo</string>
+    <string name="custom_background_change">Change photo</string>
+    <string name="custom_background_remove">Remove background</string>
+    <string name="custom_background_failed">Could not load that image.</string>
     <!-- AI 安全引擎 / 危险代码库（设置页入口） -->
     <string name="ai_security_engine">AI Security Engine</string>
     <string name="ai_security_engine_desc">Micro analysis model, cloud AI and decision prompts</string>

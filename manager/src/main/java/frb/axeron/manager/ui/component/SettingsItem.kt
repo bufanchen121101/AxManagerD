@@ -20,7 +20,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DividerDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -90,6 +89,8 @@ fun SettingsItem(
             SettingsItemType.CHILD -> CardDefaults.elevatedCardElevation(defaultElevation = 0.dp)
         },
         enabled = enabled,
+        // 子项卡片（CHILD）是父卡内部的一段，直角、与父卡连成一体，不加独立描边
+        withGlassEdge = type == SettingsItemType.PARENT,
         onClick = { clickAction?.invoke() }
     ) {
         SettingsItemBody(
@@ -230,6 +231,8 @@ fun SettingsItemExpanded(
             SettingsItemType.CHILD -> CardDefaults.elevatedCardElevation(defaultElevation = 0.dp)
         },
         enabled = enabled,
+        // 子项卡片（CHILD）是父卡内部的一段，直角、与父卡连成一体，不加独立描边
+        withGlassEdge = type == SettingsItemType.PARENT,
         onClick = {
             expand = !expand
         }

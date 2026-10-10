@@ -13,7 +13,6 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -22,32 +21,21 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.foundation.layout.BoxWithConstraints
 import frb.axeron.manager.ui.theme.LocalLiquidGlass
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import frb.axeron.manager.ui.component.LiquidGlassState
-import frb.axeron.manager.ui.component.liquidGlass
-import frb.axeron.manager.ui.component.liquefiable
-import frb.axeron.manager.ui.component.rememberLiquidGlassState
+import frb.axeron.manager.ui.component.AppBackgroundLayer
+import frb.axeron.manager.ui.component.LiquidGlassBottomBar
+import frb.axeron.manager.ui.component.LocalBottomBarInset
+import frb.axeron.manager.ui.glass.Backdrop
+import frb.axeron.manager.ui.glass.layerBackdrop
+import frb.axeron.manager.ui.glass.rememberLayerBackdrop
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
@@ -56,14 +44,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -73,10 +62,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntOffset
-import kotlin.math.roundToInt
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.pm.ShortcutInfoCompat
@@ -88,9 +75,6 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.ramcosta.composedestinations.DestinationsNavHost
-import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.hazeSource
-import dev.chrisbanes.haze.rememberHazeState
 import com.ramcosta.composedestinations.animations.NavHostAnimatedDestinationStyle
 import com.ramcosta.composedestinations.generated.NavGraphs
 import com.ramcosta.composedestinations.generated.destinations.ActivateScreenDestination
@@ -110,6 +94,7 @@ import frb.axeron.manager.features.keepalive.KeepAliveService
 import frb.axeron.manager.ui.navigation.BottomBarDestination
 import frb.axeron.manager.ui.screen.FlashIt
 import frb.axeron.manager.ui.theme.AxManagerTheme
+import frb.axeron.manager.ui.theme.LocalBackgroundImage
 import frb.axeron.manager.ui.util.LocalSnackbarHost
 import frb.axeron.manager.ui.theme.LiquidGlassParams
 import frb.axeron.manager.ui.theme.LiquidGlassSettings
@@ -190,10 +175,9 @@ class AxActivity : ComponentActivity() {
         val navigator = navController.rememberDestinationsNavigator()
         val currentDestination = navController.currentBackStackEntryAsState().value?.destination
 
-        // 液态玻璃：内容作为 hazeSource，底栏对它做 hazeEffect（只模糊栏背后内容）
-        val hazeState = rememberHazeState()
-        // 真·液态玻璃（AGSL RuntimeShader）共享状态：内容区登记为采样源，底栏玻璃采样它做折射/色散
-        val liquidGlassState = rememberLiquidGlassState()
+        // 液态毛玻璃：内容层作为背板（backdrop），底栏对它做「采样 + 折射 + 磨砂」
+        // （这是参考项目 Kyant0/AndroidLiquidGlass 的做法：图层录制 GraphicsLayer → drawBackdrop 采样）
+        val contentBackdrop = rememberLayerBackdrop()
         // 液态玻璃开关（响应式）：监听偏好变化，设置页一拨开关这里立刻重组
         var glassEnabled by remember { mutableStateOf(LiquidGlassSettings.isEnabled(context)) }
         val isDark = isSystemInDarkTheme()
@@ -300,29 +284,50 @@ class AxActivity : ComponentActivity() {
             else -> true
         }
 
+        // 【悬浮底栏的占用高度】底栏是内容层的「兄弟节点」，浮在内容之上，
+        // 各页面自己那层 Scaffold 完全感知不到它（M3 里 FAB 只按 FabSpacing + contentWindowInsets 定位），
+        // 于是页内悬浮入口（主页「运行指令」、模块页「加模块」等 FAB）会正好落进底栏区域：
+        // 美化开启时被玻璃盖住、看着重叠却点不到；美化关闭时被不透明栏整个挡住、像消失了一样。
+        // 这里实测底栏覆盖层高度，再减去页面 Scaffold 已经吃掉的系统栏底部内边距，
+        // 得到「底栏在系统栏之上占的高度」并通过 LocalBottomBarInset 下发给页面里的悬浮入口。
+        val density = LocalDensity.current
+        val pageBottomInset = ScaffoldDefaults.contentWindowInsets
+            .asPaddingValues()
+            .calculateBottomPadding()
+        var bottomBarOverlayHeight by remember { mutableStateOf(0.dp) }
+        val bottomBarInset = (bottomBarOverlayHeight - pageBottomInset).coerceAtLeast(0.dp)
+        LaunchedEffect(showBottomBar) {
+            // 底栏隐藏的页面（激活页、刷入页等）不留空位，页面保持原样
+            if (!showBottomBar) bottomBarOverlayHeight = 0.dp
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
-            // ⚠️ 关键：liquefiable（采样源）只挂在「内容层」——
-            // 它是底栏（liquidGlass 效果节点）的「兄弟节点」，而非祖先。
-            // 若把 liquefiable 挂在外层 Box 上，底栏会成为它的后代，
-            // 触发「祖先采样后代 / 后代采样祖先」的无限递归 → SIGSEGV 闪退。
-            // 内容层用 fillMaxSize 铺满全屏（覆盖底栏区域），底栏玻璃才能采到像素。
+            // ⚠️ 关键：背板（内容层）必须是底栏的「兄弟节点」，不能是祖先节点。
+            // 底栏从这张录制图层里采样用户看到的内容（含自定义背景图），再按形状折射/虚化。
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .liquefiable(liquidGlassState)
+                    .layerBackdrop(contentBackdrop)
             ) {
+                // 自定义背景：画在内容层最底部（默认关闭时本调用直接返回，不做任何事）。
+                // 放在背板录制范围内 → 底栏玻璃能对背景图做真实的折射与磨砂采样。
+                AppBackgroundLayer(LocalBackgroundImage.current)
+
                 Scaffold(
                     contentWindowInsets = WindowInsets()
                 ) { innerPadding ->
                     CompositionLocalProvider(
                         LocalSnackbarHost provides snackBarHostState,
                         LocalLiquidGlass provides glassParams,
+                        // 悬浮底栏在系统栏之上占的高度：页内悬浮入口（FAB）靠它抬到底栏上方
+                        LocalBottomBarInset provides bottomBarInset,
                     ) {
                         DestinationsNavHost(
+                            // 悬浮底栏：内容不再被底部内边距截断，而是铺满全屏；
+                            // 底部安全距离交给各页面在「滚动内容内部」自行留出（120dp），
+                            // 这样底栏才是真的浮在内容之上，而不是把内容整块顶上去。
                             modifier = Modifier
-                                .padding(innerPadding)
-                                .padding(bottom = if (showBottomBar) 96.dp else 0.dp)
-                                .hazeSource(hazeState),
+                                .padding(innerPadding),
                         navGraph = NavGraphs.root,
                         navController = navController,
                         dependenciesContainerBuilder = {
@@ -395,19 +400,23 @@ class AxActivity : ComponentActivity() {
                     )
                 }
             }
-            } // 闭合：内容层 Box（liquefiable 采样源）
+            } // 闭合：内容层 Box（背板录制范围）
 
             AnimatedVisibility(
                 visible = showBottomBar,
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
                 modifier = Modifier
+                    // 实测底栏覆盖层高度（含系统栏内边距与栏自身留白），下发给页内悬浮入口。
+                    // 必须放在链首：放在 navigationBarsPadding 之后量到的是不含系统栏内边距的高度。
+                    .onGloballyPositioned { coordinates ->
+                        bottomBarOverlayHeight = with(density) { coordinates.size.height.toDp() }
+                    }
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
             ) {
                 BottomBar(
-                    hazeState,
-                    liquidGlassState,
+                    contentBackdrop,
                     glassParams,
                     navController,
                     navigator,
@@ -424,23 +433,17 @@ class AxActivity : ComponentActivity() {
 
     @Composable
     fun BottomBar(
-        hazeState: HazeState,
-        liquidGlassState: LiquidGlassState,
+        backdrop: Backdrop,
         glass: LiquidGlassParams,
         navController: NavHostController,
         navigator: DestinationsNavigator,
         axeronServerInfo: AxeronInfo,
         moduleUpdateCount: Int
     ) {
-        // 液态玻璃底栏：开启时用玻璃面板（模糊只作用于栏背后内容，前景图标/文字始终清晰）；
+        // 液态毛玻璃底栏：开启时走 ui/component/LiquidGlassBottomBar.kt（真·背板采样 + 折射 + 磨砂），
         // 关闭时完全回退到原来的 Material Card 样式。
-        // 注意：glass 必须由调用方显式传入——BottomBar 位于 CompositionLocalProvider 作用域之外，
+        // 注意：backdrop / glass 必须由调用方显式传入——BottomBar 位于 CompositionLocalProvider 作用域之外，
         // 若在此读 LocalLiquidGlass.current 会永远拿到默认值（enabled=false），导致开关无效。
-        //
-        // 视觉参考 Metric 1.5.0 的 Liquid Glass 底栏：
-        //   - 整条栏 = 悬浮玻璃胶囊
-        //   - 选中项 = 一块「独立的液态玻璃指示器」，切换页面时用 spring 动画滑动跟随
-        val barShape = RoundedCornerShape(28.dp)
         val barShapeFallback = RoundedCornerShape(topStart = 15.dp, topEnd = 15.dp)
 
         // 当前可见的 tab 列表（未运行 Axeron 时隐藏 needAxeron 项）
@@ -454,11 +457,32 @@ class AxActivity : ComponentActivity() {
         // 当前选中索引（动画指示器跟随的目标）
         var selectedIndex by remember { mutableStateOf(0) }
 
+        // 【Bug 修复】选中态改用「tab 根目的地是否仍在返回栈上」判定 —— 与下方
+        // Material 底栏（isRouteOnBackStackAsState）同一口径。
+        //
+        // 旧实现只看**栈顶路由**：进入某个 tab 的子界面后栈顶是子路由（与 tab 路由之间
+        // 没有前缀关系），匹配不到任何 tab，索引于是保持旧值不动；此后用底栏切到主页、
+        // 再切回该 tab 时（navigate 带 restoreState 会恢复该 tab 之前保存的子栈），
+        // 栈顶依旧是那个子路由 → 索引仍停在主页，出现「页面已回到设置子界面、
+        // 底栏图标却还在主页」的错位。
+        //
+        // 子界面压在 tab 之上时，tab 根 entry 依然留在返回栈里，因此本判定天然覆盖
+        // 子界面场景，无需为每个子页面维护「归属哪个 tab」的映射表。
+        val tabOnBackStack = ArrayList<Boolean>(tabCount)
+        for (dest in visibleDestinations) {
+            tabOnBackStack += navController.isRouteOnBackStackAsState(dest.direction).value
+        }
+        val backStackTabIndex = tabOnBackStack.indexOfFirst { it }
+
         // 关键：让 selectedIndex 跟随真实导航状态（含从别处返回、深链、回退栈变化）
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route
-        LaunchedEffect(currentRoute, tabCount) {
-            if (currentRoute != null && tabCount > 0) {
+        LaunchedEffect(currentRoute, tabCount, backStackTabIndex) {
+            if (backStackTabIndex >= 0) {
+                // 返回栈里能找到所属 tab（含停留在该 tab 子界面的情形）
+                selectedIndex = backStackTabIndex
+            } else if (currentRoute != null && tabCount > 0) {
+                // 兜底：按栈顶路由前缀匹配（正常 tab 页与深链场景）
                 val idx = visibleDestinations.indexOfFirst { dest ->
                     val r = dest.direction.route
                     currentRoute == r || currentRoute.startsWith("$r/") || currentRoute.startsWith("$r?")
@@ -468,165 +492,31 @@ class AxActivity : ComponentActivity() {
         }
 
         if (glass.enabled && tabCount > 0) {
-            // 用 BoxWithConstraints 拿到栏可用宽度，按 tab 数均分，算出指示器位置
-            BoxWithConstraints(
+            // 液态毛玻璃底栏（真·背板采样 + 折射 + 磨砂，实现见 ui/component/LiquidGlassBottomBar.kt）
+            LiquidGlassBottomBar(
+                backdrop = backdrop,
+                destinations = visibleDestinations,
+                selectedIndex = selectedIndex,
+                moduleUpdateCount = moduleUpdateCount,
+                onSelect = { index ->
+                    val destination = visibleDestinations.getOrNull(index)
+                    if (destination != null) {
+                        // 只切换导航，selectedIndex 由上面的 LaunchedEffect 跟随真实路由更新，
+                        // 保证「胶囊位置」永远等于「当前真实页面」，不会错位。
+                        navigator.navigate(destination.direction) {
+                            popUpTo(NavGraphs.root) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     // Metric 风格：悬浮胶囊 —— 左右留边距 + 底部留间距，不贴屏幕边缘
                     .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                // 每个 tab 的宽度（栏内按 tab 数均分）
-                val tabWidth = maxWidth / tabCount
-                // 指示器尺寸：Metric 的水滴光斑是「椭圆形」，比 tab 略窄，高度略小于栏高
-                val indicatorWidth = tabWidth * 0.68f
-                val indicatorHeight = 46.dp
-
-                // 指示器水平偏移：随 selectedIndex 用 spring 平滑滑动 —— 这就是「框跟着移动」
-                // dampingRatio 调低 + stiffness 适中 → 有「液体粘连拉伸」的弹性感
-                val indicatorOffset by animateDpAsState(
-                    targetValue = tabWidth * selectedIndex + (tabWidth - indicatorWidth) / 2,
-                    animationSpec = spring(
-                        dampingRatio = 0.62f,   // 明显回弹，模拟液体表面张力
-                        stiffness = 320f
-                    ),
-                    label = "liquidGlassIndicatorOffset"
-                )
-
-                // 液体粘连：切换瞬间指示器先「横向拉伸」，落定后回弹成圆形。
-                // 用「目标位置是否已到达」判断（spring 收敛后 offset == target）。
-                val targetOffset = tabWidth * selectedIndex + (tabWidth - indicatorWidth) / 2
-                val isMoving = kotlin.math.abs((indicatorOffset - targetOffset).value) > 1.5f
-                val stretchWidth by animateDpAsState(
-                    targetValue = if (isMoving) indicatorWidth * 1.18f else indicatorWidth,
-                    animationSpec = spring(
-                        dampingRatio = 0.55f,
-                        stiffness = 300f
-                    ),
-                    label = "liquidGlassStretch"
-                )
-
-                // 外层：整条栏的液态玻璃胶囊
-                // 用 AGSL RuntimeShader 采样内容区像素 → 真折射 + 边缘光 + 色散（Android 13+）
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(64.dp)
-                        .clip(barShape)
-                        // 兜底底色：极淡白（低版本 Android / 采样失败时仍有可见轮廓）。
-                        // 注意：不要再叠加白色描边——shader 本身已绘制边缘光，
-                        // 叠加描边会在 shader 失效时显示成「一个白色的圈」。
-                        .background(Color.White.copy(alpha = 0.03f))
-                        .liquidGlass(liquidGlassState) {
-                            // —— 官方推荐参数（FletchMcKee/liquid 的 LiquidBottomNavigationBar）——
-                            frost = 48.dp                        // 磨砂：玻璃背后内容虚化（官方默认值）
-                            shape = barShape                     // 胶囊形
-                            refraction = 0.25f                   // 折射扭曲
-                            curve = 0.5f                         // 曲率
-                            dispersion = 0.05f                   // 边缘轻微色散
-                            edge = 0.10f                         // 边缘白色发光亮线
-                            saturation = 1.2f                    // 略提饱和，玻璃更「透亮」
-                            contrast = 1.15f                     // 略提对比，轮廓更清晰
-                            // 官方用半透明白：玻璃本体是「白玻璃」而非染色玻璃，
-                            // 中性色不会把背景染蓝。
-                            tint = Color.White.copy(alpha = 0.75f)
-                        }
-                ) {
-                    // ---- 第 1 层：滑动跟随的液态玻璃水滴光斑 ----
-                    // 水滴状椭圆 + 独立玻璃层：更强的折射/色散，让它像一颗悬浮的水珠
-                    Box(
-                        modifier = Modifier
-                            .offset(
-                                x = indicatorOffset - (stretchWidth - indicatorWidth) / 2,
-                                y = (64.dp - indicatorHeight) / 2
-                            )
-                            .width(stretchWidth)
-                            .height(indicatorHeight)
-                            // 兜底底色：低版本 / 采样失败时仍可见。
-                            // 用极淡的白色而非主题色 —— 避免「偏蓝」
-                            .background(
-                                color = Color.White.copy(alpha = 0.14f),
-                                shape = RoundedCornerShape(percent = 50)
-                            )
-                            .clip(RoundedCornerShape(percent = 50))
-                            .liquidGlass(liquidGlassState) {
-                                // —— 官方推荐（LiquidBottomNavigationBar 的选中项）——
-                                frost = 12.dp                             // 磨砂
-                                shape = RoundedCornerShape(percent = 50)  // 水滴/椭圆
-                                refraction = 0.22f                        // 透镜放大
-                                curve = 0.8f                              // 曲率（水滴感）
-                                dispersion = 0f                           // 选中项不做色散
-                                edge = 0f                                 // 不加边缘光
-                                saturation = 1.0f
-                                contrast = 1.0f
-                                // 官方注释明确写：保持透镜中性，避免借到图标色调（防「偏蓝」）。
-                                tint = Color(0xFFE5E6EA).copy(alpha = 0.7f)
-                            }
-                    )
-
-                    // ---- 第 2 层：图标 + 文字（始终清晰，绘制在玻璃之上）----
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(64.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        visibleDestinations.forEachIndexed { index, destination ->
-                            val isSelected = index == selectedIndex
-                            val label = stringResource(id = destination.labelId)
-
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) {
-                                        // 只切换导航，selectedIndex 由上面的 LaunchedEffect 跟随真实路由更新，
-                                        // 保证「指示器位置」永远等于「当前真实页面」，不会错位。
-                                        navigator.navigate(destination.direction) {
-                                            popUpTo(NavGraphs.root) {
-                                                saveState = true
-                                            }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    // 选中态：深色实心；未选中态：中灰（保证在毛玻璃+光斑上的对比度）
-                                    val iconTint = if (isSelected) {
-                                        MaterialTheme.colorScheme.onPrimary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    }
-                                    if (destination == BottomBarDestination.Plugin && moduleUpdateCount > 0) {
-                                        BadgedBox(badge = { Badge { Text(moduleUpdateCount.toString()) } }) {
-                                            Icon(
-                                                imageVector = if (isSelected) destination.iconSelected
-                                                else destination.iconNotSelected,
-                                                contentDescription = label,
-                                                tint = iconTint
-                                            )
-                                        }
-                                    } else {
-                                        Icon(
-                                            imageVector = if (isSelected) destination.iconSelected
-                                            else destination.iconNotSelected,
-                                            contentDescription = label,
-                                            tint = iconTint
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            )
         } else if (glass.enabled) {
             // 无可见 tab（Axeron 未运行等）时回退到普通样式
             Card(

@@ -53,6 +53,19 @@ object LspatchIcons {
     private const val MARK_SIZE = 62f
     private const val MARK_LEFT = 23.2f
 
+    /**
+     * 图形在收窄后 viewport 内的「居中修正」量（viewport 单位）。
+     *
+     * 官方 pathData 的图形本身并未在 viewBox 里居中：经包围盒计算（曲线采样后），
+     * 变换到本 viewport(62) 后图形占 y 6.40..43.96，其中心比画布中心高 5.82 单位
+     * （≈2.25dp @24dp 图标），水平仅偏 0.20 单位（≈0.08dp）。
+     *
+     * 这正是底栏里 Xposed 图标看上去比其他图标「靠上」的原因 —— 与 Icon 的居中绘制无关，
+     * 纯粹是矢量内部图形偏置。此处把差值补回，使图形在画布内真正居中。
+     */
+    private const val MARK_CENTER_FIX_X = 0.20f
+    private const val MARK_CENTER_FIX_Y = 5.82f
+
     /** 收窄后的 viewport：图形铺满（24dp 图标内视觉尺寸与 Material 图标一致）。 */
     private const val VIEWPORT = MARK_SIZE
 
@@ -76,9 +89,10 @@ object LspatchIcons {
             pivotY = 0f,
             scaleX = GROUP_SCALE,
             scaleY = GROUP_SCALE,
-            // 抵消图形在官方 108 画布中的左上偏移，使其对齐收窄后的 viewport 原点。
-            translationX = GROUP_TRANSLATE - MARK_LEFT,
-            translationY = GROUP_TRANSLATE - MARK_LEFT,
+            // 抵消图形在官方 108 画布中的左上偏移，使其对齐收窄后的 viewport 原点；
+            // 再补上图形自身的偏置，保证图形在画布内垂直/水平居中。
+            translationX = GROUP_TRANSLATE - MARK_LEFT + MARK_CENTER_FIX_X,
+            translationY = GROUP_TRANSLATE - MARK_LEFT + MARK_CENTER_FIX_Y,
             clipPathData = emptyList()
         )
         addPath(

@@ -58,7 +58,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
+import frb.axeron.manager.ui.component.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -1427,8 +1427,11 @@ fun DeviceOwnerActivateCard(activateViewModel: ActivateViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            val ownerActive =
-                activateViewModel.isDeviceOwner || activateViewModel.isProfileOwner
+            // 【Bug 修复】前置条件不再只认「本应用自身是 DO/PO」：
+            // 经第三方授权（Dhizuku / Android 14+ 的 Device Policy Role）取得设备所有者
+            // 特权的用户，同样满足本卡片条件 —— 底层 DeviceOwnerAdbActivator 的
+            // resolveDpm / resolveAdmin 已支持转发通道，旧版本也正是这样可用的。
+            val ownerActive = activateViewModel.isOwnerPrivilegeAvailable
 
             // 状态指示：是否已具备设备所有者（本激活方式的前置条件）
             Surface(

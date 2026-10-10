@@ -24,8 +24,8 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedAssistChip
-import androidx.compose.material3.ElevatedCard
+import frb.axeron.manager.ui.component.ElevatedAssistChip
+import frb.axeron.manager.ui.component.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -268,7 +268,7 @@ private fun ModuleList() {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(12.dp),
+        contentPadding = PaddingValues(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(statuses, key = { it.id }) { status ->
@@ -623,7 +623,7 @@ private fun OutputPanel() {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = 16.dp),
+            contentPadding = PaddingValues(bottom = 120.dp),
         ) {
             items(moduleStatuses, key = { it.id }) { status ->
                 val count = grouped[status.id]?.size ?: 0
@@ -735,7 +735,7 @@ private fun ModuleOutputDetail(
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = 16.dp),
+            contentPadding = PaddingValues(bottom = 120.dp),
         ) {
             items(items.asReversed(), key = { "${it.at}_${it.subtitle}_${it.title}" }) { item ->
                 OutputCard(item, showScope = false)

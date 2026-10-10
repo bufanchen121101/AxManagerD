@@ -48,6 +48,7 @@ import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.generated.destinations.ChatScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
+import frb.axeron.manager.ui.component.LocalBottomBarInset
 import frb.axeron.manager.ui.component.SettingsItem
 import kotlinx.coroutines.launch
 
@@ -89,7 +90,10 @@ fun CloudModelScreen(navigator: DestinationsNavigator) {
                 .fillMaxSize()
                 .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
-                .padding(vertical = 12.dp),
+                .padding(vertical = 12.dp)
+                // 悬浮底栏占位：本页最后一项就是「识别可用模型」按钮，
+                // 不留出底栏高度就会和悬浮的玻璃底栏重合（值由 AxActivity 实测下发）。
+                .padding(bottom = LocalBottomBarInset.current),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             // ============ 1. 云端对话入口（唯一入口） ============

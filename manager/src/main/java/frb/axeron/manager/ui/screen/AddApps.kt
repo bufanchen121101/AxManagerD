@@ -1,5 +1,6 @@
 package frb.axeron.manager.ui.screen
 
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -70,7 +71,9 @@ fun AddAppsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .nestedScroll(scrollBehavior.nestedScrollConnection)
+                .nestedScroll(scrollBehavior.nestedScrollConnection),
+            // 悬浮底栏：滚动内容底部留白
+            contentPadding = PaddingValues(bottom = 120.dp)
         ) {
             items(
                 appsViewModel.installedList,

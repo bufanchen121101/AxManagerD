@@ -56,6 +56,21 @@ object DeviceOwnerAdbActivator {
     }
 
     /**
+     * 【Bug 修复】「设备所有者特权」是否可用：本应用自身是 DO/PO，**或**已通过第三方
+     * （Dhizuku 授权 / Android 14+ 的 Device Policy Role）取得经转发的设备所有者特权。
+     *
+     * 与 [isOwner] 的区别在判定对象：本方法判的是「能不能发出 DO 特权命令」，
+     * 而 [isOwner] 判的是「本应用是不是这台设备上的 DO 本体」。旧代码在
+     * [enableAdbAndBindTcp] 与 UI 前置条件里只用了 [isOwner]，于是「经 Dhizuku 授权」
+     * 的用户被误判为不合格（提示需要设备所有者权限）——可底层的 [resolveDpm] /
+     * [resolveAdmin] 本来就支持转发通道（Dhizuku 的 owner 组件 + 包装后的 DPM），
+     * 属于入口判定把本来能用的路径挡住了。
+     */
+    fun hasOwnerPrivilege(context: Context): Boolean {
+        return isOwner(context) || DeviceOwnerPrivilege.isLocalDpmUsable(context)
+    }
+
+    /**
      * 以 DO 身份写入 Global 设置。
      *
      * 注意：Device Owner 只能改写系统允许的那部分 Global 项（`adb_enabled` /
@@ -259,7 +274,9 @@ object DeviceOwnerAdbActivator {
      * @param port 目标 TCP 端口，<=0 时自动采用当前已生效端口或 [DEFAULT_TCP_PORT]
      */
     fun enableAdbAndBindTcp(context: Context, port: Int = 0): Result {
-        if (!isOwner(context)) {
+        // 【Bug 修复】用 [hasOwnerPrivilege] 而非 [isOwner]：经 Dhizuku 授权（转发 DO 特权）
+        // 的用户同样能走通本链路——下面的 resolveDpm / resolveAdmin 已支持转发通道。
+        if (!hasOwnerPrivilege(context)) {
             return Result(false, -1, "Device Owner not active")
         }
         val (enabled, enableErr) = enableAdb(context)

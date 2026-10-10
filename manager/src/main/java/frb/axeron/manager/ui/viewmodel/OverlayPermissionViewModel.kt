@@ -11,6 +11,7 @@ import frb.axeron.manager.features.overlay.OverlayManager
 import frb.axeron.manager.features.overlay.OverlayPermissionStore
 import frb.axeron.manager.features.overlay.OverlayRequestWatcher
 import frb.axeron.manager.features.runtime.registry.RuntimeModuleCapabilities
+import frb.axeron.manager.features.runtime.registry.RuntimeModuleDetector
 import frb.axeron.manager.util.OverlayLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -32,7 +33,7 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
     /** 授权页单行数据。 */
     data class ModuleRow(
         val moduleId: String,
-        /** 模块显示名（暂无 label 来源时等于 moduleId）。 */
+        /** 模块显示名（取 module.prop 的 `name`；读不到时回退为 [moduleId]）。 */
         val label: String,
         /** 是否申请过（pending 文件存在）。 */
         val requested: Boolean,
@@ -168,15 +169,22 @@ class OverlayPermissionViewModel(application: Application) : AndroidViewModel(ap
             val grant = grants[id]
             val pending = runCatching { OverlayPermissionStore.getPending(app, id) }.getOrNull()
             val files = runCatching { OverlayManager.list(id, kind).size }.getOrDefault(0)
-            // 第二期：能力标签。readCaps 走 shell 读 module.prop，失败静默为空。
-            val caps = runCatching {
+            // 第二期：能力标签 + 模块显示名。
+            // 两者都来自 module.prop，这里**只解析一次**（复用同一个 map），
+            // 避免为读 name 再起一次 shell 进程。
+            // 显示名取 module.prop 的 name，与 RuntimeModuleService 的
+            // `prop["name"] ?: id` 口径一致；解析失败或 name 为空时回退为 id，
+            // 保证列表不会因为读不到 prop 而丢名字。
+            val prop = runCatching {
                 val propDir = java.io.File(OverlayManager.moduleDir(id, kind))
-                RuntimeModuleCapabilities.labels(RuntimeModuleCapabilities.fromDir(propDir))
-            }.getOrDefault(emptyList())
+                RuntimeModuleDetector.parsePropFile(java.io.File(propDir, "module.prop"))
+            }.getOrDefault(emptyMap<String, String>())
+            val caps = RuntimeModuleCapabilities.labels(RuntimeModuleCapabilities.fromProp(prop))
+            val displayName = prop["name"]?.takeIf { it.isNotBlank() } ?: id
             result.add(
                 ModuleRow(
                     moduleId = id,
-                    label = id,
+                    label = displayName,
                     requested = pending != null,
                     reason = pending?.first ?: grant?.reason.orEmpty(),
                     mode = grant?.mode,

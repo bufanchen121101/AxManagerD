@@ -70,6 +70,7 @@ import frb.axeron.api.AxeronPluginService
 import frb.axeron.api.AxeronPluginService.ensureManageExternalStorageAllowed
 import frb.axeron.manager.R
 import com.ramcosta.composedestinations.generated.destinations.AIMainScreenDestination
+import frb.axeron.manager.ui.component.LocalBottomBarInset
 import frb.axeron.manager.ui.component.AxSnackBarHost
 import frb.axeron.manager.ui.component.SearchAppBar
 import frb.axeron.manager.ui.component.SettingsItem
@@ -296,6 +297,8 @@ fun PluginScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlo
 
                     val permissionDenied = stringResource(R.string.permission_denied)
                     FloatingActionButton(
+                        // 悬浮底栏占位：不让「加模块」入口落进底栏区域被盖住（见 ui/component/BottomBarInset.kt）
+                        modifier = Modifier.padding(bottom = LocalBottomBarInset.current),
                         onClick = {
                             val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                                 setType("application/zip")

@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
@@ -41,7 +42,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DividerDefaults
-import androidx.compose.material3.ElevatedCard
+import frb.axeron.manager.ui.component.LocalBottomBarInset
+import frb.axeron.manager.ui.component.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
@@ -205,7 +207,11 @@ fun SettingsEditorScreen(
                 enter = fadeIn() + slideInVertically { it },
                 exit = fadeOut() + slideOutVertically { it }
             ) {
-                FloatingActionButton(onClick = { isAdding = true }) {
+                FloatingActionButton(
+                    // 悬浮底栏占位：不让悬浮入口落进底栏区域被盖住（见 ui/component/BottomBarInset.kt）
+                    modifier = Modifier.padding(bottom = LocalBottomBarInset.current),
+                    onClick = { isAdding = true }
+                ) {
                     Icon(Icons.Filled.Add, null)
                 }
             }
@@ -306,7 +312,9 @@ fun SettingsEditorScreen(
                     } else {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            state = listState
+                            state = listState,
+                            // 悬浮底栏：滚动内容底部留白
+                            contentPadding = PaddingValues(bottom = 120.dp)
                         ) {
                             items(
                                 items = filtered.entries.toList(),

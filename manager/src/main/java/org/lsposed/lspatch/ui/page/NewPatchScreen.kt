@@ -132,6 +132,7 @@ import org.lsposed.lspatch.ui.component.PatchLog
 import org.lsposed.lspatch.ui.component.PatchStepList
 import org.lsposed.lspatch.ui.component.settings.KeystoreSetting
 import com.ramcosta.composedestinations.generated.destinations.SelectModulesScreenDestination
+import frb.axeron.manager.ui.component.LocalBottomBarInset
 import frb.axeron.manager.ui.util.LocalSnackbarHost
 import org.lsposed.lspatch.util.LSPPackageManager
 import org.lsposed.lspatch.util.ShizukuApi
@@ -288,6 +289,9 @@ fun NewPatchScreen(
         },
         bottomBar = {
             PatchBar(
+                // 悬浮底栏占位：「修补」按钮在页面自带的 bottomBar 里，
+                // 不抬起来就会被悬浮的玻璃底栏盖住（见 ui/component/BottomBarInset.kt）。
+                modifier = Modifier.padding(bottom = LocalBottomBarInset.current),
                 step = shown,
                 request = request,
                 onPatch = {
@@ -1268,6 +1272,7 @@ private fun sigBypassDescription(level: Int) =
  */
 @Composable
 private fun PatchBar(
+    modifier: Modifier = Modifier,
     step: PatchStep,
     request: PatchRequest,
     onPatch: () -> Unit,
@@ -1278,6 +1283,7 @@ private fun PatchBar(
     onDone: () -> Unit,
 ) {
     Surface(
+        modifier = modifier,
         color = MaterialTheme.colorScheme.surfaceContainer,
         tonalElevation = 3.dp,
     ) {
