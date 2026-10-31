@@ -3,6 +3,7 @@ package frb.axeron.manager.features.runtime.process
 import android.util.Log
 import frb.axeron.api.Axeron
 import frb.axeron.api.AxeronPluginService
+import frb.axeron.server.Environment
 import frb.axeron.manager.features.runtime.registry.RuntimeModuleDetector
 import java.io.File
 
@@ -42,7 +43,39 @@ class RuntimeProcessManager {
         const val TIMEOUT_QUICK_CMD_MS = 3_000L
 
         private const val BUSYBOX = "busybox"
+        /**
+         * 模块脚本临时目录。
+         * Axeron 默认环境把 TMPDIR 指向 <SHELL_DE>/axeron/cache，该目录可能不存在，
+         * busybox ash 找不到可写 TMPDIR 时会退到 /data/local（root:root 0751，shell 不可写），
+         * 于是脚本里每一处 $(...) 都报 can't create temporary file ...: Permission denied。
+         */
+        private const val WRITABLE_TMP_DIR = "/data/local/tmp"
         private const val BUSYBOX_SHELL = "busybox ash"
+    }
+
+    /**
+     * 构造模块脚本的运行环境：在 Axeron 默认环境之上强制覆盖 TMPDIR。
+     *
+     * 只覆盖 TMPDIR 一个键，AXERONDIR / AXERONBIN / PATH 等全部原样保留，
+     * 不影响模块脚本对安装目录与 busybox 的依赖。
+     *
+     * 背景：服务端默认 TMPDIR = <SHELL_DE>/axeron/cache，该目录不存在；
+     * busybox ash 在 TMPDIR 不可写时会退到 /data/local（root:root 0751），
+     * 导致脚本里每一处 $(...) 命令替换都报：
+     *   can't create temporary file /data/local/shXXXXXX.tmp: Permission denied
+     */
+    private fun moduleEnv(): Environment? {
+        val base = runCatching { Axeron.getEnvironment() }.getOrNull()
+        if (base == null) {
+            // 服务端环境拉取失败（binder 不可用/超时）：用 App 进程环境兜底，
+            // 至少保证 TMPDIR 可写，避免 mksh/ash 的 heredoc 落到 /data/local。
+            return Environment.Builder(false)
+                .put("TMPDIR", WRITABLE_TMP_DIR)
+                .build()
+        }
+        val map = HashMap<String, String>(base.envMap)
+        map["TMPDIR"] = WRITABLE_TMP_DIR
+        return Environment(map, base.isNewEnv)
     }
 
     /**
@@ -67,6 +100,7 @@ class RuntimeProcessManager {
 
         // 环境变量以 export 前缀方式注入，避免依赖 Environment 的构造细节
         val prefix = buildString {
+            append("export TMPDIR='" + WRITABLE_TMP_DIR + "'; ")
             for ((k, v) in env) {
                 append("export $k='${v.replace("'", "'\\''")}'; ")
             }
@@ -96,6 +130,7 @@ class RuntimeProcessManager {
             return -1
         }
         val prefix = buildString {
+            append("export TMPDIR='" + WRITABLE_TMP_DIR + "'; ")
             for ((k, v) in env) {
                 append("export $k='" + v.replace("'", "'\\''") + "'; ")
             }
@@ -115,7 +150,7 @@ class RuntimeProcessManager {
         runCatching {
             AxeronPluginService.execProcessSafeWithTimeout(
                 cmd = arrayOf("/system/bin/sh", "-c", launcher),
-                env = Axeron.getEnvironment(),
+                env = moduleEnv(),
                 timeoutMs = TIMEOUT_ENTRY_HANDSHAKE_MS,
             )
         }.onFailure { e -> Log.e(TAG, "启动常驻进程异常: " + script, e) }
@@ -126,7 +161,7 @@ class RuntimeProcessManager {
             val txt = runCatching {
                 AxeronPluginService.execProcessSafeWithTimeout(
                     cmd = arrayOf("/system/bin/sh", "-c", "cat '" + pidFile + "' 2>/dev/null"),
-                    env = Axeron.getEnvironment(),
+                    env = moduleEnv(),
                     timeoutMs = TIMEOUT_ENTRY_HANDSHAKE_MS,
                 ).stdout
             }.getOrDefault("")
@@ -145,7 +180,7 @@ class RuntimeProcessManager {
                         "/system/bin/sh", "-c",
                         "pgrep -f 'busybox ash " + script + "' 2>/dev/null | head -1",
                     ),
-                    env = Axeron.getEnvironment(),
+                    env = moduleEnv(),
                     timeoutMs = TIMEOUT_ENTRY_HANDSHAKE_MS,
                 ).stdout
             }.getOrDefault("")
@@ -175,13 +210,53 @@ class RuntimeProcessManager {
             val recorded = runCatching {
                 AxeronPluginService.execProcessSafeWithTimeout(
                     cmd = arrayOf("/system/bin/sh", "-c", "cat '" + File(dir, "entry.pid").absolutePath + "' 2>/dev/null"),
-                    env = Axeron.getEnvironment(),
+                    env = moduleEnv(),
                     timeoutMs = TIMEOUT_ENTRY_HANDSHAKE_MS,
                 ).stdout.trim().toIntOrNull()
             }.getOrNull()
             if (recorded != null && recorded != pid) return false
         }
         return true
+    }
+
+    /** 读取模块目录下的 entry.pid（不存在/非法返回 -1）。 */
+    suspend fun readEntryPid(dir: File): Int {
+        val txt = runCatching {
+            AxeronPluginService.execProcessSafeWithTimeout(
+                cmd = arrayOf(
+                    "/system/bin/sh", "-c",
+                    "cat '" + File(dir, "entry.pid").absolutePath + "' 2>/dev/null",
+                ),
+                env = moduleEnv(),
+                timeoutMs = TIMEOUT_ENTRY_HANDSHAKE_MS,
+            ).stdout
+        }.getOrDefault("")
+        return txt.trim().toIntOrNull() ?: -1
+    }
+
+    /**
+     * 探测模块目录里「已记录且仍在运行」的 entry.sh 进程。
+     *
+     * App 进程重启后内存里的 pidTable 会清空，但 setsid 拉起的模块进程仍然存活；
+     * 此时若直接 startDaemon 就会产生第二个实例（抢端口、重复改系统设置）。
+     * 这里先读 entry.pid，再用 /proc/<pid>/cmdline 确认它确实是 entry.sh，
+     * 避免 pid 被系统回收复用后误判为「模块还在跑」。
+     *
+     * @return 可复用的 pid；没有则 -1
+     */
+    suspend fun detectRunningEntry(dir: File): Int {
+        val pid = readEntryPid(dir)
+        if (pid <= 0) return -1
+        val cmdline = runCatching {
+            AxeronPluginService.execProcessSafeWithTimeout(
+                cmd = arrayOf("/system/bin/sh", "-c", "cat /proc/" + pid + "/cmdline 2>/dev/null"),
+                env = moduleEnv(),
+                timeoutMs = TIMEOUT_ENTRY_HANDSHAKE_MS,
+            ).stdout
+        }.getOrDefault("")
+        if (!cmdline.contains("entry.sh")) return -1
+        Log.i(TAG, "发现已运行的模块实例 pid=" + pid + " dir=" + dir.absolutePath)
+        return pid
     }
 
     /**
@@ -202,14 +277,18 @@ class RuntimeProcessManager {
      */
     private suspend fun executeShell(cmd: String, timeoutMs: Long): ShellResult {
         return runCatching {
-            AxeronPluginService.execWithIO(
-                cmd = cmd,
-                useBusybox = true,
-                standAlone = false,
-                hideStderr = false,
+            // 【修复】旧实现调用 execWithIO —— 该接口没有超时参数，会一直阻塞在
+            // process.waitFor()：模块脚本一旦卡住（等网络/读 stdin/死循环），
+            // launchModule 协程就永久停在 STARTING，声明的 10s 超时形同虚设。
+            // 这里改用带 timeoutMs 的安全通道，并显式用 BUSYBOX 绝对路径启动
+            // （等价于 execWithIO 内部的 `$BUSYBOX sh -c "$cmd"`，不依赖 PATH）。
+            AxeronPluginService.execProcessSafeWithTimeout(
+                cmd = arrayOf(AxeronPluginService.BUSYBOX, "sh", "-c", cmd),
+                env = moduleEnv(),
+                timeoutMs = timeoutMs.coerceAtLeast(1_000L),
             )
         }.map { r ->
-            ShellResult(r.code, r.out, r.err)
+            ShellResult(r.exitCode, r.stdout, r.stderr)
         }.getOrElse { e ->
             Log.e(TAG, "执行命令失败: $cmd", e)
             ShellResult(-1, "", e.toString())

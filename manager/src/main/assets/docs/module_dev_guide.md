@@ -46,7 +46,7 @@ author=你的名字           # 选填
 version=1.0.0            # 选填，版本号
 versionCode=100          # 选填，版本代号（整数，用于升级比对）
 description=一句话说明    # 选填
-axeronPlugin=14800       # 强烈建议。最低管理器版本编号，14800 = v1.4.8
+axeronPlugin=12          # 必填。最低管理器版本编号（缺了会被安装器直接拒绝）；当前 1.4.0 = 12，旧编码 14800 = v1.4.8
 capabilities=overlay     # 选填。能力声明，见第 7 节
 ```
 

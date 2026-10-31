@@ -61,12 +61,92 @@ object RuntimeCommandTracer {
      * 安全边界：带写重定向（`>` / `>>` / `| tee`）与 `sed -i` 这类**真实写入**行为
      * 一律视为核心指令，绝不聚合（见 isReadOnlyProbe）。
      */
-    private const val MAX_PROBE_TEMPLATES = 120
+    private const val MAX_PROBE_TEMPLATES = 40
     private val probeLock = Any()
     /** 模板 → 出现次数（保序：用同步的 LinkedHashMap） */
     private val probeCounts = LinkedHashMap<String, Int>()
     /** 模板 → 首条原文样本（供展示） */
     private val probeSamples = HashMap<String, String>()
+
+    /**
+     * 【v1.4.8 关键修复】Android 真机 mksh 把「重定向」单独打成一行 trace。
+     *
+     * 实测（`/system/bin/sh` = mksh）：
+     *   `echo 1 > /data/local/tmp/z1` 的 xtrace 是**两行**——
+     *     `+ >/data/local/tmp/z1`
+     *     `+ echo 1`
+     * （dash/bash 才会把重定向并进命令行里；Android 上不会。）
+     *
+     * 旧实现把第一行当命令记录、第二行交给 isUselessOutput 判为「无重定向的纯输出」
+     * 直接丢弃 —— 于是每一次写操作都产出「一条裸 `>/path` 垃圾 + 一条被误杀的真指令」，
+     * 用户看到的就是「大量无效指令，而且没有正确的指令」。
+     *
+     * 修复：把「只由重定向构成的 trace 行」先缓存，拼到紧接着的那条命令后面，
+     * 还原成 `echo 1 >/data/local/tmp/z1`。此后下游判定（isUselessOutput /
+     * isReadOnlyProbe / isNoise 全部靠 `>` 判断「是否真实写入」）才真正成立。
+     *
+     * 只认 `>` / `>>`（写）；`<` / `<<`（读重定向，含 heredoc）丢弃不拼；
+     * `2>&1` 这类 fd 复制不是文件写入，丢弃；`>/dev/null` 不算真实写入，也不拼
+     * （这样 `echo "提示" >/dev/null` 仍会被当作纯输出过滤掉）。
+     */
+    private val pendingLock = Any()
+    private val pendingFragments = ArrayList<String>()
+
+    /** 「纯重定向片段」形态：可选 fd 数字 + `<`/`>`（1~2 个）+ 无空格目标。 */
+    private val redirectFragmentRe = Regex("^([0-9]*)(<{1,2}|>{1,2})(\\S*)$")
+
+    /** 若该行是纯重定向片段：缓存/丢弃它并返回 true（不作为命令记录）。 */
+    private fun consumeRedirectFragment(cmd: String): Boolean {
+        val m = redirectFragmentRe.matchEntire(cmd.trim()) ?: return false
+        val op = m.groupValues[2]
+        val target = m.groupValues[3]
+        // 裸 `>` / `>>` / `<`：无目标，丢弃
+        if (target.isEmpty()) return true
+        // 读重定向（`<f` / `<<EOF`）：与「模块改了什么」无关，丢弃
+        if (op.startsWith("<")) return true
+        // `2>&1` / `>&2` 这类 fd 复制：不是写文件，丢弃
+        if (target.startsWith("&")) return true
+        // 写 /dev/null：等于没有写入，不拼（保留原命令，让纯输出过滤继续生效）
+        if (target == "/dev/null") return true
+        // 注意：必须保留完整的重定向片段文本（含 `>` / `2>` 等操作符）。
+        // 只存路径会拼出 `echo x /sys/...` 这种「不是写操作」的假指令，
+        // 反而会被 isUselessOutput 当成纯输出丢掉 —— 与修复目标相反。
+        val fragment = cmd.trim()
+        synchronized(pendingLock) {
+            if (pendingFragments.size < 8 && !pendingFragments.contains(fragment)) {
+                pendingFragments.add(fragment)
+            }
+        }
+        return true
+    }
+
+    /** 取出并清空已缓存的重定向目标（真实写入路径列表）。 */
+    private fun drainRedirectFragments(): List<String> = synchronized(pendingLock) {
+        if (pendingFragments.isEmpty()) return emptyList()
+        val fragments = pendingFragments.toList()
+        pendingFragments.clear()
+        fragments
+    }
+
+    /** 清空缓存（换通道 / 新一轮采集时必须调用，避免把上一行的重定向拼到无关命令上）。 */
+    private fun clearRedirectFragments() {
+        synchronized(pendingLock) { pendingFragments.clear() }
+    }
+
+    /**
+     * 【v1.4.8】stderr 出现「非 trace 行」时调用：打断「重定向 → 命令」的相邻关系。
+     *
+     * 真机实测：`echo x > /sys/...` 若重定向失败（权限不足），mksh **只打印**
+     *   `+ >/sys/.../scaling_governor`
+     *   `sh: can't create /sys/...: Permission denied`
+     * 命令本身根本不会执行（也就没有对应的 `+ echo x` 行）。
+     * 若不在这里清空，这个失败路径会被拼到**后面那条无关命令**上，
+     * 造出一条现实中不存在的「假指令」。因此只要中间插入了非 trace 行，就丢弃缓存。
+     */
+    fun onInterleavedStderrLine(line: String) {
+        if (line.isBlank()) return
+        if (!isTraceLine(line)) clearRedirectFragments()
+    }
 
     /** 只读探测 / 纯文本处理类工具（不含任何写操作时视为探测）。 */
     private val probeTools = setOf(
@@ -253,9 +333,18 @@ object RuntimeCommandTracer {
      * 只保留有业务含义的核心指令（pm/setprop/axeron-dpm/mount/settings/am 等）。
      */
     fun addTrace(line: String) {
-        val cmd = cleanTraceLine(line)
+        var cmd = cleanTraceLine(line)
         if (cmd.isBlank()) return
-        if (cmd == "set +x" || cmd == "set -x") return
+        if (cmd == "set +x" || cmd == "set -x") {
+            clearRedirectFragments()
+            return
+        }
+        // 【v1.4.8 关键修复】Android 真机 mksh 把重定向单独打成一行 trace（`+ >/data/...`），
+        // 命令本体在下一行且不带重定向。这里先把重定向片段缓存下来，拼到紧随其后的命令上，
+        // 否则每个写操作都会变成「一条裸 `>/path` 垃圾 + 一条被 isUselessOutput 误杀的真指令」。
+        if (consumeRedirectFragment(cmd)) return
+        val redirects = drainRedirectFragments()
+        if (redirects.isNotEmpty()) cmd = "$cmd ${redirects.joinToString(" ")}"
         // 【v1.4.1】过滤无实际用途的纯输出（echo ""/echo 裸/提示文本等），
         // 但 `echo > file` 这类写操作保留。
         if (isUselessOutput(cmd)) return
@@ -368,6 +457,9 @@ object RuntimeCommandTracer {
     }
     /** 把一条 strace execve 输出行解析成真实命令并记录（供 AI 读取）。 */
     fun addStraceLine(line: String) {
+        // 【v1.4.8】strace 通道是另一条采集来源，行之间没有 mksh 的「重定向先行」关系，
+        // 进入本通道前清空重定向缓存，避免把 xtrace 残留的 `>/path` 拼到 execve 命令上。
+        clearRedirectFragments()
         val cmd = StraceHelper.parseExecveLine(line) ?: return
         if (cmd.isBlank()) return
         // 【v1.4.3 修复 · 撤销 v1.4.2 在此处对 isUselessOutput 的调用（过度过滤）】
@@ -461,9 +553,12 @@ object RuntimeCommandTracer {
         // 但那条属于部署噪声，且解包产物会以其他方式出现，故保留过滤。
         if (base == "unzip" || base == "zip") return true
         // 纯只读查询类（不改变系统状态，只探测环境）
-        if (c.startsWith("pm list") || c.startsWith("pm path") || c.startsWith("cmd package list") ||
-            c.startsWith("dumpsys") || c.startsWith("getprop") || c.startsWith("ls ") ||
-            c.startsWith("find ") || c.startsWith("which ") || c.startsWith("ps ")
+        // 【v1.4.8】带写重定向（`pm list packages > /data/...` 之类）属于真实写入，不能当只读丢弃。
+        val isWriteOp = c.contains(">") || c.contains("tee ")
+        if (!isWriteOp && (c.startsWith("pm list") || c.startsWith("pm path") ||
+                c.startsWith("cmd package list") ||
+                c.startsWith("dumpsys") || c.startsWith("getprop") || c.startsWith("ls ") ||
+                c.startsWith("find ") || c.startsWith("which ") || c.startsWith("ps "))
         ) return true
         // 纯中转唤醒（content call / app_process 本身无业务，只是壳的进程壳/中转）
         if (c.startsWith("content call") || c.startsWith("app_process")) return true
@@ -482,12 +577,291 @@ object RuntimeCommandTracer {
         if (!seenTemplate.add(toTemplate(t))) return
         captured.add(t)
     }
-/** 读取当前累计的全部真实指令流（复制一份，避免并发修改） */
-    fun snapshot(): List<String> = captured.toList()
+    // =====================================================================
+    // 【v1.5.0 后果优先采集（effect-first）】
+    //
+    // 为什么换思路：v1.4.x 一路都在「按命令文本 + 手写工具名单」判断谁算核心指令，
+    // 结果两头都错 —— 名单外的只读工具被当核心（噪声淹没），核心动作换个拼写
+    // （busybox pm / 绝对路径 / 变量拼命令 / sh -c）就匹配不到而被丢掉；再加上
+    // captured 的 800 条上限先到先得，混淆壳前段刷出的脚手架会把脚本后段真正
+    // 执行的 pm/am/settings 直接挤出名额。
+    //
+    // 现改为按「后果」判定，文本只用来回填说明：
+    //   1) 写意图（预演沙箱拦下的写调用）：与拼写无关，只要走 PATH 就记下来；
+    //   2) 写后果（xtrace 里带真实写重定向 / sed -i 的命令）：`> /sys/...`、`| tee /path`
+    //      是 shell 内建写，strace 的 execve 看不到，只能从语法结构上认「它写了哪个文件」；
+    //   3) 其余命令不再删除，只按工具名计数 —— 噪声永远不占核心名额。
+    // =====================================================================
 
-    /** 生成供 AI 阅读的指令流文本块 */
+    /** 每条后果上限（独立预算：与噪声条数彻底解耦，不再被 800 上限挤掉） */
+    private const val MAX_EFFECTS = 200
+
+    /** 写意图上限 */
+    private const val MAX_INTENTS = 200
+
+    /** 原始 xtrace 行缓存上限（仅用于给后果回填命令文本） */
+    private const val MAX_XTRACE_RAW = 3000
+
+    /** 后果：key = 动作|目标（对象级去重，`for` 循环写三个路径就是三条） */
+    private val effectCmd = LinkedHashMap<String, String>()
+
+    /** 沙箱拦下的写调用（权威写意图，保序去重） */
+    private val writeIntents = LinkedHashSet<String>()
+
+    /** 已执行的外部命令（保序去重），用于统计「未产生变更」的条数 */
+    private val execOrder = LinkedHashSet<String>()
+
+    /** xtrace 原始行（只增不删，供后果回填命令文本） */
+    private val xtraceRaw = ArrayList<String>()
+    private val xtraceRawSeen = HashSet<String>()
+
+    /** sh 内建写的「重定向片段」缓存（mksh 会把 `> /path` 单独打一行） */
+    private val xtracePending = ArrayList<String>()
+
+    /** 一条核心项：动作描述 + 命中的命令原文 */
+    private data class CoreItem(val action: String, val cmd: String)
+
+    /** `> path` / `>> path` / `2> path`；`>&1` 因目标以 `&` 开头被排除。 */
+    private val REDIRECT_TARGET_RE = Regex("""(?:^|[^0-9&>])>{1,2}\s*([^\s;|&<>()]+)""")
+
+    /** `| tee path` / `| tee -a path` */
+    private val TEE_TARGET_RE = Regex("""\|\s*tee\s+(?:-[a-zA-Z]+\s+)*([^\s;|&<>]+)""")
+
+    /** `sed -i` / `sed --in-place`（就地写文件） */
+    private val SED_INPLACE_RE = Regex("""\bsed\s+(?:-\S+\s+)*--?i""")
+
+    /**
+     * 记录一行 strace 事件（execve / 文件写入 / 删除 / 重命名 / 挂载）。
+     *
+     * execve 只进「命令清单」与统计，不在采集期判定核心与否 —— 判定统一放到
+     * [coreItems]，输入是「有没有后果」，不是「命令长得像不像」。
+     */
+    fun addStraceEvent(line: String) {
+        if (line.isBlank()) return
+        val cmd = StraceHelper.parseExecveLine(line)
+        if (cmd != null) {
+            if (cmd.isNotBlank() && execOrder.size < 4000) execOrder.add(cmd)
+            return
+        }
+        // 阶段②（打开 openat/unlinkat/renameat/mount）时才会命中这里；
+        // 阶段①只跟踪 execve，不会走到下面。
+        val ev = StraceHelper.parseWriteEvent(line) ?: return
+        if (isIgnoredEffectTarget(ev.target)) return
+        val key = ev.kind + "|" + ev.target + (if (ev.extra.isBlank()) "" else "|" + ev.extra)
+        if (effectCmd.containsKey(key)) return
+        if (effectCmd.size >= MAX_EFFECTS) return
+        effectCmd[key] = ""
+    }
+
+    /** 记录预演沙箱拦下的写调用（每行就是模块原样想执行的一条写命令）。 */
+    fun addSandboxLog(text: String) {
+        if (text.isBlank()) return
+        text.split('\n').forEach { raw ->
+            val t = raw.trim()
+            if (t.isBlank()) return@forEach
+            if (writeIntents.size >= MAX_INTENTS) return@forEach
+            writeIntents.add(t)
+        }
+    }
+
+    /**
+     * 记录一条 xtrace 原始行（**必须在 [addTrace] 之前调用**）。
+     *
+     * 这里只做两件事：把 mksh 拆行的重定向拼回完整命令、从**语法结构**上认出写入目标。
+     * 不看工具名、不看名单 —— 认的是「它往哪个文件写了」。
+     */
+    fun noteXtrace(line: String) {
+        if (!isTraceLine(line)) {
+            // 非 trace 行会打断「重定向 → 命令」的相邻关系，丢弃未匹配片段
+            synchronized(xtracePending) { xtracePending.clear() }
+            return
+        }
+        val body = cleanTraceLine(line).trim()
+        if (body.isBlank()) return
+        // mksh：纯重定向片段（`>/path`）先缓存，拼到下一条命令后面
+        val m = redirectFragmentRe.matchEntire(body)
+        if (m != null) {
+            val op = m.groupValues[2]
+            val target = m.groupValues[3]
+            if (op.startsWith(">") && target.isNotEmpty() &&
+                !target.startsWith("&") && !isIgnoredEffectTarget(target)
+            ) {
+                synchronized(xtracePending) {
+                    if (xtracePending.size < 8 && !xtracePending.contains(body)) xtracePending.add(body)
+                }
+            }
+            return
+        }
+        val frags = synchronized(xtracePending) {
+            val f = xtracePending.toList()
+            xtracePending.clear()
+            f
+        }
+        val full = if (frags.isEmpty()) body else (body + " " + frags.joinToString(" ")).trim()
+        // 1) 写入目标（真实写后果）
+        writeTargets(full).forEach { path ->
+            val key = "写入|" + path
+            if (!effectCmd.containsKey(key) && effectCmd.size < MAX_EFFECTS) effectCmd[key] = full
+        }
+        // 2) 原文缓存（阶段②给 strace 后果回填命令文本）
+        synchronized(xtraceRaw) {
+            if (xtraceRaw.size < MAX_XTRACE_RAW && xtraceRawSeen.add(full)) xtraceRaw.add(full)
+        }
+    }
+
+    /**
+     * 从命令文本里按「语法结构」抽出真实写入目标（不认工具名）。
+     *
+     * 覆盖：`> path` / `>> path` / `2> path` / `| tee path` / `sed -i path`。
+     * 排除：`>&1` 这类 fd 复制、`/dev/null`、`/dev/tty` 系列、`/dev/pts` 下的终端、
+     * `/proc/self` 下的自身状态、trace 日志。
+     */
+    private fun writeTargets(cmd: String): List<String> {
+        val out = ArrayList<String>()
+        for (m in REDIRECT_TARGET_RE.findAll(cmd)) {
+            val p = m.groupValues[1]
+            if (p.isNotBlank() && !isIgnoredEffectTarget(p)) out.add(p)
+        }
+        for (m in TEE_TARGET_RE.findAll(cmd)) {
+            val p = m.groupValues[1]
+            if (p.isNotBlank() && !isIgnoredEffectTarget(p)) out.add(p)
+        }
+        if (SED_INPLACE_RE.containsMatchIn(cmd)) {
+            val last = cmd.split(' ').lastOrNull { it.isNotBlank() && !it.startsWith("-") }
+            // 必须像个路径：绝对路径，或含 `/` 且不带引号（排除 `sed -i 's/a/b/'` 这种无文件参数）
+            val looksLikePath = last != null &&
+                (last.startsWith("/") || (last.contains("/") && !last.contains("'") && !last.contains("\"")))
+            if (looksLikePath && last != null && !last.contains("=") && !isIgnoredEffectTarget(last)) out.add(last)
+        }
+        return out
+    }
+
+    /** 这些目标的「写入」没有业务含义（黑洞、终端、自身状态、trace 日志）。 */
+    private fun isIgnoredEffectTarget(path: String): Boolean {
+        val p = path.trim().trim('"', '\'')
+        if (p.isEmpty()) return true
+        return p == "/dev/null" || p.startsWith("/dev/tty") || p.startsWith("/dev/pts/") ||
+            p.startsWith("/proc/self/") || p.startsWith("/data/local/tmp/ax_trace") ||
+            p == DryRunSandbox.LOG
+    }
+
+    /**
+     * 汇总本次采集的核心项：后果（写入/删除/改名/挂载）+ 沙箱写意图。
+     *
+     * 顺序即真实执行顺序；同一条命令只出现一次（按命令原文去重）。
+     */
+    private fun coreItems(): List<CoreItem> {
+        val items = ArrayList<CoreItem>()
+        effectCmd.forEach { (key, cmd) ->
+            val parts = key.split("|")
+            val kind = parts.getOrElse(0) { "" }
+            val target = parts.getOrElse(1) { "" }
+            val extra = parts.getOrElse(2) { "" }
+            val resolved = if (cmd.isNotBlank()) cmd else matchXtrace(target)
+            val action = when (kind) {
+                "写入" -> "写入文件 $target"
+                "删除" -> "删除文件 $target"
+                "重命名" -> "重命名 $target → $extra"
+                "挂载" -> "挂载 $target → $extra"
+                else -> "$kind $target"
+            }
+            items.add(CoreItem(action, resolved))
+        }
+        val seenCmd = items.map { it.cmd }.filter { it.isNotBlank() }.toHashSet()
+        writeIntents.forEach { intent ->
+            if (seenCmd.contains(intent)) return@forEach
+            items.add(CoreItem("执行系统写操作", intent))
+            seenCmd.add(intent)
+        }
+        return items
+    }
+
+    /** 用 xtrace 里同路径的写命令，给 strace 后果回填「是哪条命令写的」。 */
+    private fun matchXtrace(path: String): String {
+        if (path.isBlank()) return ""
+        synchronized(xtraceRaw) {
+            for (i in xtraceRaw.indices.reversed()) {
+                val l = xtraceRaw[i]
+                if (l.contains(path) && (l.contains(">") || l.contains("tee "))) return l
+            }
+            for (i in xtraceRaw.indices.reversed()) {
+                val l = xtraceRaw[i]
+                if (l.contains(path)) return l
+            }
+        }
+        return ""
+    }
+
+    /**
+     * 「未产生系统变更」的命令统计：只给条数与工具聚合，不逐行列出。
+     *
+     * 这是噪声的**唯一**去处 —— 不删、不占核心名额、也不会把核心挤出上限。
+     */
+    private fun noEffectSummary(): Pair<Int, String> {
+        val coreCmds = HashSet<String>()
+        effectCmd.values.forEach { if (it.isNotBlank()) coreCmds.add(it) }
+        coreCmds.addAll(writeIntents)
+        val counts = LinkedHashMap<String, Int>()
+        var total = 0
+        execOrder.forEach { cmd ->
+            if (coreCmds.contains(cmd)) return@forEach
+            total++
+            val base = cmd.substringBefore(' ').substringAfterLast('/')
+            if (base.isNotBlank()) counts[base] = (counts[base] ?: 0) + 1
+        }
+        val top = counts.entries.sortedByDescending { it.value }.take(15)
+            .joinToString("、") { "${it.key}×${it.value}" }
+        return total to top
+    }
+
+    /** 生成「影响报告」：核心变更逐条（附命令原文），其余命令只给聚合计数。 */
+    private fun effectBlock(withSummary: Boolean): String {
+        val items = coreItems()
+        if (items.isEmpty()) return ""
+        val sb = StringBuilder()
+        sb.appendLine("【模块对系统的影响（${items.size} 项，按执行顺序）】")
+        items.forEachIndexed { i, it ->
+            val cmdText = if (it.cmd.isNotBlank()) "  ← ${it.cmd}" else ""
+            sb.appendLine("  ${i + 1}. ${it.action}$cmdText")
+        }
+        if (withSummary) {
+            val (total, top) = noEffectSummary()
+            if (total > 0) {
+                sb.appendLine()
+                sb.appendLine("【其余命令：已执行但未产生系统变更（共 $total 条，明细已省略）】")
+                if (top.isNotBlank()) sb.appendLine("  $top")
+            }
+        }
+        return sb.toString().trimEnd()
+    }
+
+    /**
+     * 读取本次采集到的「核心动作」命令文本（供喂 AI / 落盘 / 卸载回滚脚本生成）。
+     *
+     * 【v1.5.0】优先返回「后果 / 写意图」对应的命令原文；没有任何后果证据时回退旧的
+     * captured，保证调用方永远拿到可用内容（不再出现空结果）。
+     */
+    fun snapshot(): List<String> {
+        val items = coreItems()
+        if (items.isEmpty()) return captured.toList()
+        return items.map { if (it.cmd.isNotBlank()) it.cmd else "[${it.action}]" }
+    }
+
+    /**
+     * 生成供 AI 阅读的影响报告。
+     *
+     * 【v1.5.0 后果优先】只要采到「后果 / 写意图」，就输出「实际变更 + 其余命令聚合计数」；
+     * 一条后果证据都没有时才回退旧格式，保证不出现空结果。
+     */
     fun toPromptBlock(): String {
-        val snapshot = snapshot()
+        val block = effectBlock(withSummary = true)
+        if (block.isNotBlank()) return block
+        return legacyPromptBlock()
+    }
+
+    /** 旧格式（核心指令流 + 环境探测聚合）。仅在「没有任何后果证据」时兜底。 */
+    private fun legacyPromptBlock(): String {
+        val snapshot = captured.toList()
         val probes = probeBlock()
         // 【v1.4.7】核心指令 + 环境探测（聚合）双区块输出：
         // 核心指令在前（AI 优先读），探测在后（同类已聚合，避免噪声淹没核心）。
@@ -510,8 +884,48 @@ object RuntimeCommandTracer {
         return sb.toString()
     }
 
+    /**
+     * 【v1.4.0 修复④】生成「界面展示用」的指令流文本块：**只含核心指令流**。
+     *
+     * 背景（用户反馈）：运行 / 启用界面里拦截到的内容「大量无效杂乱」，而「恢复卸载」
+     * 界面（读的正是同一次落盘的 [snapshot]）看到的内容却是正确、干净的。
+     *
+     * 根因不是抓取数据不同（两者同源），而是**展示时把
+     * 「环境探测 / 纯文本处理类指令（同类已聚合）」区块也混进了正文** ——
+     * 那一块最多 120 类，逐行列出 cat/grep/getprop/ps 之类的探测样本，
+     * 在用户眼里就是"一堆和模块功能无关的噪声"，把真正的核心指令淹掉了。
+     *
+     * 因此把两个出口拆开：
+     *  - [toDisplayBlock]：界面展示用，只有核心指令流（与落盘内容一致，用户可逐条核对）；
+     *  - [toPromptBlock]：喂 AI 用，核心指令 + 探测区块（保留上下文，信息不丢）。
+     *
+     * 注意：这里只是「展示分组」，**没有新增任何过滤规则** —— 核心指令流的采集规则
+     * 一字未改，避免用户反复强调的"一味收紧过滤导致真指令被误滤"。
+     */
+    fun toDisplayBlock(): String {
+        // 【v1.5.0 后果优先】界面与 AI 用同一份「影响报告」，避免两边说法不一致。
+        val block = effectBlock(withSummary = false)
+        if (block.isNotBlank()) return block
+        return legacyDisplayBlock()
+    }
+
+    /** 旧格式（仅核心指令流）。没有任何后果证据时兜底。 */
+    private fun legacyDisplayBlock(): String {
+        val list = captured.toList()
+        if (list.isEmpty()) {
+            return "（本次运行未捕获到真实执行指令）"
+        }
+        val sb = StringBuilder()
+        sb.appendLine("【运行时真实执行指令流（共 ${list.size} 条）】")
+        list.forEachIndexed { i, cmd ->
+            sb.appendLine("  ${i + 1}. $cmd")
+        }
+        return sb.toString()
+    }
+
     /** 是否已捕获到有效真实指令 */
-    fun hasTrace(): Boolean = captured.isNotEmpty()
+    fun hasTrace(): Boolean =
+        captured.isNotEmpty() || effectCmd.isNotEmpty() || writeIntents.isNotEmpty()
 
     /** 开始一次新的采集（清空历史） */
     fun begin() {
@@ -524,6 +938,17 @@ object RuntimeCommandTracer {
             probeCounts.clear()
             probeSamples.clear()
         }
+        // 【v1.4.8】重定向片段缓存也必须清空，避免上一轮残留的 `>/path` 拼到本轮第一条命令上
+        clearRedirectFragments()
+        // 【v1.5.0】后果优先采集的所有状态一并清空，避免上一次运行的后果串到本次结果里
+        effectCmd.clear()
+        writeIntents.clear()
+        execOrder.clear()
+        synchronized(xtraceRaw) {
+            xtraceRaw.clear()
+            xtraceRawSeen.clear()
+        }
+        synchronized(xtracePending) { xtracePending.clear() }
         enabled = true
     }
 

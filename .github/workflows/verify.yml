@@ -51,6 +51,14 @@ jobs:
           echo "signing.keyPassword=android" >> local.properties
       - name: Grant gradlew permission
         run: chmod +x gradlew
+      - name: Add swap (OOM guard)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 status=none
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile >/dev/null
+          sudo swapon /swapfile
+          free -m
       - name: Use official maven repos
         run: sed -i '/maven.aliyun.com/d' settings.gradle.kts
       # 诊断：打印可用 JDK 及其 vendor 字符串。
@@ -88,10 +96,12 @@ jobs:
       - name: Verify Kotlin compile (official)
         run: |
           ./gradlew :manager:compileOfficialReleaseKotlin \
-            --console=plain --parallel --build-cache \
-            -Dorg.gradle.jvmargs="-Xmx5g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -XX:+TieredCompilation -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8"
+            --console=plain --build-cache \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -XX:+TieredCompilation -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8" \
+            -Pkotlin.daemon.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=512m -XX:+UseParallelGC -XX:+TieredCompilation -Dfile.encoding=UTF-8"
       - name: Verify Kotlin compile (manages)
         run: |
           ./gradlew :manager:compileManagesReleaseKotlin \
-            --console=plain --parallel --build-cache \
-            -Dorg.gradle.jvmargs="-Xmx5g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -XX:+TieredCompilation -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8"
+            --console=plain --build-cache \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -XX:+TieredCompilation -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8" \
+            -Pkotlin.daemon.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=512m -XX:+UseParallelGC -XX:+TieredCompilation -Dfile.encoding=UTF-8"

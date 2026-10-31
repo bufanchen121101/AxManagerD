@@ -146,9 +146,11 @@ object RuntimeModuleLoader {
             }
 
             // 6. 采集声明校验
-            if (manifest.sensors.isEmpty()) {
-                issues.add("未声明任何采集器")
-            }
+            //
+            // 注意：sensors 允许为空。ONESHOT / 纯服务型模块（只做端口转发、
+            // 只改一次系统参数等）本来就不需要采集器；旧实现把空声明判成
+            // 「未声明任何采集器」直接判死，导致这类模块 100% 无法启用。
+            // 真正需要拦的是「阈值触发器引用了没声明的采集器」（见下方触发器校验）。
             val invalidSensors = manifest.sensors.filter { it.type !in RuntimeSensorType.ALL }
             if (invalidSensors.isNotEmpty()) {
                 issues.add("存在未知采集器类型：" + invalidSensors.joinToString(", ") { it.type })
@@ -162,6 +164,9 @@ object RuntimeModuleLoader {
                 if (t.type == RuntimeTriggerType.THRESHOLD) {
                     if (t.sensor.isBlank() || t.field.isBlank()) {
                         issues.add("阈值触发器缺少 sensor 或 field")
+                    } else if (manifest.sensors.none { it.type == t.sensor }) {
+                        // 引用了没声明的采集器 -> 该触发器永远不会被求值，是真错误。
+                        issues.add("阈值触发器引用的采集器 ${t.sensor} 未在 sensors 中声明")
                     }
                     if (t.op !in setOf("gt", "lt", "eq")) {
                         issues.add("阈值触发器比较运算符非法：${t.op}")

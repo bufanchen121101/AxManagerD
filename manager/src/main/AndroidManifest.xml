@@ -8,6 +8,11 @@
         tools:ignore="ForegroundServicesPolicy" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 导出模块到 /storage/emulated/0/AxManagerD 需要「所有文件访问权限」（Android 11+） -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
@@ -95,10 +100,10 @@
 
 
     <application
-        android:name="org.lsposed.lspatch.LSPApplication"
+        android:name="frb.axeron.manager.AxeronApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:debuggable="true"
+        android:debuggable="${debuggable}"
         android:directBootAware="true"
         android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/backup_rules"
@@ -410,30 +415,6 @@
                 android:value="re-establish adb connection right after boot" />
         </service>
 
-        <!-- LSPatch (AXMD) 注入引擎组件 -->
-        <service
-            android:name="org.lsposed.lspatch.manager.ModuleService"
-            android:exported="true" />
-
-        <service
-            android:name="org.lsposed.lspatch.service.LogCollectorService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="continuous log monitoring for patched apps and the Xposed framework" />
-        </service>
-
-        <!-- 将 patched APK 交给其他 installer 安装时用的 FileProvider -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.patched"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/patched_apk_paths" />
-        </provider>
     </application>
 
 </manifest>

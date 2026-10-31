@@ -3,10 +3,15 @@ name: Build Release APK (R8)
 # 完整 APK 构建耗时约 19 分钟，改为「仅手动触发」，避免每次 push 都跑全量。
 # 日常代码验证走 verify.yml（只编 Kotlin，3-6 分钟）。
 on:
+  push:
+    branches: [ harden_ci ]
   workflow_dispatch:
     inputs:
       flavor:
-        description: 'Build flavor (official = UI 主包；manages = frb.axerond.manages 壳；both = 两个都编)'
+        # official = UI 主包（frb.axeron.manager）；
+        # manages  = 免 root 服务端壳（frb.axerond.manages / 15000 / 1.4.8.r349）；
+        # both     = 两个都编（设备上装的是哪个包，就用哪个）。
+        description: 'Build flavor (official = UI 主包 / manages = 服务端壳 / both = 两个都编)'
         required: false
         default: 'official'
         type: choice
@@ -14,6 +19,9 @@ on:
           - official
           - manages
           - both
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -65,26 +73,27 @@ jobs:
           set -e
           mkdir -p ~/.android
           KS="$HOME/.android/debug.keystore"
-          # ★ 关键：仓库内固定 keystore，保证每次构建签名完全一致。
-          # 历史教训：曾经用 secrets.DEBUG_KEYSTORE_BASE64 还原，但该 secret
-          # 并不存在（展开为空）→ 触发下面的 keytool -genkeypair 兜底 →
-          # 每次都现场随机生成新密钥 → 签名每次都变，无法覆盖安装。
-          # 现在把 keystore 直接入库（debug 签名，storepass=android 为公开默认值，无泄密风险），
-          # 并**移除随机生成兜底**：文件缺失/不可用直接失败，绝不静默换签名。
+          # 【脱敏版说明】原仓库内自带 keystore/debug.keystore（签名材料随源码分发）。
+          # 公开源码里已删除签名文件，这里改为按优先级取：
+          #   1) secrets.DEBUG_KEYSTORE_BASE64（你私有 CI 用）
+          #   2) 仓库内 keystore/debug.keystore（你自己补进来时）
+          #   3) 都没有 → 现场生成一个 debug keystore（仅用于本地/CI 构建验证）
           REPO_KS="keystore/debug.keystore"
-          # 兼容两种来源：secrets（若将来配置了）优先，其次用仓库内文件。
           if [ -n "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
             echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > "$KS"
-          else
+          elif [ -f "$REPO_KS" ]; then
             cp "$REPO_KS" "$KS"
+          else
+            echo "::warning::仓库内无 debug keystore，现场生成（每次构建签名会不同，无法覆盖安装已发布包）。"
+            keytool -genkeypair -v -keystore "$KS" -storepass android -keypass android \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null
           fi
-          # 校验：不可用则直接失败（不再生成新密钥）。
           if ! keytool -list -keystore "$KS" -storepass android -alias androiddebugkey >/dev/null 2>&1; then
-            echo "::error::keystore 不可用！拒绝用新密钥构建（会改变签名）。"
-            echo "::error::请检查仓库内 keystore/debug.keystore 是否存在且格式正确。"
+            echo "::error::keystore 不可用！"
             exit 1
           fi
-          echo "==== keystore 指纹（必须为稳定值）===="
+          echo "==== keystore 指纹 ===="
           keytool -list -v -keystore "$KS" -storepass android -alias androiddebugkey \
             | grep -E 'Alias name|SHA1:|SHA256:' || true
       - name: Write local.properties
@@ -98,6 +107,14 @@ jobs:
           cat local.properties
       - name: Grant gradlew permission
         run: chmod +x gradlew
+      - name: Add swap (OOM guard)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 status=none
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile >/dev/null
+          sudo swapon /swapfile
+          free -m
       # GitHub Actions 在国外，访问阿里云镜像不通，改回官方源
       - name: Use official maven repos
         run: |
@@ -114,9 +131,12 @@ jobs:
       - name: Install Oracle JDK 21 (vendor match)
         run: |
           set -e
-          URL="https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz"
+          URL="https://download.oracle.com/java/21/archive/jdk-21.0.9_linux-x64_bin.tar.gz"
           echo "downloading $URL"
-          curl -fsSL --retry 3 --max-time 300 -o /tmp/oracle-jdk21.tar.gz "$URL"
+          if ! curl -fsSL --retry 3 --max-time 300 -o /tmp/oracle-jdk21.tar.gz "$URL"; then
+            echo "::warning::Oracle JDK 21 unavailable, fallback to preinstalled Temurin JDK 21"
+            exit 0
+          fi
           ls -l /tmp/oracle-jdk21.tar.gz
           sudo mkdir -p /opt/oracle-jdk
           sudo tar -xzf /tmp/oracle-jdk21.tar.gz -C /opt/oracle-jdk --strip-components=1
@@ -130,16 +150,42 @@ jobs:
       # 按 workflow_dispatch 的 flavor 输入选择构建目标（默认 official，行为与改造前完全一致）。
       # official = UI 主包（frb.axeron.manager）；manages = 免 root 服务端壳
       # （frb.axerond.manages / versionCode 15000 / 1.4.8.r349）；both = 两个都编。
-      # 官方默认 AI 密钥：优先用 Secret，其次用仓库 Variable；都没配 -> 传空，
-      # App 侧会判定「官方默认 AI 不可用」。这里只输出长度，绝不输出明文。
-      - name: Check official AI key
+      # 官方默认 AI：v1.4.0 起改走中转站（动态日钥）——
+      #   - AXKEY_PASS（访问密码）决定「官方默认 AI」是否可用；
+      #   - OFFICIAL_AI_API_KEY 仅保留历史兼容（不再参与官方请求）。
+      # 两者都优先用 Secret，其次用仓库 Variable；都没配 -> 传空。这里只输出长度，绝不输出明文。
+      # AXKEY_PASS resolution order: Secret -> Variable -> repo file .ci/axkey_pass.b64 (base64).
+      # The file lives only in this private build repo, so builds still work without Secret/Variable.
+      - name: Resolve AXKEY_PASS (secret -> variable -> repo file)
+        env:
+          SECRET_AXKEY: ${{ secrets.AXKEY_PASS }}
+          VAR_AXKEY: ${{ vars.AXKEY_PASS }}
+        run: |
+          VAL="$SECRET_AXKEY"
+          if [ -z "$VAL" ]; then VAL="$VAR_AXKEY"; fi
+          if [ -z "$VAL" ] && [ -f .ci/axkey_pass.b64 ]; then
+            VAL="$(base64 -d .ci/axkey_pass.b64 | tr -d '\r\n')"
+          fi
+          if [ -n "$VAL" ]; then
+            echo "::add-mask::$VAL"
+            echo "AXKEY_PASS=$VAL" >> "$GITHUB_ENV"
+            echo "AXKEY_PASS resolved (len=${#VAL})"
+          else
+            echo "::warning::AXKEY_PASS not configured (no Secret / Variable / .ci/axkey_pass.b64)."
+          fi
+      - name: Check official AI keys
         env:
           OFFICIAL_AI_API_KEY: ${{ secrets.OFFICIAL_AI_API_KEY || vars.OFFICIAL_AI_API_KEY }}
         run: |
           if [ -z "$OFFICIAL_AI_API_KEY" ]; then
-            echo "::warning::未配置 OFFICIAL_AI_API_KEY（Secret 或 Variable）→ 官方默认 AI 将被置空、不可用。"
+            echo "::notice::未配置 OFFICIAL_AI_API_KEY（v1.4.0+ 不再必需：官方链路已改走中转站）。"
           else
             echo "OFFICIAL_AI_API_KEY 已注入（长度 ${#OFFICIAL_AI_API_KEY}，此处只输出长度）"
+          fi
+          if [ -z "$AXKEY_PASS" ]; then
+            echo "::warning::未配置 AXKEY_PASS（Secret 或 Variable）→ 官方默认 AI（中转站动态密钥）将被判定不可用。"
+          else
+            echo "AXKEY_PASS 已注入（长度 ${#AXKEY_PASS}，此处只输出长度）"
           fi
       - name: Build release APKs (R8 enabled)
         env:
@@ -158,8 +204,9 @@ jobs:
           esac
           echo "GRADLE TASKS = $TASKS"
           ./gradlew $TASKS \
-            --console=plain --parallel --build-cache \
-            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+UseParallelGC -XX:+TieredCompilation -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8"
+            --console=plain --build-cache \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -XX:+TieredCompilation -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8" \
+            -Pkotlin.daemon.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=512m -XX:+UseParallelGC -XX:+TieredCompilation -Dfile.encoding=UTF-8"
       - name: Verify signature
         run: |
           SDKROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
@@ -181,6 +228,9 @@ jobs:
             if ! unzip -p "$APK" 'classes*.dex' 2>/dev/null | grep -aq 'OFFICIAL_AI_KEY_BLOB'; then
               echo "::warning::APK 中未找到 OFFICIAL_AI_KEY_BLOB（密钥可能未注入）。"
             fi
+            if ! unzip -p "$APK" 'classes*.dex' 2>/dev/null | grep -aq 'AXKEY_PASS_BLOB'; then
+              echo "::warning::APK 中未找到 AXKEY_PASS_BLOB（中转站访问密码可能未注入）。"
+            fi
             echo "OK: 未检出明文密钥"
           done
       - name: Collect APK
@@ -190,6 +240,33 @@ jobs:
           ls -la artifacts/
       - name: Upload APK
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: AxManager-release-apk
           path: artifacts/*.apk
+          retention-days: 14
+
+      # Delivery channel: artifact storage quota can be exhausted on this
+      # account, so the APK is also pushed to a dedicated branch (apk-out).
+      # The main branch is never touched.
+      - name: Publish APK to apk-out branch
+        if: always()
+        run: |
+          if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
+            echo "::warning::no apk found, skip publish"
+            exit 0
+          fi
+          PUB=/tmp/pub
+          rm -rf "$PUB"
+          mkdir -p "$PUB"
+          cp artifacts/*.apk "$PUB"/
+          cd "$PUB"
+          git init -q
+          git config user.email "ci@axmanagerd.local"
+          git config user.name "AxManagerD CI"
+          git add -A
+          git commit -q -m "apk ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:apk-harden
+          echo "published to branch apk-harden"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

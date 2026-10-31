@@ -2354,6 +2354,50 @@ fun DirectActivationCard(
                 )
                 Text(stringResource(R.string.new_perm_revoke_dp))
             }
+
+            // —— 【v1.9.1】激活后恢复方案（本卡最下方）——
+            //
+            // 直连激活过程中会把 user_setup_complete 临时置 0，正常路径已在 finally 里恢复；
+            // 但若激活中途被强退、ROM 写入延迟或用户手动中断，可能残留为 0 ——
+            // 表现为三键导航的「主页 / 最近任务」键失灵，或系统反复认为向导未完成。
+            // 这里提供一次性的补救入口：直接写回 1 并经 Shizuku 回读确认。
+            // 说明文案：若激活后遇到问题，可尝试用此方案恢复。
+            val restoreSetupDesc = stringResource(R.string.dpdo_direct_restore_setup_desc)
+            val restoreSetupOk = stringResource(R.string.dpdo_direct_restore_setup_ok)
+            val restoreSetupFail = stringResource(R.string.dpdo_direct_restore_setup_fail)
+            OutlinedButton(
+                // 走 Shizuku（shell 身份）写 secure 设置，未授权时置灰
+                enabled = activateViewModel.isShizukuActive && !activateViewModel.isSetupGateBusy,
+                onClick = {
+                    scope.launch {
+                        loadingDialog.withLoading {
+                            val ok = runCatching {
+                                activateViewModel.restoreSetupComplete()
+                            }.getOrDefault(false)
+                            Toast.makeText(
+                                context,
+                                if (ok) restoreSetupOk else restoreSetupFail,
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    modifier = Modifier
+                        .padding(end = 10.dp)
+                        .size(16.dp),
+                    contentDescription = null
+                )
+                Text(stringResource(R.string.dpdo_direct_restore_setup))
+            }
+            Text(
+                text = restoreSetupDesc,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

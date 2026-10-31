@@ -14,8 +14,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -23,6 +25,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.LocalFireDepartment
@@ -69,7 +72,9 @@ import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.api.AxeronPluginService
 import frb.axeron.api.AxeronPluginService.ensureManageExternalStorageAllowed
 import frb.axeron.manager.R
+import com.ramcosta.composedestinations.generated.destinations.AiHubScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.AIMainScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.ModuleDevScreenDestination
 import frb.axeron.manager.ui.component.LocalBottomBarInset
 import frb.axeron.manager.ui.component.AxSnackBarHost
 import frb.axeron.manager.ui.component.SearchAppBar
@@ -126,6 +131,19 @@ fun PluginScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlo
         }
     }
 
+    // 【v1.4.0 修复①】卸载运行时模块后「加模块」悬浮按钮消失、必须重进页面才恢复。
+    //
+    // 根因：FAB 的可见性由 showFab 控制，而 showFab 只在「列表向上滚动」时才被置回 true。
+    // 卸载模块后列表变短，列表项数减少不会触发向上滚动事件，于是 showFab 一直停留在
+    // 之前「向下滚动」时被置成的 false —— 看起来就是按钮凭空消失，只有重新进入页面
+    // （remember 重新初始化 showFab = true）才回来。
+    //
+    // 修复：订阅运行时模块数量（安装/卸载/重扫都会改变它）与分区切换，数量一变就恢复
+    // 悬浮按钮显示。只影响「按钮可见性」，不触碰滚动时的自动隐藏逻辑。
+    LaunchedEffect(section, RuntimeModuleService.statuses.size) {
+        showFab = true
+    }
+
     LaunchedEffect(listState) {
         var lastIndex = listState.firstVisibleItemIndex
         var lastOffset = listState.firstVisibleItemScrollOffset
@@ -179,9 +197,28 @@ fun PluginScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGlo
                     scrollBehavior = scrollBehavior,
                     action = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { navigator.navigate(AIMainScreenDestination) }) {
+                            // 模块开发入口：模块图标 + 右下角扳手（制作模块 / AI 做模块）
+                            IconButton(onClick = { navigator.navigate(ModuleDevScreenDestination) }) {
+                                Box {
+                                    Icon(
+                                        Icons.Filled.Extension,
+                                        contentDescription = "模块开发",
+                                    )
+                                    Icon(
+                                        Icons.Filled.Build,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .size(12.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                            // 【1.4.0】AI 设置入口：所有 AI 配置集中到 AiHubScreen，
+                            // 模块页顶部直接可达，不必再进系统设置翻找。
+                            TextButton(onClick = { navigator.navigate(AiHubScreenDestination) }) {
                                 Text(
-                                    text = "AI",
+                                    text = "AI 设置",
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary
                                 )

@@ -357,14 +357,31 @@ object AxeronPluginService {
         useSetsid: Boolean = false,
         useBusybox: Boolean = true,
         standAlone: Boolean = false,
-        hideStderr: Boolean = true
+        hideStderr: Boolean = true,
+        /**
+         * 【v1.4.0 修复⑤】跳过 AI 拦截挂钩（[commandAnalyzer]）分析。
+         *
+         * 为什么需要：
+         *   [cmd] 若是一条**已经过上层逐行安全过滤并由用户显式确认**的完整多行脚本，
+         *   在入口再让分析器把「整段脚本」当一条命令分析，会产生两个错误后果：
+         *     1) 规则引擎对整段文本做正则匹配（含注释、echo 文案），极易误命中
+         *        MEDIUM/HIGH（如 `settings delete`、`axeron-dpm hide`、`\breboot\b`），
+         *        于是走 [CommandAnalyzer] 的「弹窗等用户决策」分支并**挂起**，
+         *        脚本根本没被执行到，上层只看到超时/「已拦截」；
+         *     2) [CommandAnalyzer.CommandContext.Source.INTERNAL] 场景没有模块上下文
+         *        （pluginDirId/pluginName 均为空），白名单与模块探测都不成立。
+         *
+         * 默认 false —— 行为与旧版**完全一致**，只有「恢复卸载」这类已确认脚本的
+         * 调用点才显式传 true（改动隔离，不影响安装/运行/抓取等其它链路）。
+         */
+        skipAnalyzer: Boolean = false
     ): ResultExec = runCatching {
 
         Log.d(TAG, "execWithIO: $cmd")
 
         // ---- AI 拦截挂钩（方案 A）----
         val analyzer = commandAnalyzer
-        if (analyzer != null && !isInternalCommand(cmd)) {
+        if (!skipAnalyzer && analyzer != null && !isInternalCommand(cmd)) {
             val ctx = CommandAnalyzer.CommandContext(
                 source = CommandAnalyzer.CommandContext.Source.INTERNAL
             )

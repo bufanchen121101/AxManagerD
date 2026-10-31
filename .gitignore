@@ -13,3 +13,10 @@ out/
 # 编译产物 / 缓存（注意：不要忽略 gradle/wrapper 与 jniLibs，CI 必需）
 .kotlin
 .cxx
+
+# 脱敏版：签名文件与本地密钥一律不入库
+*.keystore
+*.jks
+keystore/
+signing.properties
+.ci/

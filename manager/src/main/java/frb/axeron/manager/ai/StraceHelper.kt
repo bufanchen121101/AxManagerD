@@ -57,7 +57,7 @@ object StraceHelper {
         // 其顺序为 $AXERONXBIN:$PATH:$AXERONBIN（system 优先、axeron/bin 补充）。
         return "cd \"${pluginPath}\"; " +
             "rm -f \"$traceLog\"; " +
-            "setsid sh -c '$stracePath -f -e trace=execve -o \"$traceLog\" sh ./$scriptName >/dev/null 2>&1 & echo \$! > \"$pidFile\"'; exit 0"
+            "setsid sh -c '$stracePath -f -s 4096 -e trace=execve -o \"$traceLog\" sh ./$scriptName >/dev/null 2>&1 & echo \$! > \"$pidFile\"'; exit 0"
     }
 
     /**
@@ -66,8 +66,10 @@ object StraceHelper {
      * 环境下 `waitFor()` 卡死。跑完命令自然返回，随后直接 cat 日志即可。
      *
      * @param timeoutMs 抓取时长（毫秒）。常驻脚本抓"启动后前几秒核心指令"即可。
+     * @param dryRunBin 【v1.4.0 修复②】预演沙箱目录（[DryRunSandbox.DIR]），null = 不做沙箱（行为与旧版完全一致）。
+     *                  命令由 `sh -c <argv>` 直接执行、不被双引号包裹，故此处用 [DryRunSandbox.pathPrefixRaw]。
      */
-    fun buildTraceCmdSync(stracePath: String, pluginPath: String, traceLog: String, scriptName: String, timeoutSeconds: Int = 5): String {
+    fun buildTraceCmdSync(stracePath: String, pluginPath: String, traceLog: String, scriptName: String, timeoutSeconds: Int = 5, dryRunBin: String? = null): String {
         // 关键：必须加 `-k 1`（kill-after）。timeout 默认只发 SIGTERM，strace 作为 ptrace
         // 追踪者会把 SIGTERM 转发给被追踪的子进程（常驻 service.sh 死循环忽略它），而自己不退出，
         // 导致 waitFor() 卡死、日志不产出。加 `-k 1` 会在 SIGTERM 后 1 秒补发 SIGKILL 强制杀掉
@@ -95,9 +97,23 @@ object StraceHelper {
         // 修复：由于 shell 内建命令（echo > /sys/...、[ ]、变量赋值）不产生 execve，
         // 单靠 strace 抓不全，故 v1.4.0 起调用方**总是**额外跑一段 `sh -x`
         // （见 StraceHelper.buildXtraceCmd），两段结果合并互补。本函数保持纯 execve 抓取。
-        return "cd \"${pluginPath}\"; " +
+        // 【v1.4.0 修复②】带沙箱时，在 PATH 最前面挂预演桩，让模块脚本里"按名字调用"的
+        // 写命令（pm disable / settings put / axeron-dpm suspend …）落到桩上、只记录不执行。
+        // 注意：此处命令由 `sh -c <argv>` 直接执行（execProcessSafe/WithTimeout），
+        // 不经过双引号包裹，故 `$PATH` 直接原样写（不能写成 `\$PATH`，否则内层 shell 会当成字面量）。
+        val dryRunPrefix = if (dryRunBin != null) DryRunSandbox.pathPrefixRaw() else ""
+        // 【v1.4.0 修复 · 「拦截出一堆现实中不存在的指令」】
+        // strace 的 argv 字符串默认只打印 32 字节（-s 32），超出部分以 `...` 收尾。真机实测：
+        //   execve("/system/bin/pm", ["pm","disable-user","--user","0","com.very.long.package.name.for.t"...]
+        // parseExecveLine 只能拿到被砍半的参数，于是界面上出现
+        //   `pm disable-user --user 0 com.very.long.package.name.for.t`
+        // —— 一条现实中并不存在的指令。混淆模块的路径/参数更长，几乎条条被截断，
+        // 于是表现为「大量不存在的指令，且没有真正有用的指令」。
+        // 补 `-s 4096` 后实测 argv 完整、无 `...` 截断。这是**采集侧**修复，
+        // 没有新增任何过滤规则（用户明确要求不要再收紧过滤）。
+        return dryRunPrefix + "cd \"${pluginPath}\"; " +
             "rm -f \"$traceLog\"; " +
-            "timeout -k 1 $timeoutSeconds $stracePath -f -e trace=execve -o \"$traceLog\" sh \"./$scriptName\" >/dev/null 2>&1; " +
+            "timeout -k 1 $timeoutSeconds $stracePath -f -s 4096 -e trace=execve -o \"$traceLog\" sh \"./$scriptName\" >/dev/null 2>&1; " +
             "exit 0"
     }
 
@@ -113,10 +129,21 @@ object StraceHelper {
      * 旧实现对 sh -x 段只做 `snapshot().isEmpty()` 兜底，导致只要 strace 抓到任何一条
      * （哪怕只是 chmod）就跳过 sh -x 段 → 内建核心指令全部丢失。v1.4.0 改为**总是执行**。
      */
-    fun buildXtraceCmd(pluginPath: String, pluginBin: String, scriptName: String, timeoutSeconds: Int): String {
+    fun buildXtraceCmd(pluginPath: String, pluginBin: String, scriptName: String, timeoutSeconds: Int, dryRunBin: String? = null): String {
         // 只丢弃 stdout，保留 stderr（xtrace 行走 stderr，`2>&1` 会把它吞掉）。
         // `timeout -k 1` 限时；常驻脚本（while true）抓"启动后前 N 秒核心指令"即可。
-        return "export PATH=$pluginBin:\$PATH; cd \"$pluginPath\"; timeout -k 1 $timeoutSeconds sh -x \"./$scriptName\"; exit 0"
+        //
+        // 【v1.4.0 修复②】dryRunBin 非空时，把「预演沙箱」放在 PATH **最前面**
+        // （在模块自身 bin 之前——否则模块若自带同名 pm/am 会盖掉桩），
+        // 使抓取阶段发生的写调用只被记录、不落到系统上。
+        // 本命令的调用方是 execWithIO，命令会被塞进 `busybox sh -c "…"` 的双引号里，
+        // 外层 shell 会先吃一层转义，故这里 `$PATH` 必须写成 `\$PATH`（[DryRunSandbox.pathPrefixQuoted]）。
+        val pathExpr = if (dryRunBin != null) {
+            "$dryRunBin:$pluginBin:\\\$PATH"
+        } else {
+            "$pluginBin:\$PATH"
+        }
+        return "export PATH=$pathExpr; cd \"$pluginPath\"; timeout -k 1 $timeoutSeconds sh -x \"./$scriptName\"; exit 0"
     }
 
     /** 生成「读取日志当前 execve 行数」的命令。 */
@@ -127,6 +154,86 @@ object StraceHelper {
     fun buildKillCmd(pidFile: String, traceLog: String): String =
         "if [ -f \"$pidFile\" ]; then P=\$(cat \"$pidFile\" 2>/dev/null); if [ -n \"\$P\" ]; then kill -9 -- -\$P 2>/dev/null; kill -9 \"\$P\" 2>/dev/null; fi; rm -f \"$pidFile\"; fi; " +
             "pkill -9 -f strace-arm 2>/dev/null; pkill -9 -f strace-arm64 2>/dev/null; exit 0"
+
+    /**
+     * 【v1.5.0 后果优先采集】解析 strace 行首的 pid。
+     *
+     * `-o 文件` 的输出格式是 `12345 openat(AT_FDCWD, ...)`；部分构建会带 `[pid 12345]`
+     * 前缀（终端格式）。两种都支持，解析失败返回 -1。
+     */
+    fun parsePid(line: String): Int {
+        val t = line.trimStart()
+        if (t.startsWith("[pid")) {
+            val end = t.indexOf(']')
+            if (end < 0) return -1
+            return t.substring(4, end).trim().toIntOrNull() ?: -1
+        }
+        var i = 0
+        while (i < t.length && t[i].isDigit()) i++
+        if (i == 0) return -1
+        if (i >= t.length || t[i] != ' ') return -1
+        return t.substring(0, i).toIntOrNull() ?: -1
+    }
+
+    /** 【v1.5.0】一条「系统后果」事件：写入 / 删除 / 重命名 / 挂载。 */
+    data class WriteEvent(val kind: String, val target: String, val extra: String = "")
+
+    /**
+     * 【v1.5.0 后果优先采集】把一行 strace 输出解析成「系统后果事件」。
+     *
+     * 只有真正改变系统状态的文件操作才算后果：
+     *  - `openat` / `open` 且带 `O_WRONLY` / `O_RDWR` → 写入；
+     *  - `unlinkat` / `unlink` → 删除；
+     *  - `renameat` / `rename` → 重命名；
+     *  - `mount` → 挂载。
+     *
+     * 纯只读 open（O_RDONLY）一律不算 —— 这正是「按后果判定」与「按命令名猜」的分界：
+     * 读多少文件都不算核心动作，写一个字节才算。
+     */
+    fun parseWriteEvent(line: String): WriteEvent? {
+        if (line.isBlank()) return null
+        val quoted = parseQuotedArgs(line)
+        if (line.contains("unlinkat(") || line.contains("unlink(")) {
+            return quoted.firstOrNull()?.let { WriteEvent("删除", it) }
+        }
+        if (line.contains("renameat(") || line.contains("rename(")) {
+            return if (quoted.size >= 2) WriteEvent("重命名", quoted[0], quoted[1]) else null
+        }
+        if (line.contains("mount(")) {
+            return if (quoted.size >= 2) WriteEvent("挂载", quoted[0], quoted[1]) else null
+        }
+        if (line.contains("openat(") || line.contains("open(")) {
+            if (!line.contains("O_WRONLY") && !line.contains("O_RDWR")) return null
+            return quoted.firstOrNull()?.let { WriteEvent("写入", it) }
+        }
+        return null
+    }
+
+    /** 抽出一行里的全部双引号参数（strace 的字符串参数一律用双引号包裹并转义）。 */
+    private fun parseQuotedArgs(line: String): List<String> {
+        val out = ArrayList<String>()
+        val sb = StringBuilder()
+        var inStr = false
+        var escaped = false
+        for (ch in line) {
+            when {
+                escaped -> {
+                    sb.append(ch)
+                    escaped = false
+                }
+                inStr && ch == '\\' -> escaped = true
+                ch == '"' -> {
+                    if (inStr) {
+                        out.add(sb.toString())
+                        sb.setLength(0)
+                    }
+                    inStr = !inStr
+                }
+                inStr -> sb.append(ch)
+            }
+        }
+        return out
+    }
 
     /**
      * 解析一行 strace execve 输出，抽取出「真实命令」（argv0 及参数）。
@@ -142,27 +249,32 @@ object StraceHelper {
         if (!line.contains("execve(")) return null
         val arrStart = line.indexOf("[\"")
         if (arrStart < 0) return null
-        val arrEnd = line.indexOf(']', arrStart)
-        if (arrEnd < 0) return null
-        val arrStr = line.substring(arrStart + 1, arrEnd)
+        val arrStr = line.substring(arrStart + 1)
         val args = mutableListOf<String>()
-        var i = 0
         val sb = StringBuilder()
         var inStr = false
         var escaped = false
-        while (i < arrStr.length) {
-            val c = arrStr[i]
+        for (ch in arrStr) {
             when {
-                escaped -> { sb.append(c); escaped = false }
-                c == '\\' -> { escaped = true }
-                c == '"' -> {
+                escaped -> { sb.append(ch); escaped = false }
+                ch == '\\' -> { escaped = true }
+                ch == '"' -> {
                     if (inStr) { args.add(sb.toString()); sb.setLength(0) }
                     inStr = !inStr
                 }
-                inStr -> sb.append(c)
+                // 【v1.4.0 修复】数组结束符只在「引号外」才算结束。
+                // 旧实现直接 indexOf(']')，而 sh -c 的参数里常带 `]`
+                // （`"[ -f /data/x ] && pm disable-user ..."`），会把参数从 `]` 处
+                // 截断，拼出一条现实中不存在的指令。改为按引号状态扫描后即不再误截。
+                !inStr && ch == ']' -> return finishExecveArgs(args)
+                inStr -> sb.append(ch)
             }
-            i++
         }
+        return finishExecveArgs(args)
+    }
+
+    /** 把已解析出的 argv 列表收敛成「一条命令」文本（argv0 取 basename）。 */
+    private fun finishExecveArgs(args: List<String>): String? {
         val meaningful = args.filter { it.isNotBlank() }
         if (meaningful.isEmpty()) return null
         val argv0 = meaningful.first()

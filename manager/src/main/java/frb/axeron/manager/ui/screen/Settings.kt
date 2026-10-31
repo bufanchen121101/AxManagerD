@@ -28,18 +28,26 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.Adb
+import androidx.compose.material.icons.filled.Api
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Coffee
 import androidx.compose.material.icons.filled.Dangerous
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderDelete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -86,14 +94,16 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.rememberLifecycleOwner
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
-import com.ramcosta.composedestinations.generated.destinations.AIMainScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.AppearanceScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.DangerCodeScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.DeveloperScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.DiagnosticScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.OverlayPermissionScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.RuntimeLogScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.SettingsEditorScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.UsageStatsScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.WhitelistScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.adb.util.AdbEnvironment
 import frb.axeron.api.Axeron
@@ -135,6 +145,9 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
     val moduleRepoUrl = "https://1852775966.share.123pan.cn/123pan/J03gvd-3ed8h"
 
     var showDevDialog by remember { mutableStateOf(false) }
+
+    // 【1.4.3】致谢名单展开状态（点击才展开，默认收起）
+    var showThanks by remember { mutableStateOf(false) }
 
     // 锁屏组织名称开关状态（初始值从偏好读取，避免每次重组重置）
     var orgEnabled by remember { mutableStateOf(LockscreenOrganization.isEnabled()) }
@@ -573,16 +586,29 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
             // 需设备所有者；仅改名称文案，纯 API、不需要 root，不影响签名。
 
 
-            // AI 安全引擎入口（已上移至「自动重载」上方，便于快速进入）
+            // 【1.4.3】设置页不再放 AI 相关入口（模型/推理/语音/用量、对话与上下文、AI 记忆）。
+            // 这些配置统一从「模块」页顶部的「AI 设置」进入，避免同一个开关多处出现。
+            // 致谢名单：点击展开 / 收起（默认收起）
             SettingsItem(
-                iconVector = Icons.Filled.Security,
-                label = stringResource(R.string.ai_security_engine),
-                description = stringResource(R.string.ai_security_engine_desc),
-                onClick = {
-                    navigator.navigate(AIMainScreenDestination)
-                }
+                iconVector = Icons.Filled.Coffee,
+                label = "致谢名单",
+                description = if (showThanks) "点击收起" else "点击展开",
+                onClick = { showThanks = !showThanks }
             )
-
+            AnimatedVisibility(visible = showThanks) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = "爱吃白菜的鱼",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    )
+                }
+            }
             // 危险代码库入口：直接查看/编辑内置与自定义危险规则
             SettingsItem(
                 iconVector = Icons.Filled.Dangerous,

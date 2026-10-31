@@ -2,6 +2,7 @@ package frb.axeron.manager.ai
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -45,6 +46,18 @@ class AIAnalysisActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 【v1.4.8 修复 · 卡在「运行中」界面】
+        // 旧实现没有处理返回键：用户按返回关掉分析页后，调用方（运行界面）的
+        // deferred 永远等不到回调 → awaitUserDecision 永久挂起 → isActionRunning
+        // 一直为 true，运行界面返回键被 BackHandler 吞掉、没有关闭按钮，
+        // 表现就是「点运行后没有任何输出、没有返回键、一直卡在运行中」。
+        // 这里把「返回」显式视同「不执行（中止）」，保证调用方一定能返回（安全侧）。
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                AIEngineManager.onUserDecision(false)
+                finish()
+            }
+        })
         val payload = AIEngineManager.lastAnalysis
         setContent {
             AxManagerTheme {
@@ -57,6 +70,20 @@ class AIAnalysisActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    /**
+     * 【v1.4.8】页面以任何方式销毁都兜底为「不执行」。
+     *
+     * [AIEngineManager.onUserDecision] 内部是幂等的（pendingDeferred 已清空时直接忽略），
+     * 因此不会覆盖用户已经点下的「继续执行」。
+     * 排除屏幕旋转等配置变更（此时页面会重建，决策仍在等待用户点击）。
+     */
+    override fun onDestroy() {
+        if (!isChangingConfigurations) {
+            AIEngineManager.onUserDecision(false)
+        }
+        super.onDestroy()
     }
 }
 

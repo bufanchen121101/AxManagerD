@@ -9,6 +9,7 @@ import frb.axeron.manager.AxeronApplication.Companion.axeronApp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -24,6 +25,15 @@ import org.json.JSONObject
 object AIEngineManager : CommandAnalyzer {
 
     private const val TAG = "AIEngineManager"
+
+    /**
+     * 【v1.4.8】分析页决策等待上限（纯兜底）。
+     *
+     * 正常路径由用户点击「继续执行 / 中止」或按返回键回调，远快于此上限；
+     * 只有页面异常（未起、被回收、回调丢失）时才会等到超时，随后按「不执行」处理，
+     * 保证调用方（运行界面）不会永久停在「运行中」。
+     */
+    private const val ANALYSIS_DECISION_TIMEOUT_MS = 600_000L
 
     /** 当前挂起等待用户决策的请求（同一时刻只有一个分析弹窗） */
     @Volatile
@@ -138,13 +148,14 @@ object AIEngineManager : CommandAnalyzer {
         // 仍先做本地规则分析（不拦截/不弹窗），并尝试云端 AI 增强；
         // 但云端失败或未配置时，绝不静默放行 ACTION/INSTALL 强制弹窗场景。
         if (!AIConfigStore.isMicroAnalysisEnabled) {
-            val cloudKey = AIConfigStore.cloudApiKey
-            val useOfficial = AIConfigStore.useOfficialAi
+            // 【1.4.0 用途分流】GENERAL 默认内置 NVIDIA 直连、用户自定义优先，
+            // 「是否可用」统一由 isCloudConfigured(GENERAL) 判断，不再看官方开关。
+            val hasAiRoute = AIChatService.isCloudConfigured()
             val forceDialog = ctx.source == CommandAnalyzer.CommandContext.Source.INSTALL ||
                 ctx.source == CommandAnalyzer.CommandContext.Source.ACTION
 
-            // 有自定义 API Key 且非官方：尝试云端分析
-            if (!cloudKey.isNullOrBlank() && !useOfficial) {
+            // 有可用路由：尝试云端分析
+            if (hasAiRoute) {
                 val cloudResult = analyzeViaCloud(cmd)
                 if (cloudResult != null) {
                     return awaitUserDecision(cmd, ctx, cloudResult)
@@ -228,19 +239,17 @@ object AIEngineManager : CommandAnalyzer {
      */
     suspend fun analyzeViaCloud(cmd: String): AnalyzeResult? = withContext(Dispatchers.IO) {
         try {
-            // 官方默认 AI（英伟达）开启时使用固定配置，否则用自定义配置
-            val useOfficial = AIConfigStore.useOfficialAi
-            val endpoint = if (useOfficial) AIConfigStore.OFFICIAL_AI_ENDPOINT
-                else AIConfigStore.cloudEndpoint.orEmpty()
-            val apiKey = if (useOfficial) AIConfigStore.OFFICIAL_AI_API_KEY
-                else AIConfigStore.cloudApiKey.orEmpty()
-            val model = if (useOfficial) AIConfigStore.OFFICIAL_AI_MODEL
-                else AIConfigStore.cloudModelName.orEmpty()
-            val provider = if (useOfficial) AIConfigStore.OFFICIAL_AI_PROVIDER
-                else AIConfigStore.cloudProvider.orEmpty()
+            // 【1.4.1 路由统一】拦截/危险分析属「其他界面」，与对话页同一口径：
+            // 自定义密钥总开关打开 → 用户配置；否则官方默认 AI；官方不可用 → 内置直连。
+            val route = AIChatService.resolveRoute()
+            val endpoint = route.endpoint
+            val apiKey = route.apiKey
+            val model = route.model
+            val provider = route.provider
             val temperature = AIConfigStore.cloudTemperature
 
             if (endpoint.isBlank() || apiKey.isBlank() || model.isBlank()) {
+                Log.w(TAG, "AI 路由不可用（内置密钥缺失且未配置自定义 API）")
                 return@withContext null
             }
 
@@ -284,7 +293,11 @@ object AIEngineManager : CommandAnalyzer {
 
             val response = shortTimeoutClient.newCall(request).execute()
             response.use { resp ->
-                if (!resp.isSuccessful) return@withContext null
+                if (!resp.isSuccessful) {
+                    // 不再走中转站，无需清日钥缓存；仅记录鉴权/服务端错误便于排查
+                    if (resp.code == 401) Log.w(TAG, "AI 鉴权失败（HTTP 401，Key 不可用）")
+                    return@withContext null
+                }
                 val respBody = resp.body?.string() ?: return@withContext null
                 val parsed = parseCloudResult(respBody)
                     ?: return@withContext null
@@ -402,7 +415,23 @@ object AIEngineManager : CommandAnalyzer {
             return true // 弹窗失败则不拦截，避免卡死
         }
 
-        return deferred.await()
+        // 【v1.4.8 修复 · 卡在「运行中」界面】
+        // 旧实现直接 deferred.await()：只要分析页没回调（用户按返回键关掉页面、
+        // 页面被系统回收、或根本没起来），await 就永久挂起 ——
+        // 调用方的 isActionRunning 永远是 true，运行界面返回键被 BackHandler 吞掉、
+        // 顶部返回/保存被禁用、关闭按钮不渲染，用户看到的就是「没有输出、没有返回键、一直运行中」。
+        //
+        // 兜底：加超时 + finally 清空挂起态；超时按「不执行」处理（安全侧）。
+        val decision = try {
+            withTimeoutOrNull(ANALYSIS_DECISION_TIMEOUT_MS) { deferred.await() }
+        } finally {
+            if (pendingDeferred === deferred) pendingDeferred = null
+        }
+        if (decision == null) {
+            Log.w(TAG, "分析页 ${ANALYSIS_DECISION_TIMEOUT_MS}ms 内未返回决策，按「不执行」处理")
+            return false
+        }
+        return decision
     }
 
     /** 由 AIAnalysisActivity 调用，通知用户已选择 */

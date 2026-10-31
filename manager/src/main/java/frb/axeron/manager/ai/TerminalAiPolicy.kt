@@ -101,7 +101,7 @@ object TerminalAiPolicy {
     /**
      * 终端 AI 的「范围约束声明」，会拼到 system prompt 里。
      *
-     * 这是与通用 ChatScreen 的核心区别：终端助手有明确的职责边界。
+     * 这是与通用对话页的核心区别：终端助手有明确的职责边界。
      */
     fun scopeDeclaration(): String = buildString {
         appendLine("【职责范围（必须严格遵守）】")

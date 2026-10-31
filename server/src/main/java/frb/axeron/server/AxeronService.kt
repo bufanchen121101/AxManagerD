@@ -326,6 +326,24 @@ open class AxeronService :
 
         var cachedDefaultEnv: Environment? = null
 
+        /**
+         * 解析模块脚本的临时目录。
+         *
+         * 【修复】旧实现把 TMPDIR 直接指到 <axeron>/cache，但全项目没有任何地方创建
+         * 这个目录；busybox ash 找不到可写 TMPDIR 时会退到 /data/local
+         * （root:root 0751，shell 不可写），于是模块脚本里每一处 $(...) 都报：
+         *   can't create temporary file /data/local/shXXXXXX.tmp: Permission denied
+         * 这里先确保目录存在，失败则回退到 /data/local/tmp（所有 uid 可写）。
+         */
+        private fun resolveTmpDir(): String {
+            val cacheDir = PathHelper.getWorkingPath(
+                isRoot,
+                AxeronApiConstant.folder.PARENT_CACHE
+            )
+            runCatching { if (!cacheDir.isDirectory) cacheDir.mkdirs() }
+            return if (cacheDir.isDirectory) cacheDir.absolutePath else "/data/local/tmp"
+        }
+
         fun getDefaultEnvironment(): Environment {
             val cached = cachedDefaultEnv
             if (cached != null) return cached
@@ -353,10 +371,7 @@ open class AxeronService :
                 )
                 .put("AXERONLIB", getManagerApplicationInfo()?.nativeLibraryDir)
                 .put("AXERONVER", VERSION_CODE.toString())
-                .put(
-                    "TMPDIR",
-                    PathHelper.getWorkingPath(isRoot,AxeronApiConstant.folder.PARENT_CACHE).absolutePath
-                )
+                .put("TMPDIR", resolveTmpDir())
                 .put("PATH", $$"$AXERONXBIN:$PATH:$AXERONBIN")
                 .build()
             cachedDefaultEnv = built

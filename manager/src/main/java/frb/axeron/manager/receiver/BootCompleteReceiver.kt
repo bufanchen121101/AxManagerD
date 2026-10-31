@@ -45,6 +45,27 @@ class BootCompleteReceiver : BroadcastReceiver() {
                 Log.e(TAG, "Failed to start keep-alive service", e)
             }
         }
+        // 【v1.9.1 修复 · root 开机自启】
+        //
+        // 旧实现把 root 分支放在所有开关之后，导致两类失效：
+        //  ① 用户一旦开过「开机自动启动（无线调试预热）」，上面的
+        //     `getBootStartService()` 分支就会 start + return，root 路径永远执行不到；
+        //  ② 判据只看 lastLaunchMode，而它会被后来的 ADB / DO 激活覆盖，
+        //     root 用户只要用过一次其它激活方式，开机就不再走 root。
+        //
+        // 现在：只要「已缓存的 shell 就是 root」或「上次启动方式记录为 ROOT」，
+        // 就优先走 root 启动并 return，不再被无线调试预热分支吞掉。
+        if (AxeronSettings.getStartOnBoot() &&
+            !context.packageManager.isSafeMode && !Axeron.pingBinder() &&
+            (isRootShellCached() ||
+                AxeronSettings.getLastLaunchMode() == AxeronSettings.LaunchMethod.ROOT)
+        ) {
+            Log.d(TAG, "startRoot (root-first boot start)")
+            val pending = goAsync()
+            startRoot(pending)
+            return
+        }
+
         // 【开机自启动修复】「开机自动启动（无线调试预热）」是**独立开关**
         // （见 AxeronSettings.BOOT_START_SERVICE 的注释），旧实现却把它放在下面的
         // `getStartOnBoot()` 之后 —— 用户一旦关掉「开机自激活」，预热分支就永远
@@ -100,15 +121,77 @@ class BootCompleteReceiver : BroadcastReceiver() {
         Log.d(TAG, "onReceive: ${intent.action}")
     }
 
-    private fun startRoot(pending: PendingResult) {
-        if (!Shell.getShell().isRoot) {
-            Shell.getCachedShell()?.close()
-            safeFinish(pending)
-            return
-        }
+    /**
+     * 【v1.9.1】轻量 root 判据：只读 libsu 的**已缓存** shell，不触发 su 握手。
+     *
+     * 广播接收器在主线程，不能在这里调用 [Shell.getShell]（会同步等待 su，
+     * 开机早期可能数秒甚至超时）。缓存为空时返回 false，由
+     * `lastLaunchMode == ROOT` 作为第二判据兜底。
+     */
+    private fun isRootShellCached(): Boolean = runCatching {
+        Shell.getCachedShell()?.isRoot == true
+    }.getOrDefault(false)
 
-        Shell.cmd(Starter.internalCommand).exec()
-        safeFinish(pending)
+    /**
+     * 【v1.9.1 重写】以 root 身份拉起 Axeron 服务（开机自启动）。
+     *
+     * 旧实现的两个致命问题：
+     *  - 直接在主线程调用 `Shell.getShell()`：开机广播期间 su 守护可能尚未就绪，
+     *    同步等待会卡住 onReceive（ANR 风险），且**一次失败就永久放弃**；
+     *  - 成功后不写 lastLaunchMode，导致下一次开机若走别的分支就丢失 root 身份。
+     *
+     * 现在：放到独立后台线程（goAsync 的 pending 允许异步 finish），最多 3 轮重试，
+     * 每轮失败都关闭缓存 shell 以重建；libsu 全失败后再用 `su -c` 直接兜底一次。
+     */
+    private fun startRoot(pending: PendingResult) {
+        Thread {
+            var ok = false
+            for (attempt in 1..3) {
+                ok = runCatching {
+                    val shell = Shell.getShell()
+                    if (!shell.isRoot) {
+                        Shell.getCachedShell()?.close()
+                        return@runCatching false
+                    }
+                    val result = Shell.cmd(Starter.internalCommand).exec()
+                    if (!result.isSuccess) {
+                        Shell.getCachedShell()?.close()
+                    }
+                    result.isSuccess
+                }.getOrDefault(false)
+                Log.d(TAG, "startRoot attempt $attempt -> $ok")
+                if (ok) break
+                if (attempt < 3) Thread.sleep(2000)
+            }
+
+            // 兜底：libsu 未初始化 / su 管理器响应慢时，直接走 su 二进制。
+            // 注意 `su -c` 后面必须是**一个**参数（整条命令），ProcessBuilder 的多参
+            // 形式正好满足；退出码 0 且进程正常结束即视为成功。
+            if (!ok) {
+                ok = runCatching {
+                    val p = ProcessBuilder("su", "-c", Starter.internalCommand)
+                        .redirectErrorStream(true)
+                        .start()
+                    val finished = p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
+                    if (!finished) {
+                        p.destroyForcibly()
+                        false
+                    } else {
+                        p.exitValue() == 0
+                    }
+                }.getOrDefault(false)
+                Log.d(TAG, "startRoot su -c fallback -> $ok")
+            }
+
+            if (ok) {
+                runCatching {
+                    AxeronSettings.setLastLaunchMode(AxeronSettings.LaunchMethod.ROOT)
+                }.onFailure { Log.w(TAG, "setLastLaunchMode(ROOT) failed", it) }
+            } else {
+                Log.w(TAG, "startRoot failed after retries")
+            }
+            safeFinish(pending)
+        }.start()
     }
 
     /**

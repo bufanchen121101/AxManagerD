@@ -298,9 +298,11 @@ object RuntimeModuleRegistry {
 
     /**
      * 当前管理器的版本代号。模块的 minManagerCode 不得高于此值。
-     * 与 AxeronApiConstant 的版本策略保持一致，v1.3.0 提升为 9。
+     * 必须与 `api/manifest.gradle.kts` 的 `apiVersionCode` 同步：
+     * 安装器按同一个编号校验（当前 12）。此前这里停留在 9，
+     * 导致按文档写 `minManagerCode=12` 的模块被误判「要求管理器 >= 12，当前 9」。
      */
-    const val MANAGER_CODE_CURRENT = 9
+    const val MANAGER_CODE_CURRENT = 12
 
     /**
      * 运行时模块的独立安装目录（相对 axeron/）：
@@ -317,13 +319,21 @@ object RuntimeModuleRegistry {
     fun resolvePluginDir(plugin: PluginInfo): File? {
         val dirId = plugin.dirId.ifBlank { plugin.prop.id }
         if (dirId.isBlank()) return null
-        val root = Axeron.getAxeronInfo().isRoot()
-        val axeronRoot = PathHelper.getWorkingPath(root, AxeronApiConstant.folder.PARENT)
-        val runtimeDir = File(File(axeronRoot, RUNTIME_PLUGIN_FOLDER), dirId)
-        if (RuntimeModuleDetector.dirExists(runtimeDir.absolutePath)) return runtimeDir
-        val legacyParent = PathHelper.getWorkingPath(root, AxeronApiConstant.folder.PARENT_PLUGIN)
-        val legacyDir = File(legacyParent, dirId)
-        return if (RuntimeModuleDetector.dirExists(legacyDir.absolutePath)) legacyDir else null
+        // 【修复】原来只按 isRoot() 推导一次根目录。root 设备上这里会得到
+        // /data/adb/axeron，而模块实际装在 shell 数据目录（install_plugin 写死
+        // /data/user_de/0/com.android.shell/axeron），于是「来源 B」永远找不到目录。
+        // 现在两套根目录都试一遍，命中即返回。
+        val root = runCatching { Axeron.getAxeronInfo().isRoot() }.getOrDefault(false)
+        val roots = LinkedHashSet<File>()
+        runCatching { roots.add(PathHelper.getWorkingPath(root, AxeronApiConstant.folder.PARENT)) }
+        runCatching { roots.add(PathHelper.getWorkingPath(false, AxeronApiConstant.folder.PARENT)) }
+        for (axeronRoot in roots) {
+            val runtimeDir = File(File(axeronRoot, RUNTIME_PLUGIN_FOLDER), dirId)
+            if (RuntimeModuleDetector.dirExists(runtimeDir.absolutePath)) return runtimeDir
+            val legacyDir = File(File(axeronRoot, AxeronApiConstant.folder.PLUGIN), dirId)
+            if (RuntimeModuleDetector.dirExists(legacyDir.absolutePath)) return legacyDir
+        }
+        return null
     }
 
     /**

@@ -37,7 +37,6 @@ include(":server")
 include(":adb")
 include(":server:stub")
 include(":reignite")
-include(":lspatch-core")
 include(":vector-ui")
 
 var root = "api"

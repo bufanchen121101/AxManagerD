@@ -130,8 +130,19 @@ fun EnablePluginScreen(
         }
     }
 
+    // 【v1.4.0 修复⑥】分析 / 抓取 / 等待决策期间按返回 = 中止本次启用并退出界面。
+    //
+    // 旧实现是空实现（`BackHandler(enabled = isRunning) { /* 分析中禁止返回 */ }`），
+    // 会**吞掉返回键**。用户在「抓取指令完成后直接返回、没有点底部按钮」时，返回被吞、
+    // isRunning 恒为 true，界面就一直停在「正在分析模块」——看起来永久卡死，只能杀掉
+    // 进程重进。
+    //
+    // 现在：先把挂起中的决策等待按「中止」唤醒（保证绝不会顺带把模块启用），
+    // 再结束运行态并返回上一页；LaunchedEffect 协程会随组合销毁自动取消，抓取随之停止。
     BackHandler(enabled = isRunning) {
-        // 分析中禁止返回
+        decisionDeferred?.complete(false)
+        isRunning = false
+        navigator.popBackStack()
     }
 
     val scope = rememberCoroutineScope()
@@ -222,6 +233,9 @@ fun EnablePluginScreen(
 
             // strace 拦截各启用脚本的真实指令
             var combinedBlock = ""
+            // 【v1.4.0 修复④】界面展示专用：只含核心指令流（不含环境探测聚合块），
+            // 避免界面正文被「cat/grep/getprop 探测样本」冲成"大量无效杂乱"。
+            var displayBlockSum = ""
             var totalCount = 0
             for (script in existingScripts) {
                 dbg(">> 开始 strace 拦截 script=$script")
@@ -236,6 +250,9 @@ fun EnablePluginScreen(
                 if (trace.count > 0) {
                     if (combinedBlock.isNotEmpty()) combinedBlock += "\n"
                     combinedBlock += trace.promptBlock
+                    // 展示区块：核心指令流（与落盘内容一致）
+                    if (displayBlockSum.isNotEmpty()) displayBlockSum += "\n"
+                    displayBlockSum += trace.displayBlock.ifBlank { trace.promptBlock }
                     totalCount += trace.count
                 }
             }
@@ -275,14 +292,19 @@ fun EnablePluginScreen(
             }
 
             // AI 分析（Source.ACTION 强制弹窗）；在界面内直接弹决策框，绕开跨 Activity 启动
-            if (analyzer != null) {
+            // 【v1.9.1】拦截总开关关闭（默认）时：不做「规则分析 + 决策弹窗」这一步，
+// 但上面的抓取与落盘照旧（PluginScriptTracer 内部已把结果写入卸载恢复名单），
+// 从而做到「关了也抓、只是不拦截」。
+            if (analyzer != null && AIConfigStore.aiEngineEnabled) {
                 stage = "正在生成分析报告…"
                 dbg("stage=生成分析报告，analyzeCmd.length=${analyzeCmd.length}，totalCount=$totalCount")
 
                 // 把 strace 真实抓到的执行指令流展示到界面主体（让用户看清"启用此模块会执行哪些指令"）
                 // 优先展示真实执行的指令清单；若没抓到则展示脚本明文。
                 val cmdDisplay = if (totalCount > 0) {
-                    "【检测到该模块启用时真实执行的指令（共 $totalCount 条）】\n\n$combinedBlock"
+                    // v1.4.0 修复④：界面正文只展示「核心指令流」（displayBlockSum），
+                    // 不含环境探测聚合块；喂 AI 的 analyzeCmd 仍用完整 combinedBlock。
+                    "【检测到该模块启用时真实执行的指令（共 $totalCount 条）】\n\n$displayBlockSum"
                 } else {
                     val catTxt = buildString {
                         for (script in existingScripts) {
@@ -310,7 +332,9 @@ fun EnablePluginScreen(
                     decisionCmd = analyzeCmd
                     decisionPluginName = plugin.prop.name
                     decisionScriptText = scriptPlainText
-                    decisionTraceText = combinedBlock
+                    // v1.4.0 修复④：决策弹窗展示「核心指令流」（与落盘 / 恢复卸载界面内容一致），
+                    // 不再把环境探测聚合块混进来。
+                    decisionTraceText = displayBlockSum
                     decisionDeferred = deferred
                     val result = deferred.await()
                     decisionResult = null

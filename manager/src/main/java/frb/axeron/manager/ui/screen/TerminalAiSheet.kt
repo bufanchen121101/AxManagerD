@@ -59,8 +59,8 @@ import kotlinx.coroutines.launch
  *    越界提问在本地就被 [TerminalAiPolicy] 拦截，不消耗免费额度；
  * 2. **带终端上下文**：自动把当前终端最近的输出/命令注入提问，
  *    用户不用手动复制粘贴报错内容；
- * 3. **免费 API 优先**：复用 [AIConfigStore.useOfficialAi] 开关，
- *    未配置自定义 Key 时自动走官方免费服务，且不阻塞用户。
+ * 3. **内置 AI 优先**：未配置自定义 Key 时自动走内置 NVIDIA 模型
+ *    （见 [AIConfigStore.generalRoute]），且不阻塞用户。
  *
  * @param onInsertCommand 把 AI 给出的命令回填到终端输入框（可空）
  * @param terminalContext 当前终端上下文（最近命令 + 输出摘要），用于自动附带
@@ -80,10 +80,10 @@ fun TerminalAiSheet(
     var sending by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    // 免费 API 状态提示
-    val usingOfficial = AIConfigStore.useOfficialAi
-    val cloudReady = AIChatService.isCloudConfigured()
-    val available = usingOfficial || cloudReady
+    // 【1.4.0 分流】终端助手属「通用 AI」用途：用户自定义云端 API 优先，
+    // 否则直连内置 NVIDIA 模型（不走中转站）。
+    val usingCustom = AIConfigStore.useCustomKey && AIConfigStore.hasCustomCloudConfig
+    val available = AIChatService.isCloudConfigured()
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
@@ -145,7 +145,7 @@ fun TerminalAiSheet(
                 val reason = AIChatService.lastError ?: "未知原因"
                 messages[idx] = TerminalAiMsg(
                     false,
-                    "调用失败：$reason\n\n若使用官方免费 AI，可稍等片刻再试（免费服务可能限流）。",
+                    "调用失败：$reason\n\n若使用内置 AI，可稍等片刻再试（免费服务可能限流）。",
                 )
             }
             sending = false
@@ -186,8 +186,8 @@ fun TerminalAiSheet(
 
             Text(
                 text = when {
-                    usingOfficial -> "当前使用：官方免费 AI（可能限流）"
-                    cloudReady -> "当前使用：自定义云端 API"
+                    usingCustom -> "当前使用：自定义云端 API"
+                    available -> "当前使用：内置 AI（${AIConfigStore.modelDisplayName(AIConfigStore.generalModel)}）"
                     else -> "未配置 AI 服务，请到「设置 → AI 安全引擎」开启"
                 },
                 style = MaterialTheme.typography.labelSmall,

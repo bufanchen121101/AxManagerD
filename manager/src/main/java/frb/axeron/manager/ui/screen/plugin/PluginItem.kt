@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -78,7 +79,9 @@ import frb.axeron.manager.ui.viewmodel.SettingsViewModel
 import frb.axeron.server.PluginInfo
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.PathHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -368,13 +371,38 @@ fun PluginItem(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            Text(
-                                text = plugin.prop.name,
-                                fontSize = MaterialTheme.typography.titleMedium.fontSize,
-                                fontWeight = FontWeight.SemiBold,
-                                lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
-                                fontFamily = MaterialTheme.typography.titleMedium.fontFamily,
-                            )
+                            if (plugin.prop.icon.isBlank()) {
+                                // 未声明 icon 的模块完全沿用原标题布局。
+                                Text(
+                                    text = plugin.prop.name,
+                                    fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                                    fontWeight = FontWeight.SemiBold,
+                                    lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
+                                    fontFamily = MaterialTheme.typography.titleMedium.fontFamily,
+                                )
+                            } else {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    DeclaredPluginIcon(
+                                        plugin = plugin,
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(MaterialTheme.shapes.small),
+                                    )
+                                    Text(
+                                        text = plugin.prop.name,
+                                        modifier = Modifier.weight(1f),
+                                        fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                                        fontWeight = FontWeight.SemiBold,
+                                        lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
+                                        fontFamily = MaterialTheme.typography.titleMedium.fontFamily,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
 
                             Text(
                                 text = "$pluginVersion: ${plugin.prop.version}",
@@ -616,4 +644,68 @@ fun PluginItem(
             }
         }
     }
+}
+
+/** module.prop 的可选 icon：http(s) 直连，否则按模块目录内相对路径读取。 */
+@Composable
+private fun DeclaredPluginIcon(
+    plugin: PluginInfo,
+    modifier: Modifier = Modifier,
+) {
+    val icon = plugin.prop.icon.trim()
+    if (icon.isEmpty()) return
+    val context = LocalContext.current
+    val isRemote = icon.startsWith("https://", ignoreCase = true) ||
+        icon.startsWith("http://", ignoreCase = true)
+    if (isRemote) {
+        AsyncImage(
+            model = icon,
+            contentDescription = plugin.prop.name,
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+        )
+        return
+    }
+
+    val iconData by produceState<ByteArray?>(
+        initialValue = null,
+        key1 = plugin.prop.id,
+        key2 = icon,
+    ) {
+        value = withContext(Dispatchers.IO) {
+            if (!isSafePluginIconPath(icon)) return@withContext null
+            try {
+                val moduleDir = File(
+                    PathHelper.getWorkingPath(
+                        Axeron.getAxeronInfo().isRoot(),
+                        AxeronApiConstant.folder.PARENT_PLUGIN,
+                    ),
+                    plugin.prop.id,
+                )
+                val iconFile = File(moduleDir, icon)
+                Axeron.newFileService()
+                    .setFileInputStream(iconFile.absolutePath)
+                    ?.use { it.readBytes() }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+    val bytes = iconData
+    if (bytes != null) {
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(bytes)
+                .build(),
+            contentDescription = plugin.prop.name,
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+        )
+    }
+}
+
+/** 图标只能是模块目录内的普通相对路径，拒绝绝对路径与目录穿越。 */
+private fun isSafePluginIconPath(path: String): Boolean {
+    if (path.isBlank() || path.startsWith('/') || path.contains('\\')) return false
+    return path.split('/').none { it.isEmpty() || it == "." || it == ".." }
 }

@@ -25,8 +25,17 @@ object PluginScriptTracer {
     private const val EXEC_TIMEOUT_MS = 8000L
 
     data class TraceResult(
+        /** 喂 AI 用的完整区块（核心指令 + 环境探测聚合，供分析上下文） */
         val promptBlock: String,
         val count: Int,
+        /**
+         * 【v1.4.0 修复④】界面展示用的区块：只含核心指令流。
+         *
+         * 与 [promptBlock] 同源，但不含「环境探测（同类已聚合）」区块 ——
+         * 后者逐行列出大量 cat/grep/getprop 探测样本，直接把界面正文冲成"杂乱无效"。
+         * 界面展示一律用本字段，AI 分析仍用 [promptBlock]（信息不丢）。
+         */
+        val displayBlock: String = "",
     )
 
     /** 落盘调试日志（vivo ratelimit 会丢弃 Log.i，写文件不受限） */
@@ -97,6 +106,13 @@ object PluginScriptTracer {
                 return@withContext TraceResult("", 0)
             }
 
+            // 【v1.4.0 修复②】抓取阶段走「预演沙箱」：写调用（pm disable / settings put / am force-stop /
+            // axeron-dpm suspend …）只被记录、不落到系统上，解决"选了拦截抓取、模块其实已经真跑完一遍"。
+            // 只读调用仍放行真实命令，保证模块分支判断不受影响（抓取完整性不变）。
+            // 沙箱准备失败（无 shell 权限等）时 dryRunBin = null，退回旧行为——绝不因沙箱失败而抓不到。
+            val dryRunBin = if (DryRunSandbox.prepare()) DryRunSandbox.DIR else null
+            debug("预演沙箱 dryRunBin=$dryRunBin")
+
             // 【同步 timeout 方案】前台跑 strace，timeout 到点强制退出，绝不卡死。
             // 常驻 service.sh（while true）抓"启动后前几秒核心指令"即可。
             // 抓取时长改为「AI 设置界面可配置」（AIConfigStore.traceTimeoutSeconds），默认 8 秒。
@@ -105,7 +121,8 @@ object PluginScriptTracer {
             val traceLog = "/data/local/tmp/ax_trace_${pluginDirId}.log"
             val timeoutSec = AIConfigStore.traceTimeoutSeconds
             val straceCmd = StraceHelper.buildTraceCmdSync(
-                stracePath, pluginPath, traceLog, scriptName, timeoutSeconds = timeoutSec
+                stracePath, pluginPath, traceLog, scriptName, timeoutSeconds = timeoutSec,
+                dryRunBin = dryRunBin
             )
             Log.i(TAG, "strace 同步启动(timeout ${timeoutSec}s): $straceCmd")
             debug("strace 同步启动(timeout ${timeoutSec}s): $straceCmd")
@@ -128,12 +145,24 @@ object PluginScriptTracer {
             }.getOrDefault("")
             debug("cat 日志完成，长度=${traceText.length}")
             traceText.split('\n').forEach { line ->
-                RuntimeCommandTracer.addStraceLine(line)
+                RuntimeCommandTracer.addStraceEvent(line)
             }
             runCatching {
                 execSafe("rm -f \"$traceLog\" 2>/dev/null; pkill -9 -f strace-arm 2>/dev/null; pkill -9 -f strace-arm64 2>/dev/null")
             }
             debug("清理完成，strace 通道 count=${RuntimeCommandTracer.snapshot().size}")
+
+            // 【v1.5.0 后果优先】读取预演沙箱拦下的写调用日志。
+            // 这是「与拼写无关」的权威写意图清单：桩脚本按 PATH 命中，
+            // 模块写 `busybox pm disable …` / `$BIN disable …` / `pm disable-user …`
+            // 都会落到同一份日志里，不再依赖任何工具名名单。
+            if (dryRunBin != null) {
+                val sandboxLog = runCatching {
+                    execSafe("cat \"${DryRunSandbox.LOG}\" 2>/dev/null")
+                }.getOrDefault("")
+                RuntimeCommandTracer.addSandboxLog(sandboxLog)
+                debug("沙箱写意图解析完成，累计 count=${RuntimeCommandTracer.snapshot().size}")
+            }
 
             // ============ 补充：sh -x（xtrace）运行时拦截 ============
             // strace 只抓 execve「进程启动链」。对加密/动态解密脚本（base64/openssl/eval/shc
@@ -163,6 +192,9 @@ object PluginScriptTracer {
                         pluginBin = "$pluginPath/system/bin",
                         scriptName = scriptName,
                         timeoutSeconds = timeoutSec,
+                        // 【v1.4.0 修复②】sh -x 段同样走预演沙箱：它是"真的再跑一遍脚本"，
+                        // 不挂沙箱的话写调用照样会落地。
+                        dryRunBin = dryRunBin,
                     )
                     AxeronPluginService.execWithIO(
                         cmd = xtraceCmd,
@@ -170,8 +202,15 @@ object PluginScriptTracer {
                         onStderr = { chunk ->
                             if (RuntimeCommandTracer.enabled) {
                                 chunk.split('\n').forEach { line ->
+                                    // 【v1.5.0 后果优先】先把原始行交给采集器（拼回 mksh 拆行的重定向、
+                                    // 从语法结构上认出写入目标），再走原有 addTrace 保留旧通道数据。
+                                    RuntimeCommandTracer.noteXtrace(line)
                                     if (RuntimeCommandTracer.isTraceLine(line)) {
                                         RuntimeCommandTracer.addTrace(line)
+                                    } else {
+                                        // 【v1.4.8】非 trace 行会打断「重定向 → 命令」的相邻关系
+                                        // （真机 mksh 把重定向单独打成一行），必须清空未匹配的片段
+                                        RuntimeCommandTracer.onInterleavedStderrLine(line)
                                     }
                                 }
                             }
@@ -200,7 +239,12 @@ object PluginScriptTracer {
                     debug("persistLog 失败: ${t.message}")
                 }
             }
-            return@withContext TraceResult(block, count)
+            return@withContext TraceResult(
+                promptBlock = block,
+                count = count,
+                // 【v1.4.0 修复④】界面展示用区块（仅核心指令）同步产出。
+                displayBlock = RuntimeCommandTracer.toDisplayBlock(),
+            )
         } catch (t: Throwable) {
             Log.e(TAG, "strace 抓取失败", t)
             debug("tracePluginScript 异常: ${t.message}")

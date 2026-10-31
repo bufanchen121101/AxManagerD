@@ -112,6 +112,8 @@ open class AxeronApplication : Engine() {
 
 
         okhttpClient =
+            // [脱敏] 原实现这里对该域名做了证书固定(SPKI)，会暴露真实服务域名与证书指纹。
+            // 公开源码中整段移除；需要时请自行加回你自己的域名与 pin。
             OkHttpClient.Builder().cache(Cache(File(cacheDir, "okhttp"), 10 * 1024 * 1024))
                 // AI 推理（尤其 reasoning 模型）响应很慢，放宽读写超时，避免 10s 默认值截断请求
                 .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -183,5 +185,32 @@ open class AxeronApplication : Engine() {
                 frb.axeron.manager.util.OverlayLog.e("启动自检异常", it)
             }
         }.start()
+
+        // 【v1.4.2 修复 · 「DO 显示已授权但没有任何功能」的启动兜底】
+        //
+        // 背景：非 ADB 直连激活时，setActiveAdmin 先于 setDeviceOwner 执行，
+        // 系统那次 onEnabled 回调里 isDeviceOwnerApp 还是 false → grantPermissions
+        // 全部落空；DO 设定后系统只发 ACTION_DEVICE_OWNER_CHANGED（隐式广播），
+        // manifest receiver 收不到 ⇒ 后置初始化不会自己补上。
+        //
+        // 这里在每次冷启动时做一次「已经是 Owner 就补 sync」：
+        //   · 对已经激活但权限没授上的用户，升级后重启 App 即可自愈，无需重新激活；
+        //   · sync 内部会实时查询 DPM（queryIsOwner），不会因为静态缓存过期而误判；
+        //   · grantPermissions 是幂等的（重复授予同一状态无副作用）。
+        // 放到后台线程，避免 binder 调用拖慢冷启动。
+        runCatching {
+            val app = this
+            Thread {
+                try {
+                    if (frb.axeron.manager.owner.DeviceOwnerState.queryIsOwner(app)) {
+                        frb.axeron.manager.owner.DeviceOwnerState.sync(app)
+                    }
+                } catch (t: Throwable) {
+                    android.util.Log.w("AxManager", "onCreate post-activation sync failed", t)
+                }
+            }.start()
+        }.onFailure {
+            android.util.Log.w("AxManager", "onCreate post-activation sync spawn failed", it)
+        }
     }
 }

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
+import frb.axeron.manager.ui.component.LocalBottomBarInset
 import frb.axeron.manager.ui.viewmodel.ActivateViewModel
 import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
 
@@ -162,7 +164,15 @@ fun ElevateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGl
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                // 【v1.4.2 修复 · 「提权成功后不出现返回键」】
+                // 底栏是**浮在内容之上**的覆盖层（见 LocalBottomBarInset 注释）。
+                // 本页 Column 直接 fillMaxSize，底部没有给底栏留空间，
+                // 于是「提权全部成功」时右下角那个圆形返回按钮正好落在底栏区域里，
+                // 视觉上被底栏盖住、触摸也被底栏吃掉 —— 用户看到的就是
+                // 「成功了但一直停在这页，没有返回键可按」。
+                // 修法：整列底部补出底栏占用高度，结果按钮随之上移到可点区域。
+                .padding(bottom = LocalBottomBarInset.current),
         ) {
             // ── ASCII 大字 Logo ──
             //
@@ -295,6 +305,18 @@ fun ElevateScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelGl
             // ── 右下角结果图标 ──
             if (vm.elevatePhase == 2 || vm.elevatePhase == 3) {
                 Spacer(Modifier.height(12.dp))
+                // 【v1.4.2 新增】成功时给一个**整行可见的「完成」按钮**。
+                // 旧版只有右下角一个 52dp 圆形图标，一旦被悬浮底栏压住，
+                // 用户就完全没有可点的出口（正是「成功但不出现返回键」的观感）。
+                if (vm.elevatePhase == 2) {
+                    Button(
+                        onClick = { navigator.popBackStack() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("完成，返回激活页")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,

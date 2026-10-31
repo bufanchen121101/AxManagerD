@@ -130,9 +130,24 @@ class RuntimeModuleService : Service() {
             context.startService(intent)
         }
 
+        /**
+         * 服务未运行时暂存的开关指令。
+         *
+         * 旧实现 `instance?.toggleModule(...)` 在服务没起来时是**静默无操作**：
+         * 用户点开关看不到任何变化（甚至开关回弹），像「模块坏了」。
+         * 现在先记下来，服务启动/重扫完成后统一补执行。
+         */
+        private val pendingToggles = ConcurrentHashMap<String, Boolean>()
+
         /** 由 UI 触发的「启用/停用某模块」。 */
-        fun requestToggle(moduleId: String, enable: Boolean) {
-            instance?.toggleModule(moduleId, enable)
+        fun requestToggle(moduleId: String, enable: Boolean, context: Context? = null) {
+            val inst = instance
+            if (inst == null) {
+                pendingToggles[moduleId] = enable
+                if (context != null) start(context)
+                return
+            }
+            inst.toggleModule(moduleId, enable)
         }
 
         /** 由 UI 触发的「重试」。 */
@@ -275,6 +290,17 @@ class RuntimeModuleService : Service() {
             val script = buildString {
                 append("touch '").append(runtimeDir.absolutePath).append("/remove' 2>/dev/null; ")
                 append("touch '").append(legacyDir.absolutePath).append("/remove' 2>/dev/null; ")
+                // 【修复】模块 id（module.prop 的 id）与目录名（dirId）可能不一致
+                // （重名自动加后缀、旧装法等）。只按 id 拼路径会写到不存在的目录，
+                // remove 标记落空 -> 卸载后卡片复活。这里再按 module.prop 的 id 反查一遍。
+                for (basePath in listOf(runtimeDir.parentFile?.absolutePath, legacyDir.parentFile?.absolutePath)) {
+                    if (basePath.isNullOrBlank()) continue
+                    append("for d in '").append(basePath).append("'/*; do ")
+                    append("[ -f \"\$d/remove\" ] && continue; ")
+                    append("id=\$(grep -m1 '^id=' \"\$d/module.prop\" 2>/dev/null | cut -d= -f2 | tr -d '\\r'); ")
+                    append("[ \"\$id\" = '").append(moduleId).append("' ] && touch \"\$d/remove\"; ")
+                    append("done 2>/dev/null; ")
+                }
                 append("mkdir -p '").append(updDir.absolutePath).append("/").append(moduleId).append("' 2>/dev/null; ")
                 append("touch '").append(updDir.absolutePath).append("/").append(moduleId)
                     .append("/update_remove' 2>/dev/null; ")
@@ -338,6 +364,14 @@ class RuntimeModuleService : Service() {
                 startAll()
             }
             ACTION_RESCAN -> {
+                startAll()
+            }
+            null -> {
+                // 【修复】Service 被系统杀死后由 START_STICKY 重建时 intent 为 null，
+                // 旧实现什么都不做 → watchdog/mainLoop 不启动，模块进程死掉后无人拉起。
+                // 这里按「恢复」处理：重新扫描并按 disable 标记决定是否启动。
+                RuntimeDiagnostics.record("SVC", "Service 重建（intent=null），恢复运行态")
+                startForegroundCompat(statuses.count { it.state == RuntimeModuleState.RUNNING })
                 startAll()
             }
         }
@@ -410,6 +444,15 @@ class RuntimeModuleService : Service() {
                 launchModule(entry)
                 delay(200) // 串行，错开启动
             }
+            // 服务刚被拉起时用户点过的开关指令，这里补执行。
+            if (pendingToggles.isNotEmpty()) {
+                val pending = pendingToggles.toMap()
+                pendingToggles.clear()
+                for ((id, on) in pending) {
+                    RuntimeDiagnostics.record("SVC", "补执行开关指令 $id -> $on")
+                    toggleModule(id, on)
+                }
+            }
             updateNotification()
             // 扫描循环结束，置空以便后续 rescan 能再次进入。
             mainLoop = null
@@ -450,6 +493,14 @@ class RuntimeModuleService : Service() {
 
     /** 缓存的最近一次扫描结果，用于停止时找目录。 */
     private val lastEntries = ConcurrentHashMap<String, RuntimeModuleEntry>()
+
+    /**
+     * 每个模块「本次启动」的时间戳。
+     *
+     * 用于判断是否已稳定运行：旧实现从不清空 retryCount，
+     * 一个长期运行的模块只要历史累计死够 8 次就会永久熔断（必须手动重试）。
+     */
+    private val startAt = ConcurrentHashMap<String, Long>()
 
     private suspend fun loadEntries(): List<RuntimeModuleEntry> {
         // 每轮扫描前清空路径探测缓存，保证结果反映最新落盘状态。
@@ -543,6 +594,28 @@ class RuntimeModuleService : Service() {
         scope.launch {
             updateState(entry.id) { it.copy(state = RuntimeModuleState.STARTING) }
 
+            // 【修复】先探测模块目录里是否已有存活的 entry.sh。
+            // App 进程重启后 pidTable 会清空，但 setsid 拉起的模块进程仍在运行；
+            // 旧实现会再跑一遍 onactivate.sh + startDaemon，形成第二个实例。
+            val reusedPid = if (entry.manifest?.needsEntryScript == true) {
+                manager.detectRunningEntry(entry.dir)
+            } else {
+                -1
+            }
+            if (reusedPid > 0) {
+                RuntimeDiagnostics.record("LAUNCH", "复用已运行实例(${entry.id}) pid=$reusedPid")
+                pidTable[entry.id] = reusedPid
+                retryCount[entry.id] = 0
+                startAt[entry.id] = System.currentTimeMillis()
+                updateState(entry.id) {
+                    it.copy(state = RuntimeModuleState.RUNNING, pid = reusedPid, restartCount = 0)
+                }
+                startWatchdog(entry)
+                startSensors(entry)
+                updateNotification()
+                return@launch
+            }
+
             // 1. onactivate.sh（10s 超时）
             val act = manager.runScript(
                 dir = entry.dir,
@@ -565,20 +638,36 @@ class RuntimeModuleService : Service() {
                 }
                 pidTable[entry.id] = pid
                 retryCount[entry.id] = 0
+                startAt[entry.id] = System.currentTimeMillis()
                 updateState(entry.id) { it.copy(state = RuntimeModuleState.RUNNING, pid = pid, restartCount = 0) }
                 startWatchdog(entry)
             } else {
-                // ONESHOT：跑完即结束
-                val one = manager.runScript(
-                    dir = entry.dir,
-                    script = "entry.sh",
-                    timeoutMs = RuntimeProcessManager.TIMEOUT_ON_ACTIVATE_MS,
-                )
-                updateState(entry.id) {
-                    it.copy(
-                        state = if (one.isSuccess()) RuntimeModuleState.IDLE else RuntimeModuleState.FAILED,
-                        lastError = if (one.isSuccess()) "" else one.stderr,
+                // ONESHOT：跑完即结束。
+                //
+                // 【修复】旧实现无条件执行 entry.sh，但校验规则里 ONESHOT 并不要求
+                // entry.sh（只有 DAEMON/HYBRID 才要求），于是「完全合规的 ONESHOT 模块」
+                // 会在这里拿到 code=-1（脚本不存在）→ 直接 FAILED，100% 无法使用。
+                // 现在按优先级挑真正存在的入口：action.sh → entry.sh → 无脚本（无需常驻）。
+                val script = when {
+                    RuntimeModuleDetector.fileExists(entry.dir, "action.sh") -> "action.sh"
+                    RuntimeModuleDetector.fileExists(entry.dir, "entry.sh") -> "entry.sh"
+                    else -> ""
+                }
+                if (script.isEmpty()) {
+                    RuntimeDiagnostics.record("LAUNCH", "ONESHOT(${entry.id}) 无 action.sh/entry.sh，只执行 onactivate.sh")
+                    updateState(entry.id) { it.copy(state = RuntimeModuleState.IDLE, lastError = "") }
+                } else {
+                    val one = manager.runScript(
+                        dir = entry.dir,
+                        script = script,
+                        timeoutMs = RuntimeProcessManager.TIMEOUT_ON_ACTIVATE_MS,
                     )
+                    updateState(entry.id) {
+                        it.copy(
+                            state = if (one.isSuccess()) RuntimeModuleState.IDLE else RuntimeModuleState.FAILED,
+                            lastError = if (one.isSuccess()) "" else "执行 $script 失败：${one.stderr.ifBlank { "exit=${one.code}" }}",
+                        )
+                    }
                 }
             }
 
@@ -604,6 +693,15 @@ class RuntimeModuleService : Service() {
             while (isActive) {
                 delay(intervalMs)
                 val pid = pidTable[entry.id] ?: continue
+                // 稳定运行超过 60s -> 认定这次启动成功，清空退避计数。
+                // （只在这里清，不能在「重启成功后」立刻清，否则反复崩溃会无限重启、永不熔断。）
+                val startedAt = startAt[entry.id] ?: 0L
+                if (startedAt > 0L && System.currentTimeMillis() - startedAt > 60_000L) {
+                    if ((retryCount[entry.id] ?: 0) != 0) {
+                        retryCount[entry.id] = 0
+                        RuntimeDiagnostics.record("WATCHDOG", "${entry.id} 已稳定运行，退避计数清零")
+                    }
+                }
 
                 // 【防误判 1】先判 server/binder 是否存活。
                 // 若 server 已挂，则 isAlive 的底层 execWithIO 会全部失败并返回
@@ -644,6 +742,7 @@ class RuntimeModuleService : Service() {
             }
             watchJobs.remove(entry.id)?.cancel()
             pidTable.remove(entry.id)
+            startAt.remove(entry.id)
             updateNotification()
             return
         }
@@ -658,6 +757,7 @@ class RuntimeModuleService : Service() {
         val pid = manager.startDaemon(entry.dir, "entry.sh")
         if (pid > 0) {
             pidTable[entry.id] = pid
+            startAt[entry.id] = System.currentTimeMillis()
             updateState(entry.id) { it.copy(state = RuntimeModuleState.RUNNING, pid = pid, lastError = "") }
         } else {
             // 继续下一轮（loop 由 watchdog 驱动，这里主动再调一次）

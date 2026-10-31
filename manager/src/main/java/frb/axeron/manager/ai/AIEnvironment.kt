@@ -47,7 +47,7 @@ object AIEnvironment {
      *
      * 说明：
      * - currentPluginName / currentCmd 在拦截场景下由调用方传入，用于让 AI 聚焦当前上下文。
-     * - 未传入时（例如普通 ChatScreen 对话）声明保持通用身份。
+     * - 未传入时（例如终端助手等通用对话）声明保持通用身份。
      */
     fun systemDeclaration(
         currentPluginName: String? = null,

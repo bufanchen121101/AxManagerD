@@ -25,6 +25,8 @@ class ModuleProp(json: String = "") : ParcelableMapJson(json) {
     val versionCode: Long by field("versionCode", 0L)
     val description: String by field("description", "")
     val banner: String by field("banner", "")
+    /** 可选模块卡片图标：模块目录内的相对路径，或 http(s) 图片地址。 */
+    val icon: String by field("icon", "")
     val updateJson: String by field("updateJson", "")
     val axeronPlugin: Long by field("axeronPlugin", 0L)
 

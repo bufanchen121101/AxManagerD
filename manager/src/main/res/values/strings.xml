@@ -171,6 +171,7 @@
     <string name="home_manager_version">Manager Version</string>
     <string name="home_device_owner_chip">Device Owner</string>
     <string name="home_shell_chip">shell</string>
+    <string name="home_root_shell_chip">root-shell</string>
     <string name="home_update">Need Re-Activate</string>
     <string name="new_version_available">New version %s is available, click to update.</string>
     <string name="android_version">Android Version</string>
@@ -866,6 +867,10 @@
     <string name="dpdo_direct_gate_open">Ready: the setup gate is open (user_setup_complete=0). You can tap &#8220;Activate&#8221; now.</string>
     <string name="dpdo_direct_gate_closed">Not ready: the setup gate is still closed. Tap &#8220;Step 1: Prepare&#8221; above first. The &#8220;Activate&#8221; button is disabled until then.</string>
     <string name="dpdo_direct_activate">Activate</string>
+    <string name="dpdo_direct_restore_setup">Restore setup-wizard state (user_setup_complete=1)</string>
+    <string name="dpdo_direct_restore_setup_desc">If you run into problems after activation, try this recovery option: run settings put secure user_setup_complete 1 through Shizuku and read it back to confirm. Use it when the Home / Recents keys stop responding after activation, or when the system keeps treating the device as &#8220;setup not completed&#8221;. It only restores this one system setting and does not touch accounts or data.</string>
+    <string name="dpdo_direct_restore_setup_ok">Restored: user_setup_complete=1 (if you run into problems after activation, try this recovery option)</string>
+    <string name="dpdo_direct_restore_setup_fail">Restore failed: make sure Shizuku is running and authorized for this app, or run settings put secure user_setup_complete 1 manually</string>
     <string name="dpdo_direct_role_granted_perm_missing">The DP Role is granted, but the MANAGE_PROFILE_AND_DEVICE_OWNERS permission has not taken effect yet. Common causes: (1) the role grant was just issued and the permission table has not refreshed (usually settles within seconds); (2) the app manifest does not declare this permission (left over from an older version &#8212; reinstalling the new build fixes it). Tap &#8220;Activate&#8221; to see the exact reason.</string>
     <string name="dpdo_direct_copy_pc_cmd">View activation commands</string>
     <!-- 【v1.6.7 重做】卡片 2 的指令弹窗内容（与「通过电脑命令行激活」的 view_command_message 同构） -->

@@ -494,6 +494,18 @@ fun StatusCard(
                             stringResource(R.string.temp_profile_owner_active_label)
                         }
 
+                        // 【v1.9.1】root 降权到 shell：Axeron 服务以 root 身份拉起
+                        // （isRootActive），且最近一次成功启动方式记录为 ROOT。
+                        //
+                        // 顺序很关键：设备所有者 / 临时 DO / 临时 PO 的分支都在上面，
+                        // 因此「既是 root 又已成为设备所有者」时仍显示设备所有者，
+                        // 不会被本条 root-shell 覆盖。
+                        activateViewModel.isRootActive &&
+                            frb.axeron.api.core.AxeronSettings.getLastLaunchMode() ==
+                            frb.axeron.api.core.AxeronSettings.LaunchMethod.ROOT -> {
+                            stringResource(R.string.home_root_shell_chip)
+                        }
+
                         // 【新增】已激活（Shizuku / Root / DP / WS 等）但本应用不是设备所有者：
                         // 此时 Axeron 服务以 shell 身份运行，如实标注。
                         activateViewModel.isFullyActivated -> {

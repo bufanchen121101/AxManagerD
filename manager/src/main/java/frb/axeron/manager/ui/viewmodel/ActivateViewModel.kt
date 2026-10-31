@@ -247,6 +247,9 @@ class ActivateViewModel : ViewModel() {
     /** 刷新 Device Owner / Profile Owner 状态。 */
     fun refreshOwnerState() {
         val context = AxeronApplication.axeronApp
+        // 【v1.4.2 修复 · 「DO 激活成功但没有任何功能」】
+        // 先记录刷新前的缓存身份，用于判断「本次是不是刚从非 Owner 变成 Owner」。
+        val wasOwner = DeviceOwnerState.isDeviceOwner || DeviceOwnerState.isProfileOwner
         // 关键修复：不再读 DeviceOwnerState 的静态缓存（进程未重启时会长期停留在 false），
         // 而是直接向系统 DevicePolicyManager 实时查询，保证「已激活设备所有者」立即正确显示。
         val (owner, profileOwner) = runCatching {
@@ -254,6 +257,25 @@ class ActivateViewModel : ViewModel() {
         }.getOrDefault(false to false)
         isDeviceOwner = owner
         isProfileOwner = profileOwner
+        // 【v1.4.2 修复 · 核心】身份从「非 Owner」变为「Owner」的瞬间，补做一次
+        // DeviceOwnerState.sync()。
+        //
+        // 为什么必须在这里补：
+        //   sync() 里的 onEnabled → grantPermissions 是唯一会给本应用批量授予
+        //   dangerous 权限的入口，而它只挂在 DeviceOwnerReceiver.onEnabled 上。
+        //   「非 ADB 直连」的调用顺序是：
+        //       ④ setActiveAdmin(self, true)  → 系统回调 onEnabled（此刻 DO 还没设，
+        //          sync 里 isDeviceOwnerApp=false → 走 onDisabled，权限一个都没授）
+        //       ⑤ setDeviceOwner(...)         → 系统只发 ACTION_DEVICE_OWNER_CHANGED，
+        //          这是隐式广播，Android 8+ 的 manifest receiver 收不到
+        //   ⇒ 后置初始化永远不会再执行，结果就是「系统里 DO 已生效（dumpsys 可查），
+        //      但应用侧没拿到 DO 带来的权限，所有功能形同未激活」。
+        //   走 ADB（dpm set-device-owner）时系统会在 DO 设定完成后才回调 onEnabled，
+        //   所以老路径正常 —— 这正是「前面版本好、这个版本坏」的原因。
+        if ((owner || profileOwner) && !wasOwner) {
+            runCatching { DeviceOwnerState.sync(context) }
+                .onFailure { android.util.Log.w("AxManager", "post-activation sync failed", it) }
+        }
         isDhizukuGranted = runCatching {
             // 必须先 init 建立到 Dhizuku server 的 binder，否则 isPermissionGranted() 会因
             // requireServer() 无 binder 抛 IllegalStateException，被兜底为 false，导致
@@ -1166,6 +1188,28 @@ class ActivateViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 【v1.9.1 新增】手动恢复 `user_setup_complete = 1`（激活卡片底部「恢复方案」按钮）。
+     *
+     * 与 [closeSetupGate] 的区别：
+     *  - [closeSetupGate] 是「闸」的操作，会改写 [isSetupGateOpen] / [isSetupGateBusy]
+     *    这套状态机，用于「激活前准备 → 激活」的流程；
+     *  - 本方法只做「写回 1 → 回读确认」，**不参与闸的状态机**。
+     *
+     * 为什么需要单独一个：直连激活成功后卡片已不需要「闸」语义，用户此时只需一个
+     * 一次性的补救入口（激活后出现异常时把状态恢复成出厂默认）。若复用
+     * [closeSetupGate]，会把卡片状态改回「闸已打开/未打开」的中间态，造成误解。
+     *
+     * @return true 表示已确认落库为 1；false 表示写入或回读失败（需用户手动执行）。
+     */
+    suspend fun restoreSetupComplete(): Boolean = withContext(Dispatchers.IO) {
+        val res = runCatching {
+            execViaShizuku(DpDoDirectActivation.buildSetSetupCompleteScript(1))
+        }.getOrElse { Result.failure(it) }
+        val value = DpDoDirectActivation.parseSetupCompleteOutput(res.getOrNull())
+        res.isSuccess && value == 1
+    }
+
     // =====================================================================
     // 【v1.6.4】MAPDO 落地判据（双通道）
     //
@@ -1943,6 +1987,14 @@ class ActivateViewModel : ViewModel() {
         if (direct.success) {
             post("v 提权流程全部成功（非 ADB 直连路径）")
             post("  " + direct.message)
+            // 【v1.4.2 修复 · 「显示已获得 DO，但功能全部无效」】
+            // 直连路径的 setActiveAdmin 早于 setDeviceOwner，系统那次 onEnabled 回调里
+            // 本应用还不是 DO，grantPermissions 全部落空；而 DO 设定后系统发出的
+            // ACTION_DEVICE_OWNER_CHANGED 是隐式广播，Android 8+ 的 manifest receiver
+            // 收不到 ⇒ 后置初始化（授予 DO 特权所需的权限）从未执行。
+            // 这里在**确认成功之后**显式补一次 sync，等于把 ADB 路径上系统会自动做的事补齐。
+            val syncOk = runCatching { DeviceOwnerState.sync(context) }.isSuccess
+            post(if (syncOk) "v 已完成设备所有者后置初始化（权限授予）" else "! 后置初始化失败（不影响 DO 身份，功能可能受限）")
             withContext(Dispatchers.Main) { elevatePhase = 2 }
             runCatching {
                 refreshOwnerState()

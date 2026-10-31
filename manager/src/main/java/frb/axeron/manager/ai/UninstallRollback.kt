@@ -332,12 +332,42 @@ object UninstallRollback {
 
     /**
      * 执行恢复脚本（复用内置终端 execWithIO）。
-     * 每行加了 60s 整体超时；执行结果返回 exitCode 与输出。
+     * 整体加了 60s 超时；执行结果返回 exitCode 与输出。
+     *
+     * 【v1.4.0 修复⑤ · 恢复卸载界面「axeron-dpm 等设备所有者指令跑不起来」】
+     * 现象：在恢复界面点「执行恢复」后，脚本里的 axeron-dpm / pm / settings 等指令
+     *   一条都没有真正生效，界面最终只显示「执行超时（60 秒）或已被中断」或
+     *   「已拦截：…」。
+     *
+     * 根因（读原理后确认）：本脚本是**多行完整脚本**，而 [AxeronPluginService.execWithIO]
+     *   入口有一道 AI 拦截挂钩（`AxeronPluginService.commandAnalyzer`，本工程注入的是
+     *   [AIEngineManager]）。它会把「整段脚本」当成一条命令分析：
+     *     - 规则引擎对整段文本（含注释、echo 文案）做正则匹配，必然命中
+     *       `settings (put|delete)`、`axeron-dpm hide`、`\bpm install\b`、`\breboot\b`
+     *       等 MEDIUM 规则 → `risk != SAFE` → 进入「弹整页分析界面并挂起等用户决策」
+     *       分支；恢复流程并没有对应的等待交互，于是协程一直挂到 60s 超时，
+     *       **进程根本没有被创建，脚本一行都没执行**；
+     *     - 若分析器判定不允许，则直接返回 `code=127, err="已拦截：…"`，
+     *       同样是「指令没跑起来」。
+     *   注意这与 axeron-dpm 自身的可用性无关：脚本运行时 PATH 含 `$AXERONBIN`
+     *   （axeron-dpm 就在其中），provider 也已被 shell 身份正常调用（Shizuku 送 binder
+     *   走的就是同一个 `content call` 通道）。
+     *
+     * 处理：显式 `skipAnalyzer = true`。安全性由本链路上游保证 —— 脚本在进入本方法前
+     *   已经过 [filterDangerous] 逐行 RuleEngine 过滤（HIGH 风险行整行剔除且不回补），
+     *   并在 [RestoreScriptPreviewActivity] 中完整展示给用户、由用户显式点「执行恢复」
+     *   才执行（危险行只在该界面的「不拦截」开关被用户主动打开后才放回）。
      */
     suspend fun executeRestoreScript(script: String): frb.axeron.api.AxeronPluginService.ResultExec? =
         withContext(Dispatchers.IO) {
             withTimeoutOrNull(60_000L) {
-                AxeronPluginService.execWithIO(script, hideStderr = false)
+                AxeronPluginService.execWithIO(
+                    script,
+                    hideStderr = false,
+                    // 已由 filterDangerous 逐行过滤 + 用户在专用界面显式确认，
+                    // 此处不再走「整段脚本」的 AI 二次分析（否则必挂起/被误拦）。
+                    skipAnalyzer = true,
+                )
             }
         }
 }

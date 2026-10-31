@@ -69,11 +69,128 @@ fun officialAiKeyBlob(): String {
     return sb.toString()
 }
 
+// ============ 官方默认 AI（中转站动态密钥）：访问密码 构建期注入 + 混淆 ============
+// v1.4.0 起官方默认 AI 不再直连 NVIDIA，而是走中转站（地址见 AIConfigStore，脱敏版为占位符）：
+//   - 客户端用这里的「访问密码」（AXKEY_PASS）向中转站换取「当日动态密钥」（日钥）；
+//   - 日钥每日轮换、任一时刻有 2 把可用（重叠 1 天），仅存在于运行时内存/缓存；
+//   - 访问密码本身也以 XOR+hex 混淆后注入（同 officialAiKeyBlob 机制，另起一条 seed，
+//     避免两条 blob 共用 mask 带来的互推风险）。
+// 取值优先级同 officialAiKeyPlain()：
+//   1) local.properties 的 axkeyPass（本地构建用；该文件已在 .gitignore 中）
+//   2) 环境变量 AXKEY_PASS（CI 用：GitHub Secret / Variable 注入）
+//   3) Gradle 属性 axkeyPass（-PaxkeyPass=...）
+// 未取到 -> 注入空串，App 侧判定「官方默认 AI 不可用」，不会拿空密码去换钥。
+
+fun axkeyPassPlain(): String {
+    val localFile = rootProject.file("local.properties")
+    val localValue = if (localFile.exists()) {
+        localFile.readText()
+            .lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("axkeyPass") && it.contains('=') }
+            ?.substringAfter('=')
+            ?.trim()
+            ?.trim('"')
+            .orEmpty()
+    } else {
+        ""
+    }
+    if (localValue.isNotBlank()) return localValue.trim()
+
+    val envValue = System.getenv("AXKEY_PASS").orEmpty()
+    if (envValue.isNotBlank()) return envValue.trim()
+
+    return (findProperty("axkeyPass") as String?).orEmpty().trim()
+}
+
+/**
+ * 与 App 侧 `AIConfigStore.decodeAxkeyPass()` 严格对应：
+ * XOR（掩码按 seed 循环）-> 小写十六进制。改这里必须同步改 App 侧。
+ *
+ * seed 与 officialAiKeyBlob() 的不同（另起一条）；与 App 侧
+ * AIConfigStore.AXKEY_PASS_SEED 必须完全一致。
+ */
+fun axkeyPassBlob(): String {
+    val seed = "frb.axeron.manager|AxManagerD/axkey/pass/v1"
+    val plain = axkeyPassPlain()
+    if (plain.isEmpty()) return ""
+    val mask = seed.toByteArray(Charsets.UTF_8)
+    val src = plain.toByteArray(Charsets.UTF_8)
+    val hex = "0123456789abcdef"
+    val sb = StringBuilder(src.size * 2)
+    for (i in src.indices) {
+        val b = (src[i].toInt() xor mask[i % mask.size].toInt()) and 0xFF
+        sb.append(hex[b ushr 4]).append(hex[b and 0x0F])
+    }
+    return sb.toString()
+}
+
+// ============ 「非模块功能」默认 AI（NVIDIA NIM）密钥：构建期注入 + 混淆 ============
+// 需求（v1.4.0）：
+//   - 只有「制作模块」里的聊天走中转站（动态日钥）；
+//   - 其余所有 AI 功能默认直连 NVIDIA，固定模型 openai/gpt-oss-20b，复用同一把内置密钥；
+//   - 这把密钥不向用户展示，dex 内只有 XOR+hex 混淆串。
+// 取值优先级：
+//   1) local.properties 的 builtinAiKey（本地构建；该文件已在 .gitignore 中）
+//   2) 环境变量 BUILTIN_AI_KEY（CI 用）
+//   3) Gradle 属性 builtinAiKey（-PbuiltinAiKey=...）
+// 未取到 -> 注入空串；App 侧会回退到内置密文常量（AIConfigStore.BUILTIN_AI_KEY_BLOB_FALLBACK），
+// 因此不配置任何 Secret 也能出可用包。
+
+fun builtinAiKeyPlain(): String {
+    val localFile = rootProject.file("local.properties")
+    val localValue = if (localFile.exists()) {
+        localFile.readText()
+            .lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("builtinAiKey") && it.contains('=') }
+            ?.substringAfter('=')
+            ?.trim()
+            ?.trim('"')
+            .orEmpty()
+    } else {
+        ""
+    }
+    if (localValue.isNotBlank()) return localValue.trim()
+
+    val envValue = System.getenv("BUILTIN_AI_KEY").orEmpty()
+    if (envValue.isNotBlank()) return envValue.trim()
+
+    return (findProperty("builtinAiKey") as String?).orEmpty().trim()
+}
+
+/**
+ * 与 App 侧 `AIConfigStore.decodeXorHex()` 严格对应：
+ * XOR（掩码按 seed 循环）-> 小写十六进制。改这里必须同步改 App 侧。
+ * seed 与另外两条 blob 都不同（互推风险隔离）。
+ */
+fun builtinAiKeyBlob(): String {
+    val seed = "frb.axeron.manager|AxManagerD/ai/builtin/v1"
+    val plain = builtinAiKeyPlain()
+    if (plain.isEmpty()) return ""
+    val mask = seed.toByteArray(Charsets.UTF_8)
+    val src = plain.toByteArray(Charsets.UTF_8)
+    val hex = "0123456789abcdef"
+    val sb = StringBuilder(src.size * 2)
+    for (i in src.indices) {
+        val b = (src[i].toInt() xor mask[i % mask.size].toInt()) and 0xFF
+        sb.append(hex[b ushr 4]).append(hex[b and 0x0F])
+    }
+    return sb.toString()
+}
+
 android {
     namespace = "frb.axeron.manager"
     defaultConfig {
+        // [harden] release 默认不可调试。debuggable=true 时 run-as 可直接读应用私有目录
+        // (其中含 AI 日钥缓存)，等于把凭证摊开给人看。
+        manifestPlaceholders["debuggable"] = "false"
         // 官方默认 AI 密钥（XOR+十六进制 混淆后的 blob，明文不落源码）
         buildConfigField("String", "OFFICIAL_AI_KEY_BLOB", "\"${officialAiKeyBlob()}\"")
+        // 官方默认 AI（中转站）访问密码（XOR+十六进制 混淆后的 blob，明文不落源码）
+        buildConfigField("String", "AXKEY_PASS_BLOB", "\"${axkeyPassBlob()}\"")
+        // 「非模块功能」默认 AI（NVIDIA）内置密钥（XOR+十六进制 混淆后的 blob）
+        buildConfigField("String", "BUILTIN_AI_KEY_BLOB", "\"${builtinAiKeyBlob()}\"")
         // 只保留 arm64-v8a（现代 vivo 设备均为 64 位），砍掉 x86/x86_64/armeabi-v7a
         // 三份冗余 native 库（busybox/adb/rish/axeron 等 .so），显著减小 APK 体积。
         ndk {
@@ -113,6 +230,7 @@ android {
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("frb-project")
+            manifestPlaceholders["debuggable"] = "true"
         }
         release {
             signingConfig = signingConfigs.getByName("frb-project")
@@ -188,7 +306,6 @@ dependencies {
 
     implementation(libs.gson)
     implementation(libs.markdown)
-    implementation(project(":lspatch-core"))
     implementation(project(":vector-ui"))
     implementation(project(":server"))
     implementation(libs.rikka.refine.runtime)

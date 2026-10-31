@@ -152,6 +152,7 @@
     <string name="home_manager_version">管理器版本</string>
     <string name="home_device_owner_chip">设备所有者</string>
     <string name="home_shell_chip">shell</string>
+    <string name="home_root_shell_chip">root-shell</string>
     <string name="home_update">需要重启</string>
     <string name="new_version_available">发现新版本 %s，点击更新。</string>
     <string name="android_version">Android 版本</string>
@@ -327,6 +328,10 @@
     <string name="dpdo_direct_gate_open">已就绪：向导闸已打开（user_setup_complete=0），可以点「激活」。</string>
     <string name="dpdo_direct_gate_closed">未就绪：向导闸尚未打开，请先点上面的「第一步：准备」。「激活」按钮在就绪前不可点击。</string>
     <string name="dpdo_direct_activate">激活</string>
+    <string name="dpdo_direct_restore_setup">恢复开机向导状态（user_setup_complete=1）</string>
+    <string name="dpdo_direct_restore_setup_desc">若激活后遇到问题，可尝试用此方案恢复：经 Shizuku 执行 settings put secure user_setup_complete 1 并回读确认。适用于激活后出现主页/最近任务键失灵、系统反复认为「尚未完成开机向导」等异常。该操作只恢复这一项系统设置，不涉及账户与数据。</string>
+    <string name="dpdo_direct_restore_setup_ok">已恢复：user_setup_complete=1（若激活后遇到问题，可尝试用此方案恢复）</string>
+    <string name="dpdo_direct_restore_setup_fail">恢复失败：请确认 Shizuku 正在运行并已授权本应用，或手动执行 settings put secure user_setup_complete 1</string>
     <string name="dpdo_direct_role_granted_perm_missing">DP 角色已授予，但它带来的 MANAGE_PROFILE_AND_DEVICE_OWNERS 权限尚未生效。常见原因：① 角色刚授予、权限表尚未刷新（通常数秒内落地）；② 应用清单未声明该权限（旧版本遗留，重装新版即可）。点「激活」可查看具体原因。</string>
     <string name="dpdo_direct_copy_pc_cmd">查看激活指令</string>
     <!-- 【v1.6.7 重做】卡片 2 的指令弹窗内容（与「通过电脑命令行激活」的 view_command_message 同构） -->

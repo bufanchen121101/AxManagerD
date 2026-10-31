@@ -279,6 +279,9 @@ private fun ModuleList() {
 
 @Composable
 private fun ModuleCard(status: RuntimeModuleStatus) {
+    // 开关回调（onCheckedChange）是普通 lambda，里面不能调用 LocalContext.current，
+    // 所以在 Composable 作用域先把 context 取出来。
+    val cardContext = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -326,7 +329,9 @@ private fun ModuleCard(status: RuntimeModuleStatus) {
                     Switch(
                         checked = status.enabled,
                         onCheckedChange = { on ->
-                            RuntimeModuleService.requestToggle(status.id, on)
+                            // 传 context：服务没在跑时 requestToggle 会拉起服务，
+                            // 并把这次开关指令暂存到扫描完成后补执行。
+                            RuntimeModuleService.requestToggle(status.id, on, cardContext)
                         },
                     )
                 }
@@ -531,7 +536,18 @@ private fun stateText(status: RuntimeModuleStatus): String = when (status.state)
         "进程存活探测中（每 $shown 秒）"
     }
     RuntimeModuleState.RETRYING -> "第 ${status.restartCount} 次重试"
-    RuntimeModuleState.FAILED -> "重试超限，已熔断"
+    RuntimeModuleState.FAILED -> {
+        // FAILED 有两个来源：① 校验不过（缺必需文件 / runModel 非法 / 版本不够）；
+        // ② 真的重试超限熔断。旧文案一律显示「重试超限，已熔断」，
+        // 把真实原因吞掉 —— 用户只看到「模块装好了却用不了」，无从自查。
+        val reason = status.lastError.lineSequence()
+            .firstOrNull { it.isNotBlank() }?.take(120).orEmpty()
+        when {
+            reason.isBlank() -> "已失败"
+            status.restartCount > 0 -> "已熔断：$reason"
+            else -> reason
+        }
+    }
     RuntimeModuleState.IDLE -> "未运行"
     RuntimeModuleState.DISABLED -> "模块未启用"
     RuntimeModuleState.STARTING -> "正在执行 onactivate.sh"

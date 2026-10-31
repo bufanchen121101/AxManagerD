@@ -17,7 +17,7 @@ object ModelListFetcher {
 
     /**
      * 从 API 端点 URL 提取 base URL（到版本路径 /v1、/v4 之前）。
-     * 例：https://api.openai.com/v1/chat/completions -> https://api.openai.com
+     * 例：Your link -> Your link
      */
     private fun extractBaseUrl(fullUrl: String): String {
         return try {
