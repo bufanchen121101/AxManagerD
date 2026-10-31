@@ -68,24 +68,40 @@ jobs:
           java -version 2>&1 || true
           echo "=== JAVA_HOME=$JAVA_HOME ==="
           cat "$JAVA_HOME/release" 2>/dev/null || true
-      # 关键修复：某些 Gradle 插件（dev.rikka.tools.refine）在二进制里写死了
-      # toolchain {languageVersion=21, vendor=Oracle}。Gradle 8.x 对 vendor 是
-      # **字面匹配**，runner 上是 Temurin（java.vendor="Eclipse Adoptium"）→
-      # 报 "Cannot find a Java installation ... vendor=Oracle"。
+      # 关键修复：Gradle 8.x 对 toolchain 的 vendor 是**字面匹配**，runner 上是
+      # Temurin（java.vendor="Eclipse Adoptium"），一旦有任何地方要求 vendor=Oracle
+      # 就会报 "Cannot find a Java installation ... vendor=Oracle"。
       #
-      # 实测结论：改 <JDK>/release 的 IMPLEMENTOR、以及 JAVA_TOOL_OPTIONS
-      # -Djava.vendor=Oracle 都无效（Gradle 走的是 JVM 只读属性）。
-      # 因此这里直接下载 Oracle 官方 JDK 21（免登录直链），供 Gradle 使用。
-      - name: Install Oracle JDK 21 (vendor match)
+      # 实测：改 <JDK>/release 的 IMPLEMENTOR、JAVA_TOOL_OPTIONS -Djava.vendor
+      # 都无效（Gradle 走的是 JVM 只读属性），因此这里尝试装一份 Oracle JDK 21。
+      #
+      # 注意：Oracle 已撤掉 /java/21/latest/ 路径（返回 404），必须用 archive 固定版本；
+      # 且这一步**不允许让整个 job 失败**——装不上就回退到预装的 Temurin 21。
+      - name: Install Oracle JDK 21 (vendor match, best-effort)
         run: |
-          set -e
-          URL="https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz"
-          echo "downloading $URL"
-          curl -fsSL --retry 3 --max-time 300 -o /tmp/oracle-jdk21.tar.gz "$URL"
-          ls -l /tmp/oracle-jdk21.tar.gz
+          BASE="https://download.oracle.com/java/21"
+          CANDIDATES="$BASE/latest/jdk-21_linux-x64_bin.tar.gz
+          $BASE/archive/jdk-21.0.9_linux-x64_bin.tar.gz
+          $BASE/archive/jdk-21.0.8_linux-x64_bin.tar.gz
+          $BASE/archive/jdk-21.0.5_linux-x64_bin.tar.gz"
+          GOT=""
+          for U in $CANDIDATES; do
+            echo "trying $U"
+            if curl -fsSL --retry 2 --max-time 300 -o /tmp/oracle-jdk21.tar.gz "$U"; then GOT="$U"; break; fi
+            echo "  -> failed"
+          done
+          if [ -z "$GOT" ]; then
+            echo "::warning::Oracle JDK 21 全部下载地址不可用，回退到预装的 Temurin JDK 21"
+            exit 0
+          fi
+          echo "downloaded from $GOT"
           sudo mkdir -p /opt/oracle-jdk
           sudo tar -xzf /tmp/oracle-jdk21.tar.gz -C /opt/oracle-jdk --strip-components=1
-          ORACLE_HOME=$(find /opt/oracle-jdk -maxdepth 2 -name release -printf '%h\n' | head -1)
+          ORACLE_HOME=$(find /opt/oracle-jdk -maxdepth 2 -name release -printf '%h\n' 2>/dev/null | head -1)
+          if [ -z "$ORACLE_HOME" ]; then
+            echo "::warning::Oracle JDK 解包后未找到 release 文件，回退到 Temurin"
+            exit 0
+          fi
           echo "ORACLE_HOME=$ORACLE_HOME"
           grep -E '^(IMPLEMENTOR|JAVA_VERSION)=' "$ORACLE_HOME/release" || true
           "$ORACLE_HOME/bin/java" -version 2>&1 || true
