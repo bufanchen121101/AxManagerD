@@ -23,14 +23,18 @@
 
 ## 2. 第三方组件（不在上述许可范围内）
 
-| 路径 | 来源 | 许可 |
+本仓库当前**不包含** LSPatch 的源码或二进制（相关集成已在 1.4.0 中移除）。若你从更早的
+tag（`v1.3.1` 及以前）取代码，那些版本中的下列部分仍遵循各自许可证：
+
+| 路径（仅历史版本存在） | 来源 | 许可 |
 | --- | --- | --- |
 | `lspatch-core/`、`manager/src/main/java/org/lsposed/lspatch/`、`manager/src/main/aidl/org/lsposed/lspatch/` | [LSPatch](https://github.com/LSPosed/LSPatch) 及其派生代码 | GNU GPL-3.0 |
 | `manager/src/main/assets/lspatch.jar`、`manager/src/main/assets/lspatch/`（`loader.dex`、`metaloader.dex`、`so/*/liblspatch.so`） | LSPatch 预编译产物 | GNU GPL-3.0 |
 | `lspatch-core/libs/apkzlib-fork.jar`、`pxb.android.*`、`com.wind.meditor.*` | 各自上游项目 | 保留原有许可（Apache-2.0 等），见文件头部声明 |
-| 其余依赖（AndroidX、Kotlin、OkHttp、Shizuku、Dhizuku 等） | 各自上游项目 | 各自原有许可 |
 
-> GPL-3.0 与本项目原创代码所用的 PolyForm Noncommercial 1.0.0 **互不兼容**，因此上述第三方部分不并入本项目的许可，而是按路径独立存在。
+当前版本仍使用的第三方依赖（AndroidX、Kotlin、OkHttp、Shizuku、Dhizuku 等）各自保留原有许可。
+
+> GPL-3.0 与本项目原创代码所用的 PolyForm Noncommercial 1.0.0 **互不兼容**，因此第三方部分不并入本项目的许可，而是按路径独立存在。
 
 ## 3. 模块（Modules）
 
@@ -48,6 +52,7 @@ The original code of AxManagerD is licensed under the **PolyForm Noncommercial
 License 1.0.0** — source-available, free for noncommercial use, modification and
 redistribution, but **commercial use is not permitted**.
 
-Third-party components keep their own licenses: LSPatch-derived code and the
-bundled LSPatch binaries are **GPL-3.0**; other dependencies keep theirs.
+Third-party components keep their own licenses. The current tree ships no
+LSPatch code or binaries; older tags (`v1.3.1` and earlier) did, and those parts
+remain under **GPL-3.0** there. Other dependencies keep theirs.
 See the table above.
