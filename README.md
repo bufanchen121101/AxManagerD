@@ -111,4 +111,13 @@
 
 ## License
 
-本项目仅供学习与研究使用，请遵守当地法律法规。
+本项目 **源码公开但非完全开源**：原创代码适用 [PolyForm Noncommercial License 1.0.0](LICENSE)，
+仅允许个人学习、研究与非营利用途，**禁止任何商业使用**，且不可转授权。
+
+仓库内含的第三方组件保留各自许可证：`lspatch-core/`、`manager/.../org/lsposed/lspatch/`
+与 `manager/src/main/assets/lspatch*` 等 LSPatch 派生部分适用 **GPL-3.0**。
+完整的授权划分见 [LICENSING.md](LICENSING.md)。
+
+商业使用需单独取得书面授权。
+
+> ⚠️ 本项目仅供学习与研究使用，请遵守当地法律法规。
