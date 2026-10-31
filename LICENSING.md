@@ -4,7 +4,11 @@
 
 ## 1. 本项目原创代码
 
-适用 **PolyForm Noncommercial License 1.0.0**（根目录 `LICENSE`）。
+适用 **PolyForm Noncommercial License 1.0.0**（根目录 `LICENSE`，许可原文逐字节照录官方版本）。
+
+版权通知行（`Required Notice`）见根目录 `NOTICE`。
+
+> 说明：GitHub 的自动协议识别库中没有收录 PolyForm，仓库侧边栏会显示为 `Other`，这不影响 `LICENSE` 的实际效力。
 
 简单说：
 
