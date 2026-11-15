@@ -403,7 +403,7 @@ private fun PrivilegeDetailContent(
                     supportingContent = {
                         Text(
                             text = if (authEntry == null) {
-                                stringResource(R.string.privilege_owner_unavailable)
+                                stringResource(R.string.privilege_owner_desc_direct)
                             } else {
                                 stringResource(R.string.privilege_owner_desc)
                             },
@@ -413,9 +413,12 @@ private fun PrivilegeDetailContent(
                     trailingContent = {
                         Switch(
                             checked = authEntry != null && authEntry.allowApi && !authEntry.blocked,
-                            enabled = authEntry != null,
+                            // 【v1.4.1】不再要求「目标应用先自己申请一次」：
+                            // 没有授权记录时开关也直接可用，打开即现场创建记录
+                            // （见 DhizukuPermissionViewModel.setAllowOrCreate）。
+                            enabled = true,
                             onCheckedChange = { checked ->
-                                dhizukuViewModel.setAllow(uid, checked)
+                                dhizukuViewModel.setAllowOrCreate(uid, pkg, checked)
                             },
                         )
                     },

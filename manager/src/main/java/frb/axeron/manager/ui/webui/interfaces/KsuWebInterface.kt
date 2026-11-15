@@ -51,7 +51,11 @@ class KsuWebInterface(
                 val result = AxeronPluginService.execWithIO(
                     cmd = cmd,
                     useBusybox = false,
-                    hideStderr = false
+                    hideStderr = false,
+                    // 【v1.5.6 修复】模块 WebUI 里点按钮下发的命令，不再走 AI 拦截分析。
+                    // 否则 analyze() 会拉起 AIAnalysisActivity，而那里展示的是**上一次运行**抓到的
+                    // 指令快照（本次并非运行抓取），用户看到的就是「点优化按钮弹到上次拦截界面」。
+                    skipAnalyzer = true,
                 )
                 if (result.err.isNotBlank()) "${result.out}\n${result.err}" else result.out
             }
@@ -102,7 +106,9 @@ class KsuWebInterface(
             val result = AxeronPluginService.execWithIO(
                 cmd = finalCommand,
                 useBusybox = false,
-                hideStderr = false
+                hideStderr = false,
+                // 【v1.5.6 修复】WebUI 按钮命令不进入 AI 拦截分析（避免弹出上一次运行的拦截界面）
+                skipAnalyzer = true,
             )
 
             val jsCode =

@@ -26,7 +26,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.filled.Adb
 import androidx.compose.material.icons.filled.Api
 import androidx.compose.material.icons.filled.BarChart
@@ -49,7 +48,6 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -99,7 +97,7 @@ import com.ramcosta.composedestinations.generated.destinations.DangerCodeScreenD
 import com.ramcosta.composedestinations.generated.destinations.DeveloperScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.DiagnosticScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.FlashScreenDestination
-import com.ramcosta.composedestinations.generated.destinations.OverlayPermissionScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.RunRecorderScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.RuntimeLogScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.SettingsEditorScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.UsageStatsScreenDestination
@@ -113,7 +111,6 @@ import frb.axeron.manager.ui.component.SettingsItem
 import frb.axeron.manager.ui.component.SettingsItemType
 import frb.axeron.manager.ui.component.rememberConfirmDialog
 import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
-import frb.axeron.manager.features.overlay.OverlayPermissionStore
 import frb.axeron.manager.features.keepalive.KeepAliveService
 import frb.axeron.manager.owner.LockscreenOrganization
 import frb.axeron.manager.ui.icon.AxeronIcons
@@ -152,32 +149,7 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
     // 锁屏组织名称开关状态（初始值从偏好读取，避免每次重组重置）
     var orgEnabled by remember { mutableStateOf(LockscreenOrganization.isEnabled()) }
 
-    // 备份与还原
-    var showBackupDialog by remember { mutableStateOf(false) }
-    var backupTime by remember {
-        mutableStateOf(frb.axeron.manager.features.backup.BackupManager.lastBackupTime(settingsContext))
-    }
-    val backupDesc = if (backupTime.isEmpty()) {
-        stringResource(R.string.backup_desc_none)
-    } else {
-        stringResource(R.string.backup_desc_last, backupTime)
-    }
 
-    // 「允许模块修改核心文件」总开关状态（放在设置页最顶部，用户要求「很重要 → 靠上」）。
-    var overlayEnabled by remember { mutableStateOf(OverlayPermissionStore.isEnabled(settingsContext)) }
-    val lifecycleOwner = androidx.lifecycle.compose.rememberLifecycleOwner()
-    DisposableEffect(Unit) {
-        val observer = object : androidx.lifecycle.DefaultLifecycleObserver {
-            override fun onResume(owner: androidx.lifecycle.LifecycleOwner) {
-                // 从授权页返回时同步开关状态（两处入口共享同一份 SP）
-                overlayEnabled = OverlayPermissionStore.isEnabled(settingsContext)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
 
     DeveloperInfo(
         showDevDialog
@@ -185,71 +157,6 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
         showDevDialog = false
     }
 
-    // 备份与还原对话框
-    if (showBackupDialog) {
-        AlertDialog(
-            onDismissRequest = { showBackupDialog = false },
-            title = { Text(stringResource(R.string.backup_manage)) },
-            text = {
-                Column {
-                    Text(
-                        text = stringResource(
-                            R.string.backup_desc_last,
-                            backupTime.ifEmpty { stringResource(R.string.backup_desc_none) }
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    // v1.9.1：备份位置已从 /sdcard/AxManagerD/backup 改为应用专属外部目录，
-                    // 该路径含包名（official / manages 两变体不同），故运行时取值而非硬编码文案。
-                    Text(
-                        text = stringResource(
-                            R.string.backup_path_hint,
-                            frb.axeron.manager.features.backup.BackupManager
-                                .backupRoot(settingsContext).absolutePath
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val ok = withContext(Dispatchers.IO) {
-                            frb.axeron.manager.features.backup.BackupManager
-                                .backup(settingsContext, reason = "手动备份")
-                        }
-                        backupTime = frb.axeron.manager.features.backup.BackupManager
-                            .lastBackupTime(settingsContext)
-                        Toast.makeText(
-                            settingsContext,
-                            if (ok) R.string.backup_done else R.string.backup_failed,
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                }) { Text(stringResource(R.string.backup_now)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val f = withContext(Dispatchers.IO) {
-                            frb.axeron.manager.features.backup.BackupManager.restore(settingsContext)
-                        }
-                        Toast.makeText(
-                            settingsContext,
-                            if (f != null) {
-                                settingsContext.getString(R.string.backup_restored, f.absolutePath)
-                            } else {
-                                settingsContext.getString(R.string.backup_restore_none)
-                            },
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    }
-                }) { Text(stringResource(R.string.backup_restore)) }
-            },
-        )
-    }
 
     Scaffold(
         topBar = {
@@ -291,39 +198,6 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
 
-            // ===== 模块核心文件修改权限（用户要求：很重要 → 放在设置页最顶部） =====
-            // 第 1 项：全局总开关（盾牌图标：语义为「安全总控」）
-            SettingsItem(
-                iconVector = AxeronIcons.AxeronShield,
-                label = stringResource(R.string.overlay_global_switch),
-                description = stringResource(R.string.overlay_global_switch_desc),
-                checked = overlayEnabled,
-                onSwitchChange = { enabled ->
-                    overlayEnabled = enabled
-                    scope.launch {
-                        OverlayPermissionStore.setEnabled(settingsContext, enabled)
-                    }
-                }
-            )
-
-            // 第 2 项：权限管理入口（列表管理图标，与第 1 项区分）
-            SettingsItem(
-                iconVector = Icons.AutoMirrored.Outlined.ListAlt,
-                label = stringResource(R.string.overlay_perm_manage),
-                description = stringResource(R.string.overlay_perm_manage_desc),
-                onClick = {
-                    navigator.navigate(OverlayPermissionScreenDestination)
-                }
-            )
-            // ===== 顶部两项结束 =====
-
-            // 第 3 项：备份与还原（首次启动已自动备份一份到手机存储）
-            SettingsItem(
-                iconVector = Icons.Filled.Save,
-                label = stringResource(R.string.backup_manage),
-                description = backupDesc,
-                onClick = { showBackupDialog = true }
-            )
 
             AnimatedVisibility(visible = axeronRunning) {
                 val lifecycleOwner = rememberLifecycleOwner()
@@ -511,6 +385,18 @@ fun SettingsScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewModelG
                     settings.setDoKeepAlive(enabled)
                 }
             )
+
+            // 【v1.5.5】运行历史入口按用户要求放回「设置」界面（模块页不再放卡片）。
+            // 页面本身（RunRecorderScreen）不变：运行记录 + 冲突分析都在里面。
+            SettingsItem(
+                iconVector = Icons.Filled.Article,
+                label = stringResource(R.string.run_recorder),
+                description = stringResource(R.string.run_recorder_desc),
+                onClick = {
+                    navigator.navigate(RunRecorderScreenDestination)
+                }
+            )
+
             SettingsItem(
                 iconVector = Icons.Filled.Security,
                 label = stringResource(R.string.lockscreen_org),

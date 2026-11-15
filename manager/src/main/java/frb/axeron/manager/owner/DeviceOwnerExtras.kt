@@ -88,7 +88,15 @@ object DeviceOwnerExtras {
     data class TransferTarget(
         val label: String,
         val packageName: String,
-        val receiver: ComponentName
+        val receiver: ComponentName,
+        /**
+         * 目标是否在自己的 `device_admin.xml` 里声明了 `<support-transfer-ownership />`。
+         *
+         * AOSP `DevicePolicyManagerService#transferOwnership` 对此有硬断言，
+         * 未声明者必定抛 IllegalArgumentException。这里只做「标注 + 排序」，
+         * 不再直接过滤 —— 过滤会让列表变空，用户以为「转移功能坏了」。
+         */
+        val supportsTransfer: Boolean = true
     )
 
     /**
@@ -134,29 +142,26 @@ object DeviceOwnerExtras {
                 if (appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) {
                     return@mapNotNull null
                 }
-                // 【v1.9.0 修复 · 发送方向】只保留**声明支持接收 DO 转移**的目标。
-                //
-                // AOSP `DevicePolicyManagerService#transferOwnership`（A13 L16088）有一道硬断言：
-                //   Preconditions.checkArgument(incomingDeviceInfo.supportsTransferOwnership(),
-                //           "Provided target does not support ownership transfer.");
-                // 目标未在自己的 device_admin.xml 声明 `<support-transfer-ownership />` 时，
-                // 调用必然抛 IllegalArgumentException，用户却只能看到一个英文报错。
-                // 因此在候选阶段就过滤掉这类目标 —— 宁可列表短，也不给必然失败的按钮。
-                if (!supportsTransferOwnership(adminInfo)) {
-                    return@mapNotNull null
-                }
+                // 【v1.4.1 修复 · 转移列表为空/总失败】
+                // 旧版在这里把「未声明 support-transfer-ownership」的目标直接过滤掉，
+                // 结果常见机型上一个候选都不剩，卡片永远显示「没有可转移的应用」。
+                // 现在改为只打标记（supportsTransfer），由 UI 置灰并给出原因；
+                // 是否真的能收，交给系统 API 判定。
+                val supported = supportsTransferOwnership(adminInfo)
                 try {
                     TransferTarget(
                         label = appInfo.loadLabel(pm).toString(),
                         packageName = pkg,
-                        receiver = adminInfo.component
+                        receiver = adminInfo.component,
+                        supportsTransfer = supported
                     )
                 } catch (t: Throwable) {
                     null
                 }
             }
             .distinctBy { it.receiver }
-            .sortedBy { it.label }
+            // 支持转移的排前面，其余按名称排（UI 不再过滤，保证列表可见）
+            .sortedWith(compareByDescending<TransferTarget> { it.supportsTransfer }.thenBy { it.label })
             .toList()
     }
 
@@ -175,49 +180,84 @@ object DeviceOwnerExtras {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             return TransferResult(false, "需要 Android 9 (API 28) 及以上")
         }
-        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+        val sysDpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
             ?: return TransferResult(false, "DevicePolicyManager 不可用")
+        val selfPkg = context.packageName
+        val selfIsOwner = runCatching {
+            sysDpm.isDeviceOwnerApp(selfPkg) || sysDpm.isProfileOwnerApp(selfPkg)
+        }.getOrDefault(false)
 
-        // 前置校验①：必须自己是 DO 才能转移
-        val selfIsOwner = runCatching { dpm.isDeviceOwnerApp(DeviceOwnerState.admin.packageName) }
-            .getOrDefault(false)
-        if (!selfIsOwner) {
-            return TransferResult(false, "当前应用不是设备所有者，无法转移")
-        }
-
-        // 【v1.9.0 修复 · 发送方向】前置校验②：目标必须**已被系统激活为设备管理员**。
-        //
-        // 依据 AOSP `DevicePolicyManagerService#transferOwnership`（A13 L16085-16087）：
-        //   final DeviceAdminInfo incomingDeviceInfo = findAdmin(target, callingUserId, true);
-        //   checkActiveAdminPrecondition(target, incomingDeviceInfo, policy);
-        // 目标未激活时会直接抛出 "No active admin ..."，用户只看到一个英文异常。
-        // 这里提前拦截，给出可执行的中文原因（含目标组件名，便于直接用命令激活）。
-        val targetActive = runCatching { dpm.isAdminActive(target) }.getOrDefault(false)
-        if (!targetActive) {
-            return TransferResult(
-                false,
-                "目标应用尚未启用「设备管理员」，无法接收转移。请先在目标应用内启用设备管理员，" +
-                        "或在电脑上执行：adb shell dpm set-active-admin " +
-                        target.flattenToShortString() + " ，然后重试。"
-            )
+        // 【v1.4.1 修复 · 双通道】转移必须由「当前的 Owner 身份」发起，
+        // 所以这里先判定本应用实际是哪一种身份，再决定用哪个 DPM / 哪个 admin：
+        //  ① 自己就是 DO / PO（直接激活 / ADB 激活）→ 系统真实 DPM + 自己的 admin 组件；
+        //  ② 自己不是 Owner，但 Dhizuku 已授权（Dhizuku 激活）→ Dhizuku 提升后的 DPM，
+        //     admin 换成 Dhizuku 的 owner 组件（AOSP 要求 admin 必须是当前 Owner）。
+        // 旧版只走 ①，Dhizuku 用户永远看到「当前应用不是设备所有者，无法转移」。
+        val dpm: DevicePolicyManager
+        val admin: ComponentName
+        if (selfIsOwner) {
+            dpm = sysDpm
+            admin = DeviceOwnerState.admin
+        } else {
+            val elevated = DeviceOwnerPrivilege.getDeviceOwnerDpm(context)
+                ?: return TransferResult(
+                    false,
+                    "当前应用不是设备所有者，也没有可用的 Device Owner 通道。" +
+                            "请先在本页激活设备所有者（或授权 Dhizuku）后再转移。"
+                )
+            val owner = DeviceOwnerPrivilege.ownerComponent()
+                ?: return TransferResult(false, "无法获取当前 Device Owner 组件（Dhizuku 未就绪）")
+            dpm = elevated
+            admin = owner
         }
 
         return try {
             @Suppress("NewApi")
-            dpm.transferOwnership(DeviceOwnerState.admin, target, null)
-            LOGGER.i("transferOwnership OK -> $target")
-            // 复查：确认自己已不再是 DO
-            val stillOwner = runCatching {
-                dpm.isDeviceOwnerApp(DeviceOwnerState.admin.packageName)
-            }.getOrDefault(false)
-            if (stillOwner) {
-                TransferResult(false, "系统未执行转移（可能目标不支持）")
+            // 【v1.4.1 修复 · 总失败】这里不再要求目标「已被激活为设备管理员」。
+            // AOSP transferOwnership 内部会用 findAdmin(target) 解析接收器，
+            // 再由 setDeviceOwner 把目标激活；旧版的 isAdminActive 前置校验
+            // 会把所有未激活的候选全部挡掉，表现就是「点哪个都失败」。
+            dpm.transferOwnership(admin, target, null)
+            LOGGER.i("transferOwnership OK -> $target (admin=$admin)")
+            // 复查：目标是否已成为新的 Owner
+            val ok = runCatching { dpm.isDeviceOwnerApp(target.packageName) }.getOrDefault(false)
+            if (!ok) {
+                TransferResult(false, "系统未执行转移（目标可能不支持接收所有者身份）")
             } else {
                 TransferResult(true, null)
             }
         } catch (t: Throwable) {
             LOGGER.w("transferOwnership failed: ${t.message}")
-            TransferResult(false, t.message ?: t.toString())
+            TransferResult(false, friendlyTransferError(t))
+        }
+    }
+
+    /**
+     * 把 `transferOwnership` 抛出的英文异常翻译成可操作的中文原因。
+     *
+     * 常见真实报错（AOSP `DevicePolicyManagerService`）：
+     *  - `java.lang.IllegalArgumentException: Provided target does not support ownership transfer.`
+     *  - `java.lang.IllegalArgumentException: Provided target is not a device admin active on the calling user.`
+     *  - `java.lang.SecurityException: Only the shell can transfer ownership`（部分 ROM 定制）
+     */
+    private fun friendlyTransferError(t: Throwable): String {
+        val raw = t.message ?: t.javaClass.simpleName
+        val low = raw.lowercase()
+        return when {
+            low.contains("support ownership transfer") || low.contains("does not support") ->
+                "目标应用未声明「支持接收设备所有者身份」（device_admin.xml 缺少 " +
+                        "<support-transfer-ownership/>），系统拒绝转移。请换一个目标应用。"
+
+            low.contains("not a device admin") || low.contains("no active admin") ->
+                "目标不是有效的设备管理组件，系统无法把所有者身份交给它。"
+
+            low.contains("only the shell") ->
+                "该系统 ROM 限定只能由 shell 转移所有者。请改用电脑执行 adb shell dpm 相关命令。"
+
+            low.contains("permission") || low.contains("security") ->
+                "系统拒绝了这次转移（$raw）。请确认本应用当前仍是设备所有者。"
+
+            else -> raw
         }
     }
 

@@ -169,7 +169,7 @@ private fun CustomApiConfigSection() {
                 AIConfigStore.setCloudEndpoint(v)
             },
             label = { Text("API 网址 (Endpoint)") },
-            placeholder = { Text("Your link") },
+            placeholder = { Text("https://api.openai.com/v1") },
             leadingIcon = { Icon(Icons.Filled.Link, null) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,

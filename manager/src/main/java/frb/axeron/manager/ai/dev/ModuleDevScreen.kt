@@ -2326,7 +2326,16 @@ private fun AiAssistTab(
                                             onDelta = { delta ->
                                                 messages = messages.toMutableList().also {
                                                     val cur = it[aiIdx]
-                                                    it[aiIdx] = cur.copy(content = cur.content + delta)
+                                                    // 【1.4.1】边流边把已出现的工具标记就地转成工具行，
+                                                    // 图标在模型说要调用的那一刻就出现（不再是结束后才补）
+                                                    val merged = inlineToolMarkers(
+                                                        cur.content + delta,
+                                                        cur.tools,
+                                                    )
+                                                    it[aiIdx] = cur.copy(
+                                                        content = merged.first,
+                                                        tools = merged.second,
+                                                    )
                                                 }
                                             },
                                             // 【1.4.2】思考走独立通道：只累加到 reasoning，
@@ -2356,6 +2365,21 @@ private fun AiAssistTab(
                                             )
                                         }
                                         if (full == null) {
+                                            // 【1.4.1】本轮失败/被中止：把流式阶段留下的「执行中」行标成未执行，
+                                            // 否则气泡里会永远挂着转圈的占位工具行。
+                                            val abortReason = AIChatService.lastError ?: "调用失败"
+                                            messages = messages.toMutableList().also {
+                                                val cur = it[aiIdx]
+                                                it[aiIdx] = cur.copy(
+                                                    tools = cur.tools.map { r ->
+                                                        if (r.pending) r.copy(
+                                                            pending = false,
+                                                            ok = false,
+                                                            body = "未执行：$abortReason",
+                                                        ) else r
+                                                    }
+                                                )
+                                            }
                                             if (messages[aiIdx].content.isBlank()) {
                                                 val reason = AIChatService.lastError ?: "调用失败"
                                                 messages = messages.toMutableList().also {
@@ -2403,8 +2427,8 @@ private fun AiAssistTab(
                                                     }
                                                     messages = messages.toMutableList().also {
                                                         it[aiIdx] = it[aiIdx].copy(
-                                                            content = DevAiTools.stripMarkers(it[aiIdx].content, keepToolIndex = true),
-                                                            tools = it[aiIdx].tools + toolRows,
+                                                            content = DevAiTools.stripMarkers(it[aiIdx].content),
+                                                            tools = toolRows,
                                                         )
                                                     }
                                                     snackbar.showSnackbar("已执行 " + toolRun.size + " 个工具调用")
@@ -2976,10 +3000,11 @@ private fun DevBubble(
                                         DevToolRow(
                                             icon = devToolIcon(run.kind),
                                             name = run.name,
-                                            summary = run.arg,
+                                            // 【1.4.1】流式阶段还没拿到结果时明确显示「执行中…」
+                                            summary = if (run.pending) run.arg + " · 执行中…" else run.arg,
                                             titleColor = DEV_TOOL_BLUE,
                                             summaryColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            done = run.ok,
+                                            done = !run.pending && run.ok,
                                         ) { toolDetail = run }
                                     }
                                 } else if (path == null) {
@@ -3078,6 +3103,11 @@ private data class DevToolRun(
     val arg: String,
     val body: String,
     val ok: Boolean,
+    /**
+     * 【1.4.1】流式阶段的「占位工具行」：模型刚说出要调用哪个工具、还没拿到结果时为 true。
+     * 渲染成「执行中…」，执行完成后整体替换为真实结果行。
+     */
+    val pending: Boolean = false,
 )
 
 /**
@@ -3094,6 +3124,65 @@ private const val DEV_TOOL_OPEN = "<<<TOOLIDX:"
  * 把 AI 原文切成「正文 / 写入块」两种切片，供对话流按需渲染。
  * 流式过程中出现的半截标记（如 `<<<FI`）不当作正文显示，避免闪出一堆尖括号。
  */
+private val DEV_LIVE_TOOL_RE = Regex("<<<([A-Za-z]+):([^>\\r\\n]+?)>>>")
+private val DEV_FILE_OPEN_RE = Regex("<<<FILE:", RegexOption.IGNORE_CASE)
+private const val DEV_FILE_END = "<<<END>>>"
+private const val DEV_LIVE_TOOL_MAX = 8
+
+/** 【1.4.1】思考块最多渲染的字符数（超出折叠，防止几万字把列表拖卡）。 */
+private const val REASONING_SHOW_CAP = 4_000
+
+/**
+ * 【1.4.1】流式阶段的「就地工具行」。
+ *
+ * 旧实现要等整段回复结束、工具全部跑完才建工具行，用户看到的是
+ * 「图标全堆在最后、而且要等很久」。这里每收到一段增量就扫描一次：
+ * 把已完整、且不在 FILE 写入块内的工具标记就地替换成 `<<<TOOLIDX:n>>>` 占位，
+ * 同时追加一条「执行中…」的工具行，让图标在模型说「我要调用 X」的那一刻出现。
+ * 执行完成后由调用方用真实结果整体替换（见主发送逻辑）。
+ */
+private fun inlineToolMarkers(
+    content: String,
+    tools: List<DevToolRun>,
+): Pair<String, List<DevToolRun>> {
+    if (!content.contains("<<<") || tools.size >= DEV_LIVE_TOOL_MAX) return content to tools
+    // 先算出所有 FILE 写入块区间：块内是文件正文，里面的标记只是文字，绝不能当工具执行
+    val blocks = ArrayList<IntRange>()
+    var scan = 0
+    while (true) {
+        val open = DEV_FILE_OPEN_RE.find(content, scan) ?: break
+        val end = content.indexOf(DEV_FILE_END, open.range.last + 1)
+        if (end < 0) {
+            blocks.add(open.range.first until content.length)
+            break
+        }
+        blocks.add(open.range.first until (end + DEV_FILE_END.length))
+        scan = end + DEV_FILE_END.length
+    }
+
+    val out = StringBuilder()
+    val merged = tools.toMutableList()
+    var cursor = 0
+    var changed = false
+    DEV_LIVE_TOOL_RE.findAll(content).forEach { m ->
+        if (m.range.first < cursor) return@forEach
+        if (blocks.any { m.range.first in it }) return@forEach
+        val tag = m.groupValues[1].uppercase()
+        val kind = runCatching { DevAiTools.Kind.valueOf(tag) }.getOrNull() ?: return@forEach
+        val arg = m.groupValues[2].trim()
+        if (arg.isEmpty() || merged.size >= DEV_LIVE_TOOL_MAX) return@forEach
+        if (merged.any { it.pending && it.kind == kind && it.arg == arg }) return@forEach
+        out.append(content, cursor, m.range.first)
+        out.append("\n<<<TOOLIDX:").append(merged.size).append(">>>\n")
+        merged.add(DevToolRun(kind, devToolName(kind), arg, "正在执行…", ok = true, pending = true))
+        cursor = m.range.last + 1
+        changed = true
+    }
+    if (!changed) return content to tools
+    out.append(content, cursor, content.length)
+    return out.toString() to merged
+}
+
 private fun parseDevSegments(content: String): List<DevSeg> {
     if (content.isEmpty()) return emptyList()
     val out = ArrayList<DevSeg>()
@@ -3613,7 +3702,14 @@ private fun DevReasonBlock(reasoning: String, thinking: Boolean) {
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    text = reasoning.ifBlank { "（暂无内容）" },
+                    // 【1.4.1】思考文本限制渲染长度：上游可能吐出几万字，
+// 全量塞进 Text 会让长列表滚动卡顿；超出部分折叠提示。
+                                text = if (reasoning.length > REASONING_SHOW_CAP) {
+                                    reasoning.take(REASONING_SHOW_CAP) +
+                                        "\n\n…（思考内容过长，仅显示前 $REASONING_SHOW_CAP 字）"
+                                } else {
+                                    reasoning.ifBlank { "（暂无内容）" }
+                                },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(10.dp),

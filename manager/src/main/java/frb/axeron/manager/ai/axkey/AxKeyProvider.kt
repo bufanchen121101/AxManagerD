@@ -151,11 +151,6 @@ object AxKeyProvider {
         }
 
     suspend fun ensureKey(): String? {
-        // 【脱敏版】服务地址为占位符（未替换）时直接判定不可用，避免拿非法 URL 发请求。
-        if (!AIConfigStore.isUsableUrl(AIConfigStore.OFFICIAL_AI_DEVICE_URL)) {
-            lastError = "未配置官方 AI 服务地址（源码占位符：Your link）"
-            return null
-        }
         val now = System.currentTimeMillis() / 1000
         val cached = prefs.getString(PREF_KEY_VALUE, null)
         val cachedExpire = prefs.getLong(PREF_KEY_EXPIRE, 0L)

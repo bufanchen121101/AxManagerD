@@ -80,6 +80,49 @@ class DhizukuPermissionViewModel(application: Application) : AndroidViewModel(ap
         refresh()
     }
 
+    /**
+     * 【v1.4.1 修复 · 授权页开关是灰的】
+     *
+     * 直接为目标应用授予/撤销「所有者权限」，**不要求目标应用先自己申请**。
+     *
+     * 旧行为：授权记录只在目标应用调用 `Dhizuku.requestPermission()` 时由
+     * `RequestDhizukuPermissionActivity` 创建，因此目标应用没申请过时，
+     * 授权页里的开关是灰的（`enabled = authEntry != null`），用户必须先打开
+     * 目标应用触发一次申请才能回来授权。
+     *
+     * 现在：没有记录就现场创建一条（签名现算，官方 Dhizuku 也不做签名强校验），
+     * 打开开关立即对该应用生效。
+     *
+     * @return true = 已写入
+     */
+    fun setAllowOrCreate(uid: Int, packageName: String, allow: Boolean): Boolean {
+        val app = getApplication<Application>()
+        val existing = DhizukuAuthStore.get(app, uid)
+        if (existing != null) {
+            DhizukuAuthStore.put(app, existing.copy(allowApi = allow, blocked = false))
+            refresh()
+            return true
+        }
+        if (packageName.isBlank()) return false
+        viewModelScope.launch {
+            val signature = withContext(Dispatchers.IO) {
+                DhizukuAuthStore.signatureForUid(app, uid).orEmpty()
+            }
+            DhizukuAuthStore.put(
+                app,
+                DhizukuAuthStore.AuthEntry(
+                    uid = uid,
+                    packageName = packageName,
+                    signature = signature,
+                    allowApi = allow,
+                    blocked = false,
+                )
+            )
+            refresh()
+        }
+        return true
+    }
+
     fun setBlocked(uid: Int, blocked: Boolean) {
         val app = getApplication<Application>()
         val entry = DhizukuAuthStore.get(app, uid) ?: return

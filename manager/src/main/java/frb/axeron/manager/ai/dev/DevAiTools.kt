@@ -119,8 +119,10 @@ object DevAiTools {
             // 【1.5.0】已经写进正文的 `<<<TOOLIDX:n>>>` 占位必须原样保留。
             // 二次 strip（识图回灌 / 按格式重试）时它也会命中 TOOL_RE，
             // 之前会被当成「未知标记」删掉，于是气泡里所有工具行都被挤到正文末尾。
+            // 【1.4.1】占位符一律保留：流式阶段已就地写入的 `<<<TOOLIDX:n>>>`
+            // 决定了工具行在正文中的位置，二次 strip 若删掉它，工具行又会被挤到末尾。
             if (tag == "TOOLIDX") {
-                return@replace if (keepToolIndex) m.value else ""
+                return@replace m.value
             }
             val isTool = when (tag) {
                 "MKDIR", "LS", "READ", "DEL", "RUN", "SEARCH", "GH", "FIND", "VISION" -> true

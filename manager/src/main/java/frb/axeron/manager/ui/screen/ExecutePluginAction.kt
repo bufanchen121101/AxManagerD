@@ -145,8 +145,10 @@ fun ExecutePluginActionScreen(
                         ), plugin.dirId
                     )
                 val pluginBin = "${pluginPath.absolutePath}/system/bin"
+                // 【v1.5.7】真实运行段同样用 `sh -vx`：`-v` 是写失败时唯一还能拿到
+                // 命令原文（`echo 0 > /sys/...`）的通道，采集侧靠它还原被拒的写入。
                 val cmd =
-                    "export PATH=$pluginBin:\$PATH; cd \"$pluginPath\"; sh -x ./action.sh; RES=\$?; cd /; exit \$RES"
+                    "export PATH=$pluginBin:\$PATH; cd \"$pluginPath\"; sh -vx ./action.sh; RES=\$?; cd /; exit \$RES"
                 // ---- AI 强制分析挂钩（方案 A：运行模块前强制弹整页分析）----
                 val analyzer = AxeronPluginService.commandAnalyzer
                 // 白名单：命中则完全跳过拦截分析（不跑 strace/sh -x、不弹窗），直接运行，
@@ -156,6 +158,11 @@ fun ExecutePluginActionScreen(
                 )
                 // 只有「不信任」且不在白名单时才做拦截分析；
                 // 选择「信任」时完全跳过：不做 strace 抓取、不做 AI / 规则分析、不弹任何弹窗。
+                // 【v1.5.2】分析阶段的结论要跨过「真实运行段」保留：
+                // 加密模块的真指令只有分析阶段的 strace 通道能抓到，真实运行段只有 `sh -x`
+                // （payload 在子 shell 里跑，看不到），若不留存就会被运行段的壳脚手架覆盖。
+                var analysisEncrypted = false
+                var analysisSnapshot: List<String> = emptyList()
                 if (!trusted && analyzer != null && !isWhitelisted) {
                     showAnalysisDialog = true
                     // 【方案 A（strace 版）】执行前用静态 strace 跟踪 `sh action.sh` 整个进程树，
@@ -278,33 +285,60 @@ fun ExecutePluginActionScreen(
                             dryRunBin = dryRunBin
                         )
                         runCatching {
+                            // 【v1.5.7 修复 · 与 PluginScriptTracer 对齐】
+                            // onStderr 给的是 4096 字节原始分片，**不保证按行**：分片边界会把
+                            // `+ >/sys/...` 丢掉前半个 `+ `，或把 `+ echo x` 切成 `+ ec` + `ho x`
+                            // —— 半行被当成假指令，真正那条反而丢掉。这里跨分片缓存未完成的行。
+                            val xtraceErrBuf = StringBuilder()
+                            fun feedXtraceLine(line: String) {
+                                if (!frb.axeron.manager.ai.RuntimeCommandTracer.enabled) return
+                                // 【v1.5.0 后果优先】原始行先交给采集器：拼回 mksh 拆行的重定向、
+                                // 从语法结构上认出写入目标（`> path` / `| tee path` / `sed -i`）。
+                                frb.axeron.manager.ai.RuntimeCommandTracer.noteXtrace(line)
+                                if (frb.axeron.manager.ai.RuntimeCommandTracer.isTraceLine(line)) {
+                                    frb.axeron.manager.ai.RuntimeCommandTracer.addTrace(line)
+                                } else {
+                                    // 【v1.4.8】非 trace 行（脚本自己的错误输出等）会打断
+                                    // 「重定向 → 命令」的相邻关系，必须清空未匹配的重定向片段
+                                    frb.axeron.manager.ai.RuntimeCommandTracer.onInterleavedStderrLine(line)
+                                }
+                            }
                             AxeronPluginService.execWithIO(
                                 cmd = traceCmd,
                                 onStdout = { _ -> },
                                 onStderr = { chunk ->
-                                    if (frb.axeron.manager.ai.RuntimeCommandTracer.enabled) {
-                                        chunk.split('\n').forEach { line ->
-                                            // 【v1.5.0 后果优先】原始行先交给采集器：拼回 mksh 拆行的重定向、
-                                            // 从语法结构上认出写入目标（`> path` / `| tee path` / `sed -i`）。
-                                            frb.axeron.manager.ai.RuntimeCommandTracer.noteXtrace(line)
-                                            if (frb.axeron.manager.ai.RuntimeCommandTracer.isTraceLine(line)) {
-                                                frb.axeron.manager.ai.RuntimeCommandTracer.addTrace(line)
-                                            } else {
-                                                // 【v1.4.8】非 trace 行（脚本自己的错误输出等）会打断
-                                                // 「重定向 → 命令」的相邻关系，必须清空未匹配的重定向片段
-                                                frb.axeron.manager.ai.RuntimeCommandTracer.onInterleavedStderrLine(line)
-                                            }
+                                    synchronized(xtraceErrBuf) {
+                                        xtraceErrBuf.append(chunk)
+                                        var idx = xtraceErrBuf.indexOf("\n")
+                                        while (idx >= 0) {
+                                            feedXtraceLine(xtraceErrBuf.substring(0, idx))
+                                            xtraceErrBuf.delete(0, idx + 1)
+                                            idx = xtraceErrBuf.indexOf("\n")
                                         }
                                     }
                                 },
                                 hideStderr = false,
+                                // 【v1.5.7】抓取段必须跳过 AI 拦截挂钩：这一段是「把脚本再跑一遍
+                                // 来采指令」，若入口再走一次 CommandAnalyzer，整段 xtrace 命令会被
+                                // 当成一条命令分析 —— 命中规则就返回 127 根本不执行（或挂起等用户
+                                // 决策），结果就是「明明在抓取，却一条真指令都采不到」。
+                                skipAnalyzer = true,
                             )
+                            // 收尾：最后一行若没有换行符，也要送进采集器
+                            synchronized(xtraceErrBuf) {
+                                if (xtraceErrBuf.isNotBlank()) feedXtraceLine(xtraceErrBuf.toString())
+                                xtraceErrBuf.setLength(0)
+                            }
                         }
                         frb.axeron.manager.ai.RuntimeCommandTracer.end()
                     }
                     straceBlock = frb.axeron.manager.ai.RuntimeCommandTracer.toPromptBlock()
                     straceCount = frb.axeron.manager.ai.RuntimeCommandTracer.snapshot().size
+                    // 【v1.5.2】记录分析阶段的结论：是否混淆/加密模块 + 该阶段抓到的真指令
+                    analysisEncrypted = frb.axeron.manager.ai.RuntimeCommandTracer.isEncryptedModule()
+                    analysisSnapshot = frb.axeron.manager.ai.RuntimeCommandTracer.snapshot()
                     android.util.Log.i("AIEngine", "执行前 strace 抓取到 $straceCount 条真实指令")
+                    android.util.Log.i("AIEngine", "encrypted=$analysisEncrypted")
                     android.util.Log.i("AIEngine", "traceBlock=$straceBlock")
                     // ============ v1.1.1 卸载回滚落盘 ============
                     // 关键修复：运行模块（action.sh）场景之前【从未落盘】，导致卸载时
@@ -386,7 +420,26 @@ fun ExecutePluginActionScreen(
                 // 开启运行时指令采集：cmd 里已用 `sh -x ./action.sh` 开启 xtrace，
                 // 把模块脚本内部真实执行（含加密脚本解密后）的每一条命令打到 stderr。
                 stage = "正在执行模块…"
-                frb.axeron.manager.ai.RuntimeCommandTracer.begin()
+                // 【v1.5.2】把分析阶段的「加密模块」结论带进真实运行段：
+                // 运行段只有 `sh -x`（payload 在子 shell 里，看不到），沿用同一展示口径后
+                // 壳的脚手架会被同样剔掉，不会覆盖掉分析阶段抓到的真指令。
+                frb.axeron.manager.ai.RuntimeCommandTracer.begin(encryptedHint = analysisEncrypted)
+                // 【v1.5.7】真实运行段同样跨分片缓存：onStderr 给的是 4096 字节原始分片，
+                // 分片边界会把 `+ >/sys/...` 的前半个 `+ ` 切掉、或把 `+ echo x` 切成两条，
+                // 半行被当成假指令、真正那条反而丢掉（与抓取段同一个坑）。
+                val runErrBuf = StringBuilder()
+                fun feedRunLine(line: String) {
+                    if (!frb.axeron.manager.ai.RuntimeCommandTracer.enabled) return
+                    // 【v1.5.0 后果优先】真实运行段同样按「后果」记录：
+                    // 这样界面展示的是「这次运行真的改了哪些文件」，而不是一堆脚手架。
+                    frb.axeron.manager.ai.RuntimeCommandTracer.noteXtrace(line)
+                    if (frb.axeron.manager.ai.RuntimeCommandTracer.isTraceLine(line)) {
+                        frb.axeron.manager.ai.RuntimeCommandTracer.addTrace(line)
+                    } else {
+                        // 【v1.4.8】同上：非 trace 行打断重定向与命令的相邻关系
+                        frb.axeron.manager.ai.RuntimeCommandTracer.onInterleavedStderrLine(line)
+                    }
+                }
                 AxeronPluginService.execWithIO(
                     cmd = cmd,
                     onStdout = {
@@ -402,18 +455,15 @@ fun ExecutePluginActionScreen(
                         logContent.append(it).append("\n")
                     },
                     onStderr = {
-                        // stderr 里的 `+ ` 开头行就是 xtrace 真实执行指令，逐条喂给采集器（最终喂给 AI）
-                        if (frb.axeron.manager.ai.RuntimeCommandTracer.enabled) {
-                            it.split('\n').forEach { line ->
-                                // 【v1.5.0 后果优先】真实运行段同样按「后果」记录：
-                                // 这样界面展示的是「这次运行真的改了哪些文件」，而不是一堆脚手架。
-                                frb.axeron.manager.ai.RuntimeCommandTracer.noteXtrace(line)
-                                if (frb.axeron.manager.ai.RuntimeCommandTracer.isTraceLine(line)) {
-                                    frb.axeron.manager.ai.RuntimeCommandTracer.addTrace(line)
-                                } else {
-                                    // 【v1.4.8】同上：非 trace 行打断重定向与命令的相邻关系
-                                    frb.axeron.manager.ai.RuntimeCommandTracer.onInterleavedStderrLine(line)
-                                }
+                        // 【v1.5.7】stderr 里的 `+ ` 开头行就是 xtrace 真实执行指令，逐条喂给采集器。
+                        // 跨分片缓存未完成的行（分片边界会把一行切成两半）—— 与抓取段同一个坑。
+                        synchronized(runErrBuf) {
+                            runErrBuf.append(it)
+                            var idx = runErrBuf.indexOf("\n")
+                            while (idx >= 0) {
+                                feedRunLine(runErrBuf.substring(0, idx))
+                                runErrBuf.delete(0, idx + 1)
+                                idx = runErrBuf.indexOf("\n")
                             }
                         }
                         logContent.append(it).append("\n")
@@ -427,14 +477,23 @@ fun ExecutePluginActionScreen(
                 //   filesDir/rollback/{dirId}/{name}.axd_log
                 // 这样即使用户把总开关关掉（默认关闭），卸载时依然有恢复依据。
                 // 注意：此处不挂沙箱 —— 开关关闭时抓的就是**真实运行**这一次。
-                val runTraceCount =
-                    frb.axeron.manager.ai.RuntimeCommandTracer.snapshot().size
-                if (runTraceCount > 0) {
+                val runSnapshot = frb.axeron.manager.ai.RuntimeCommandTracer.snapshot()
+                // 【v1.5.2 修复 · 加密模块】真实运行段只有 `sh -x`，payload 在子 shell 里跑，
+                // 真指令抓不到；若直接用运行段结果覆盖，会把分析阶段 strace 抓到的唯一一份
+                // 真指令换成壳的脚手架。这里对加密模块做「分析阶段 + 运行段」合并保留。
+                // 普通模块（analysisEncrypted=false）行为完全不变。
+                val persistedCommands =
+                    if (analysisEncrypted && analysisSnapshot.isNotEmpty()) {
+                        (analysisSnapshot + runSnapshot).distinct()
+                    } else {
+                        runSnapshot
+                    }
+                if (persistedCommands.isNotEmpty()) {
                     try {
                         frb.axeron.manager.ai.UninstallRollback.persistLog(
                             view.context,
                             plugin,
-                            frb.axeron.manager.ai.RuntimeCommandTracer.snapshot()
+                            persistedCommands
                         )
                     } catch (t: Throwable) {
                         android.util.Log.e("AIEngine", "卸载回滚日志落盘失败(真实运行段)", t)
@@ -459,7 +518,15 @@ fun ExecutePluginActionScreen(
                 // 展示与问答上下文统一改用 toDisplayBlock()（仅核心指令），
                 // 与「恢复卸载」界面同源，避免展示层混入探测聚合块。
                 val runtimeTraceBlock = frb.axeron.manager.ai.RuntimeCommandTracer.toDisplayBlock()
-                frb.axeron.manager.ai.AIEngineManager.updateRuntimeTrace(runtimeTraceBlock)
+                // 【v1.5.2】加密模块在运行段可能一条都抓不到（payload 在子 shell 里），
+                // 此时不要把分析阶段已经存好的真指令换成「未捕获」提示。
+                // 【v1.5.3】进一步：只要分析阶段抓到了东西（沙箱写意图 / strace），
+                // 就一律以分析阶段为准，不再被运行段的壳脚手架覆盖 ——
+                // 运行段没有沙箱、payload 在子 shell 里，覆盖只会把真指令换成一堆壳入口。
+                // 普通模块（analysisEncrypted=false）行为完全不变。
+                if (!(analysisEncrypted && analysisSnapshot.isNotEmpty())) {
+                    frb.axeron.manager.ai.AIEngineManager.updateRuntimeTrace(runtimeTraceBlock)
+                }
                 isActionRunning = false
                 scope.launch(Dispatchers.IO) {
                     try {

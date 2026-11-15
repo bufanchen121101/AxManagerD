@@ -59,7 +59,6 @@ import frb.axeron.api.Axeron
 import frb.axeron.api.AxeronPluginService
 import frb.axeron.api.ai.RuleEngine
 import frb.axeron.api.ai.CommandAnalyzer.AnalyzeResult
-import frb.axeron.api.core.AxeronSettings
 import frb.axeron.manager.R
 import frb.axeron.manager.ai.AIEngineManager
 import frb.axeron.manager.ai.AIChatService
@@ -101,12 +100,11 @@ fun EnablePluginScreen(
     plugin: PluginInfo,
     viewModelGlobal: ViewModelGlobal,
 ) {
-    val developerOptionsEnabled = AxeronSettings.getEnableDeveloperOptions()
     val pluginViewModel = viewModelGlobal.pluginViewModel
 
     var isRunning by remember { mutableStateOf(true) }
 
-    var stage by remember { mutableStateOf("正在准备分析…") }
+    var stage by remember { mutableStateOf("正在准备启用…") }
 
     // 界面内决策弹窗状态（绕开跨 Activity 启动，避免后台启动限制导致卡死）
     var decisionResult by remember { mutableStateOf<AnalyzeResult?>(null) }
@@ -152,7 +150,6 @@ fun EnablePluginScreen(
     // 判定成立直接 return，整个分析流程永不启动 → 永久卡在"正在准备分析…"。
     // 用 remember：每次导航真实进入都是全新组合，text 恒为初始值，协程必然启动。
     var text by remember { mutableStateOf("正在初始化…") }
-    val logContent = remember { StringBuilder() }
 
     suspend fun dbg(msg: String) {
         try {
@@ -195,21 +192,34 @@ fun EnablePluginScreen(
             dbg("existingScripts=${existingScripts}（shell 权限 test -f 探测）")
 
             // 真正启用：写标记 + 触发 ignite 让 Igniter 执行 service.sh 注册
+            //
+            // 【v1.4.4 修复】整段包 try/catch：旧实现没有兜底，togglePlugin 一旦抛异常
+            // （Shizuku 断开、目录不可写等），协程直接崩在这个 launch 里，
+            // isRunning 永远停在 true ⇒「正在启用模块」弹窗永不消失、界面卡死，
+            // 用户只能退回列表重来。现在异常也会走正常收尾并给出可读原因。
             suspend fun doEnable() {
-                stage = "正在启用模块…"
-                dbg("doEnable 开始: togglePlugin")
-                val ok = AxeronPluginService.togglePlugin(plugin.dirId, true, plugin.backup)
-                dbg("doEnable togglePlugin ok=$ok")
-                if (ok) {
-                    runCatching { AxeronPluginService.igniteSuspendService() }
-                    dbg("doEnable ignite 完成")
+                try {
+                    stage = "正在启用模块…"
+                    dbg("doEnable 开始: togglePlugin")
+                    val ok = AxeronPluginService.togglePlugin(plugin.dirId, true, plugin.backup)
+                    dbg("doEnable togglePlugin ok=$ok")
+                    if (ok) {
+                        runCatching { AxeronPluginService.igniteSuspendService() }
+                        dbg("doEnable ignite 完成")
+                    }
+                    pluginViewModel.markNeedRefresh()
+                    launch(Dispatchers.Main) {
+                        text = if (ok) "✅ 模块已启用\n\n${plugin.prop.name} 已成功启用。" else "❌ 启用失败"
+                    }
+                } catch (t: Throwable) {
+                    dbg("doEnable 异常: ${t.message}")
+                    launch(Dispatchers.Main) {
+                        text = "❌ 启用失败\n\n${t.message ?: t.toString()}"
+                    }
+                } finally {
+                    isRunning = false
+                    dbg("doEnable 完成 isRunning=false")
                 }
-                pluginViewModel.markNeedRefresh()
-                launch(Dispatchers.Main) {
-                    text = if (ok) "✅ 模块已启用\n\n${plugin.prop.name} 已成功启用。" else "❌ 启用失败"
-                }
-                isRunning = false
-                dbg("doEnable 完成 isRunning=false")
             }
 
             // 没有任何启用脚本：直接启用（无需分析）
@@ -226,6 +236,13 @@ fun EnablePluginScreen(
                 doEnable()
                 return@launch
             }
+            // 【1.4.1】按用户要求：启用模块时不再做「拦截抓取」——
+            // 之前这里会先 strace 一遍再弹分析，用户只看到 1~2 秒的拦截提示、
+            // 既看不到模块自己的输出，也没有任何分析结果。现在直接启用，
+            // 保留 togglePlugin 原生的成功/失败输出；模块卡片右上角的启用开关逻辑不变。
+            dbg("跳过拦截抓取，直接启用 dirId=${plugin.dirId}")
+            doEnable()
+            return@launch
             dbg("有启用脚本，进入 strace 拦截流程")
 
             val analyzer = AxeronPluginService.commandAnalyzer
@@ -436,7 +453,7 @@ fun EnablePluginScreen(
                                     try {
                                         val fos = Axeron.newFileService()
                                             .getStreamSession(file.absolutePath, true, false).outputStream
-                                        fos.write("$logContent\n".toByteArray())
+                                        fos.write(text.toByteArray())
                                         fos.flush()
                                         snackBarHost.showSnackbar(logSaved.format(file.absolutePath))
                                     } catch (e: Exception) {
@@ -479,7 +496,14 @@ fun EnablePluginScreen(
                 scrollState.animateScrollTo(scrollState.maxValue)
             }
 
-            text = if (developerOptionsEnabled) logContent.toString() else text
+            // 【v1.4.4 修复】这里原有一行
+            //   text = if (developerOptionsEnabled) logContent.toString() else text
+            // 是「点启用后看不到任何输出」的根因：
+            //   · logContent 在全文件中从未被 append 过（只有声明/导出/读取三处），恒为空串；
+            //   · 只要开了「开发者模式」，每次重组都会把 state 里的 text 覆盖成 ""，
+            //     连 doEnable() 写入的「✅ 模块已启用」也会被立刻清掉；
+            //   · 它还是渲染期副作用（在 Composition 里给 state 赋值）。
+            // 现已删除，下面直接显示 text 本身。
 
             BasicText(
                 modifier = Modifier.padding(8.dp),
@@ -506,7 +530,7 @@ fun EnablePluginScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text(text = "正在分析模块", style = MaterialTheme.typography.titleMedium)
+                    Text(text = "正在启用模块", style = MaterialTheme.typography.titleMedium)
                 }
             },
             text = {

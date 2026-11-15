@@ -196,27 +196,50 @@ object PluginScriptTracer {
                         // 不挂沙箱的话写调用照样会落地。
                         dryRunBin = dryRunBin,
                     )
+                    // 【v1.5.6】stderr 回调给的是 4096 字节原始分片，**不保证按行**：
+                    // 分片边界会把一行切成两半（`+ >/sys/...` 丢掉前半个 `+ `，或 `+ echo x`
+                    // 被切成 `+ ec` + `ho x`）。半行会被当成一条假指令，真正那条反而丢掉。
+                    // 这里跨分片缓存未完成的行，再逐行送进采集器。
+                    val errBuf = StringBuilder()
+                    fun feedTraceLine(line: String) {
+                        if (!RuntimeCommandTracer.enabled) return
+                        RuntimeCommandTracer.noteXtrace(line)
+                        if (RuntimeCommandTracer.isTraceLine(line)) {
+                            RuntimeCommandTracer.addTrace(line)
+                        } else {
+                            // 【v1.4.8】非 trace 行会打断「重定向 → 命令」的相邻关系
+                            // （真机 mksh 把重定向单独打成一行），必须清空未匹配的片段
+                            RuntimeCommandTracer.onInterleavedStderrLine(line)
+                        }
+                    }
+
                     AxeronPluginService.execWithIO(
                         cmd = xtraceCmd,
                         onStdout = { _ -> },
                         onStderr = { chunk ->
-                            if (RuntimeCommandTracer.enabled) {
-                                chunk.split('\n').forEach { line ->
-                                    // 【v1.5.0 后果优先】先把原始行交给采集器（拼回 mksh 拆行的重定向、
-                                    // 从语法结构上认出写入目标），再走原有 addTrace 保留旧通道数据。
-                                    RuntimeCommandTracer.noteXtrace(line)
-                                    if (RuntimeCommandTracer.isTraceLine(line)) {
-                                        RuntimeCommandTracer.addTrace(line)
-                                    } else {
-                                        // 【v1.4.8】非 trace 行会打断「重定向 → 命令」的相邻关系
-                                        // （真机 mksh 把重定向单独打成一行），必须清空未匹配的片段
-                                        RuntimeCommandTracer.onInterleavedStderrLine(line)
-                                    }
+                            synchronized(errBuf) {
+                                errBuf.append(chunk)
+                                var idx = errBuf.indexOf("\n")
+                                while (idx >= 0) {
+                                    feedTraceLine(errBuf.substring(0, idx))
+                                    errBuf.delete(0, idx + 1)
+                                    idx = errBuf.indexOf("\n")
                                 }
                             }
                         },
                         hideStderr = false,
+                        // 【v1.5.4】抓取阶段必须跳过 AI 拦截挂钩。
+                        // 这一段是"真的把脚本再跑一遍来采指令"，如果入口再走一次
+                        // CommandAnalyzer，整段 xtrace 命令会被当一条命令分析：
+                        // 命中规则就返回 127 **根本不执行**（或挂起等用户决策），
+                        // 结果就是"明明在抓取，却一条真指令都采不到"。
+                        skipAnalyzer = true,
                     )
+                    // 【v1.5.6】收尾：最后一行若没有换行符，也要送进采集器，否则会丢掉最后一条指令
+                    synchronized(errBuf) {
+                        if (errBuf.isNotBlank()) feedTraceLine(errBuf.toString())
+                        errBuf.setLength(0)
+                    }
                 }
             }.onFailure {
                 Log.e(TAG, "sh -x 拦截失败", it)

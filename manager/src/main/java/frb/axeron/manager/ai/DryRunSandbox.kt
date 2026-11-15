@@ -1,5 +1,6 @@
 package frb.axeron.manager.ai
 
+import android.util.Base64
 import frb.axeron.api.Axeron
 import frb.axeron.api.AxeronPluginService
 
@@ -151,13 +152,20 @@ object DryRunSandbox {
         sb.append("rm -rf \"\$D\"; mkdir -p \"\$D\" || exit 1; ")
         sb.append(": > ").append(LOG).append("; ")
         for ((name, body) in STUBS) {
-            sb.append("cat > \"\$D/").append(name).append("\" <<'AXDRY'\n")
-            sb.append(body).append('\n')
-            sb.append("AXDRY\n")
+            // 【v1.5.3 修复 · 桩脚本被写成 0 字节】
+            // 旧实现用 heredoc（`cat > "$D/x" <<'AXDRY' … AXDRY`）写桩，但本命令走的是
+            // Axeron 执行通道，整条命令的**换行会被压平**：heredoc 定界符退化成行内，
+            // 正文整体丢失 —— 生成出来的是 0 字节的桩脚本。
+            // 后果（实测 /data/local/tmp/ax_dryrun/* 全部 0 字节、ax_dryrun_cmds.log 0 行）：
+            //   模块经 PATH 调用的每条写命令都被"空壳桩"静默吞掉 —— 既没真的执行，
+            //   也没被记进沙箱日志，于是「拦截到的真实指令」永远是空的。
+            // 现改为 base64 单行写入：命令保持单行，不依赖任何多行/heredoc 语义。
+            val b64 = Base64.encodeToString(body.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+            sb.append("echo '").append(b64).append("' | base64 -d > \"\$D/").append(name).append("\" || exit 1; ")
             sb.append("chmod 755 \"\$D/").append(name).append("\"; ")
         }
-        // 自检：pm 桩必须存在且可执行，否则调用方放弃沙箱（退回原行为，绝不因沙箱失败而抓不到）
-        sb.append("test -x \"\$D/pm\" && echo DRYRUN_READY")
+        // 自检：pm 桩必须存在、非空且可执行，否则调用方放弃沙箱（退回原行为，绝不因沙箱失败而抓不到）
+        sb.append("test -s \"\$D/pm\" && test -x \"\$D/pm\" && echo DRYRUN_READY")
         return sb.toString()
     }
 

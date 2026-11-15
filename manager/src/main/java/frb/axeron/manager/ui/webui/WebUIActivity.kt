@@ -28,7 +28,6 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import frb.axeron.api.Axeron
 import frb.axeron.api.core.AxeronSettings
-import frb.axeron.manager.features.overlay.OverlayAssets
 import frb.axeron.manager.ui.viewmodel.AppsViewModel
 import frb.axeron.manager.ui.webui.interfaces.AxWebInterface
 import frb.axeron.manager.ui.webui.interfaces.KsuWebInterface
@@ -66,8 +65,6 @@ class WebUIActivity : ComponentActivity() {
     private var insetsContinuation: CancellableContinuation<Unit>? = null
 
     fun erudaConsole(context: android.content.Context): String {
-        // 模块覆盖层优先：若某模块被授权覆盖 assets/js/eruda.min.js，则使用它的版本。
-        OverlayAssets.readTextBlocking("js/eruda.min.js")?.let { return it }
         return context.assets.open("js/eruda.min.js").bufferedReader().use { it.readText() }
     }
 
@@ -241,24 +238,18 @@ class WebUIActivity : ComponentActivity() {
             .addDomain("plugin.local").addPathHandler("/", axPathHandler).done()
             .addDomain("package.icon").addPathHandler("/", iconHandler).done()
             .addDomain("kernelsu.js").addHandler { _, _, _ ->
-                // 模块覆盖层优先（同 erudaConsole 的策略）。
-                val kernelSuOverlay = OverlayAssets.readTextBlocking("js/kernelsu.js")
                 return@addHandler WebResourceResponse(
                     "application/javascript",
                     null,
-                    if (kernelSuOverlay != null) kernelSuOverlay.byteInputStream()
-                    else assets.open("js/kernelsu.js")
+                    assets.open("js/kernelsu.js")
                 )
             }.done()
             .addDomain("axeron.js").addHandler { _, _, request ->
                 Log.d("WebUIActivity", "request: " + request.url.toString())
-                // 模块覆盖层优先（同 erudaConsole 的策略）。
-                val axeronOverlay = OverlayAssets.readTextBlocking("js/axeron.js")
                 return@addHandler WebResourceResponse(
                     "application/javascript",
                     null,
-                    if (axeronOverlay != null) axeronOverlay.byteInputStream()
-                    else assets.open("js/axeron.js")
+                    assets.open("js/axeron.js")
                 )
             }.done()
             .addScheme("ksu")

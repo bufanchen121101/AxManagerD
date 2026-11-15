@@ -143,7 +143,28 @@ object StraceHelper {
         } else {
             "$pluginBin:\$PATH"
         }
-        return "export PATH=$pathExpr; cd \"$pluginPath\"; timeout -k 1 $timeoutSeconds sh -x \"./$scriptName\"; exit 0"
+        // 【v1.5.7 关键修复 · 「拦截结果里没有任何 echo > 写节点」】
+        // 改用 `sh -vx`（verbose + xtrace），而不是只有 `-x`。
+        //
+        // 真机实测（uid=2000，与抓取阶段同权限）：
+        //   `echo 0 > /sys/.../scaling_min_freq 2>/dev/null`
+        // 写失败时 stderr **只有两行**：
+        //   `+ >/sys/.../scaling_min_freq`
+        //   `xx.sh[4]: can't create /sys/.../scaling_min_freq: Permission denied`
+        // 命令本体 `+ echo 0` 根本不会出现 —— 重定向失败，命令根本没有执行，
+        // mksh 也就没有东西可 -x。免 root 下模块写内核节点几乎全部失败，
+        // 于是「所有 echo > 写节点」在结果里整批消失（只剩 pm/settings 这类外部命令，
+        // 它们由 strace 的 execve 通道抓到，不吃这个亏）。
+        //
+        // 而 `-v`（verbose）打印的是**读入的脚本原文行**（变量展开前），
+        // 即使该行执行失败也照样打印。实测同一脚本 `sh -vx` 输出：
+        //   `echo 0 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 2>/dev/null`   ← -v 原文
+        //   `+ >/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq`                      ← -x 重定向
+        //   `xx.sh[4]: can't create ...: Permission denied`                                  ← 报错
+        // 因此 `-v` 是**唯一**能在写失败时还原出命令本体的通道。
+        // 采集侧（RuntimeCommandTracer）会把 `-v` 原文行与 `-x` 的写目标按路径配对，
+        // 只用于「被系统拒绝的写入」回填，不会污染正常指令流。
+        return "export PATH=$pathExpr; cd \"$pluginPath\"; timeout -k 1 $timeoutSeconds sh -vx \"./$scriptName\"; exit 0"
     }
 
     /** 生成「读取日志当前 execve 行数」的命令。 */

@@ -22,6 +22,8 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -83,6 +85,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
@@ -107,6 +110,7 @@ import frb.axeron.manager.ui.component.ConfirmResult
 import frb.axeron.manager.ui.component.rememberConfirmDialog
 import frb.axeron.manager.ui.component.rememberLoadingDialog
 import frb.axeron.manager.ui.util.ClipboardUtil
+import frb.axeron.manager.ui.util.toBitmapSafely
 import frb.axeron.manager.ui.viewmodel.ActivateViewModel
 import frb.axeron.manager.ui.viewmodel.ViewModelGlobal
 // 【v1.4.7】提权界面路由（compose-destinations 生成，位于 generated.destinations 包）。
@@ -826,6 +830,22 @@ fun TempDeviceOwnerCard(activateViewModel: ActivateViewModel) {
                             val r = activateViewModel.activateDeviceOwnerViaShizuku()
                             val msg = r.getOrElse { it.message ?: it.toString() }
                             Toast.makeText(ctx, msg.ifBlank { "OK" }, Toast.LENGTH_SHORT).show()
+                            // 【v1.4.1 修复 · 提示成功但主页没反应】
+                            // DO 身份生效 ≠ Axeron 服务已经在跑。旧实现到这里就结束了，
+                            // 用户回到主页看到的仍是「未激活」，误以为激活没成功。
+                            // 这里等一次**真实运行状态**；仍未就绪时给出可操作提示，
+                            // 而不是让「成功」两个字把人骗走。
+                            if (r.isSuccess) {
+                                activateViewModel.awaitRunning()
+                                val running = activateViewModel.activateStatus
+                                if (running !is ActivateViewModel.ActivateStatus.Running) {
+                                    Toast.makeText(
+                                        ctx,
+                                        R.string.activate_service_not_ready,
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
                         }
                     }
                 },
@@ -976,6 +996,21 @@ fun ShizukuLaunchCard(activateViewModel: ActivateViewModel) {
                             val r = activateViewModel.activateViaShizuku()
                             val msg = r.getOrElse { it.message ?: it.toString() }
                             Toast.makeText(ctx, msg.ifBlank { "OK" }, Toast.LENGTH_SHORT).show()
+                            // 【v1.4.1 修复 · 提示成功但主页没反应】
+                            // 这条命令只是「以 shell 身份把服务拉起来」，服务进程是异步启动的。
+                            // 旧实现弹完 Toast 就结束，界面状态没有任何变化，用户以为没生效。
+                            // 这里等一次真实运行状态（服务确实起来了就会自动跳回主页）。
+                            if (r.isSuccess) {
+                                activateViewModel.awaitRunning()
+                                val running = activateViewModel.activateStatus
+                                if (running !is ActivateViewModel.ActivateStatus.Running) {
+                                    Toast.makeText(
+                                        ctx,
+                                        R.string.activate_service_not_ready,
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
                         }
                     }
                 },
@@ -1163,10 +1198,12 @@ fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            // ---- 头部：图标 + 标题 + 右侧刷新 ----
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Icon(
                     imageVector = Icons.Outlined.Shield,
                     contentDescription = null,
@@ -1174,13 +1211,24 @@ fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = stringResource(R.string.owner_transfer_title),
+                    text = titleStr,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
                 )
+                IconButton(
+                    onClick = { activateViewModel.refreshTransferTargets() },
+                    enabled = !activateViewModel.isTransferring
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = stringResource(R.string.owner_transfer_refresh),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.size(12.dp))
 
             Text(
                 text = stringResource(R.string.owner_transfer_desc),
@@ -1211,48 +1259,114 @@ fun OwnerTransferCard(activateViewModel: ActivateViewModel) {
                     Text(stringResource(R.string.owner_transfer_refresh))
                 }
             } else {
-                targets.forEach { t ->
-                    OutlinedButton(
-                        onClick = {
-                            scope.launch {
-                                val result = confirmDialog.awaitConfirm(
-                                    title = titleStr,
-                                    content = confirmTemplate.format(t.label),
-                                    markdown = false,
-                                    confirm = confirmStr,
-                                    dismiss = dismissStr
-                                )
-                                if (result == ConfirmResult.Confirmed) {
-                                    activateViewModel.transferOwnership(t.receiver) { ok, err ->
-                                        val msg = if (ok) {
-                                            successStr
-                                        } else {
-                                            failedTemplate.format(err.orEmpty())
+                // ---- 目标列表：图标 + 应用名 + 包名（整行可点） ----
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    targets.forEach { t ->
+                        TransferTargetRow(
+                            target = t,
+                            enabled = !activateViewModel.isTransferring && t.supportsTransfer,
+                            onClick = {
+                                scope.launch {
+                                    val result = confirmDialog.awaitConfirm(
+                                        title = titleStr,
+                                        content = confirmTemplate.format(t.label),
+                                        markdown = false,
+                                        confirm = confirmStr,
+                                        dismiss = dismissStr
+                                    )
+                                    if (result == ConfirmResult.Confirmed) {
+                                        activateViewModel.transferOwnership(t.receiver) { ok, err ->
+                                            val msg = if (ok) {
+                                                successStr
+                                            } else {
+                                                failedTemplate.format(err.orEmpty())
+                                            }
+                                            Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                                         }
-                                        Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
                                     }
                                 }
                             }
-                        },
-                        enabled = !activateViewModel.isTransferring,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(t.label)
-                            Text(
-                                text = t.packageName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        )
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * 【v1.4.1】权限转移目标行（布局参照 OwnDroid 的 TransferOwnershipScreen）。
+ *
+ * 整行可点，左侧应用图标、中间应用名 + 包名，右侧箭头；不支持接收所有者身份的目标
+ * 置灰并给出原因（旧实现直接把这类目标过滤掉，导致列表经常为空）。
+ */
+@Composable
+private fun TransferTargetRow(
+    target: frb.axeron.manager.owner.DeviceOwnerExtras.TransferTarget,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val ctx = LocalContext.current
+    val iconBitmap = remember(target.packageName) {
+        runCatching {
+            ctx.packageManager.getApplicationIcon(target.packageName).toBitmapSafely(96)
+        }.getOrNull()
+    }
+    val alpha = if (enabled) 1f else 0.45f
+
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            if (iconBitmap != null) {
+                Image(
+                    bitmap = iconBitmap.asImageBitmap(),
+                    contentDescription = null,
+                    alpha = alpha,
+                    modifier = Modifier.size(36.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Outlined.Shield,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = alpha),
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = target.label,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha)
+                )
+                Text(
+                    text = target.packageName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
+                )
+                if (!target.supportsTransfer) {
+                    Text(
+                        text = stringResource(R.string.owner_transfer_unsupported),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = alpha),
+                modifier = Modifier.size(16.dp)
+            )
         }
     }
 }

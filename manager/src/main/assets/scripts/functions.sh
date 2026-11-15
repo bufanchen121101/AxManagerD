@@ -154,6 +154,40 @@ uninstall_axmanager() {
   pkill -f axeron_server
 }
 
+# 【v1.4.1】把模块 id 规范成「安全的目录名」。
+#
+# 只做目录名安全化，**不参与任何识别判断**（模块能不能装由结构决定，见
+# module_structure_supported）。之所以必须做：
+#   - 旧实现直接把 module.prop 里的 id 拼进路径，id 里带空格/斜杠/中文就会拼出
+#     坏路径，mkdir 失败 → 安装失败（这正是「因模块 ID 导致装不上」的来源）；
+#   - id 为空时旧实现会得到 MODPATH=$MODROOT/ ，随后的 rm -rf "$MODPATH" 会
+#     把整个插件目录删掉，属于危险路径。
+# 合法 id（[A-Za-z0-9._-]）经过本函数保持不变，因此不影响已装模块的目录名。
+sanitize_module_id() {
+  local raw="$1"
+  local zip="$2"
+  local out
+  out=$(printf '%s' "$raw" | tr -c 'a-zA-Z0-9._-' '_')
+  out=$(printf '%s' "$out" | tr -s '_')
+  out=$(printf '%s' "$out" | sed 's/^[._-]*//; s/[._-]*$//')
+  if [ -z "$out" ]; then
+    out=$(basename "$zip" 2>/dev/null | sed 's/\.zip$//' | tr -c 'a-zA-Z0-9._-' '_')
+    out=$(printf '%s' "$out" | tr -s '_' | sed 's/^[._-]*//; s/[._-]*$//')
+  fi
+  [ -z "$out" ] && out="module_$(date +%s)"
+  printf '%s' "$out"
+}
+# 【v1.4.1】按 Zip 内的**结构**判断是不是 shell 类模块（与模块 id 无关）。
+# 只要存在下列任一结构，就认为它可以按 shell 模块安装：
+# service.sh / post-fs-data.sh / action.sh / uninstall.sh / customize.sh / system/
+module_structure_supported() {
+  local zip="$1"
+  local list
+  list=$(unzip -l "$zip" 2>/dev/null)
+  [ -z "$list" ] && list=$(unzip -Z1 "$zip" 2>/dev/null)
+  [ -z "$list" ] && return 1
+  printf '%s\n' "$list" | grep -Eq '(service\.sh|post-fs-data\.sh|action\.sh|uninstall\.sh|customize\.sh|system/)$'
+}
 install_plugin() {
   local AUTO_ENABLE=$1
   local COMPAT=$2
@@ -178,13 +212,25 @@ install_plugin() {
   MODNAME=$(grep_prop name "$TMPPROP")
   MODAUTH=$(grep_prop author "$TMPPROP")
   MODPLUGIN=$(grep_prop axeronPlugin "$TMPPROP")
-  
-  # 插件兼容选项：开启后识别 Magisk/KernelSU 等结构相似但未声明 axeronPlugin 的模块
+
+  # 【v1.4.1 修复 · 插件兼容按「结构」识别，不再依赖模块 ID / axeronPlugin】
+  #
+  # 旧行为：module.prop 里没有 axeronPlugin 时，非兼容模式一律 abort；兼容模式虽然放行，
+  # 但后续仍拿原始 id 拼目录名，Magisk/KernelSU 模块的 id 常带大写、点、空格甚至中文，
+  # 拼出来的路径非法 → mkdir 失败 → 用户看到「安装失败」，却与模块本身无关。
+  #
+  # 现在：兼容模式改为**只看 Zip 结构**（service.sh / post-fs-data.sh / action.sh /
+  # uninstall.sh / customize.sh / system/ 任一即视为 shell 类模块），完全不看 id；
+  # 关闭兼容模式时保持原有的严格校验（未声明 axeronPlugin 即拒绝）。
   if [ -z "$MODPLUGIN" ]; then
     if [ "$COMPAT" = "true" ]; then
-      ui_print "- Compatibility mode: analyzing module structure"
-      ui_print "- axeronPlugin not declared, treating as compatible module"
-      MODPLUGIN=0
+      ui_print "- Compatibility mode: detecting module by layout (module id is ignored)"
+      if module_structure_supported "$ZIPFILE"; then
+        ui_print "- Shell module layout detected, treating as compatible module"
+        MODPLUGIN=0
+      else
+        abort "! This zip is not a shell module (no service.sh / post-fs-data.sh / action.sh / system)"
+      fi
     else
       abort "! This module not supporting AxManager Plugin!"
     fi
@@ -203,6 +249,11 @@ install_plugin() {
       fi
       ;;
   esac
+  # 【v1.4.1】模块 id 在这里只当「目录名」用：非法字符降级为下划线、空值用 zip 名兜底。
+  # 无论 id 长成什么样，都不会再拼出坏路径或删错目录（这也是「因 ID 装不上」的根治点）。
+  MODID=$(sanitize_module_id "$MODID" "$ZIPFILE")
+  ui_print "- Install dir: $MODID"
+
   MODPATH=$MODROOT/$MODID
   MODPATH_UPDATE=$MODROOT_UPDATE/$MODID
   

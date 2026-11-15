@@ -1,6 +1,5 @@
 package frb.axeron.manager.ui.screen
 
-import android.annotation.SuppressLint
 import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -12,7 +11,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +22,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -77,7 +76,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -204,21 +202,13 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
         topBar = {
             TopAppBar(
                 title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.quick_shell),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(modifier = Modifier.size(12.dp))
-                        // Shell / Dhizuku 模式切换
-                        TerminalModeSwitch(
-                            isDhizukuMode = viewModel.isDhizukuMode,
-                            onToggle = { viewModel.toggleTerminalMode() }
-                        )
-                    }
+                    // 【v1.4.1】终端合并：不再显示「Shell / Dhizuku」模式切换，
+                    // 执行通道由 ViewModel 自动选择（见 QuickShellViewModel.runCommand）。
+                    Text(
+                        text = stringResource(R.string.quick_terminal_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             )
         },
@@ -290,11 +280,12 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
             }
         )
 
-        Box(
+        Column(
             Modifier
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp)
                 .fillMaxSize()
+                .imePadding()
         ) {
 
 
@@ -401,57 +392,11 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
             }
 
 
-            val hScroll = rememberScrollState()
-
-            val context = LocalContext.current
-
-            SelectionContainer(
-                modifier = Modifier
-                    .padding(horizontal = 8.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .horizontalScroll(hScroll)
-                ) {
-                    LazyColumn(
-                        state = listState,
-                        // 悬浮底栏：滚动内容底部留白
-                        contentPadding = PaddingValues(bottom = 120.dp)
-                    ) {
-                        item {
-                            Spacer(modifier = Modifier.size(70.dp))
-                        }
-                        items(logs) { line ->
-                            if (!PrefsEnumHelper<QuickShellViewModel.OutputType>("output_")
-                                    .loadState(context, line.type, true)
-                            ) return@items
-                            BasicText(
-                                text = line.output.parseAsAnsiAnnotatedString(),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    lineHeight = MaterialTheme.typography.labelSmall.fontSize, // samain dengan fontSize
-                                    lineHeightStyle = LineHeightStyle(
-                                        alignment = LineHeightStyle.Alignment.Center,
-                                        trim = LineHeightStyle.Trim.Both
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontFamily = FontFamily.Monospace
-                                ),
-                                softWrap = false,
-                            )
-                        }
-
-                        item {
-                            Spacer(modifier = Modifier.size(110.dp))
-                        }
-                    }
-                }
-            }
-
-            @SuppressLint("ConfigurationScreenWidthHeight")
-            val screen = LocalConfiguration.current.screenHeightDp
-            val paddingHeight = (screen * 0.52).dp
-
-
+            // 【v1.4.2】输入栏位置修复：
+            // 输入卡片固定在顶部（TopAppBar 下方），命令输出区位于它下面并占满剩余高度
+            // （weight(1f)），两者纵向排列、不会互相重叠；
+            // imePadding 已提到外层 Column，键盘弹出时只压缩输出区，
+            // 输入卡片与底部导航栏都不会被遮挡。
             ElevatedCard(
                 shape = RoundedCornerShape(10.dp),
                 colors = CardDefaults.elevatedCardColors().copy(
@@ -460,13 +405,7 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .run {
-                        if (keyboardVisible) {
-                            padding(bottom = paddingHeight)
-                        } else {
-                            padding(bottom = 0.dp)
-                        }
-                    }
+                    .padding(top = 4.dp, bottom = 8.dp)
             ) {
                 Box(
                     modifier = Modifier
@@ -509,11 +448,8 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
 
                     IconButton(
                         onClick = {
-                            if (viewModel.isDhizukuMode) {
-                                viewModel.runDhizuku()
-                            } else {
-                                viewModel.runShell()
-                            }
+                            // 【v1.4.1】统一入口：自动选择 Axeron shell 或 axeron-dpm 通道
+                            viewModel.runCommand()
                             focusManager.clearFocus()
                             keyboardController?.hide()
                         },
@@ -557,40 +493,50 @@ fun QuickShellScreen(navigator: DestinationsNavigator, viewModelGlobal: ViewMode
                     }
                 }
             }
+            val hScroll = rememberScrollState()
+
+
+            SelectionContainer(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .horizontalScroll(hScroll)
+                ) {
+                    LazyColumn(
+                        state = listState,
+                        // 悬浮底栏：滚动内容底部留白
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp)
+                    ) {
+                        items(logs) { line ->
+                            if (!PrefsEnumHelper<QuickShellViewModel.OutputType>("output_")
+                                    .loadState(context, line.type, true)
+                            ) return@items
+                            BasicText(
+                                text = line.output.parseAsAnsiAnnotatedString(),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    lineHeight = MaterialTheme.typography.labelSmall.fontSize, // samain dengan fontSize
+                                    lineHeightStyle = LineHeightStyle(
+                                        alignment = LineHeightStyle.Alignment.Center,
+                                        trim = LineHeightStyle.Trim.Both
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontFamily = FontFamily.Monospace
+                                ),
+                                softWrap = false,
+                            )
+                        }
+
+                        item {
+                            Spacer(modifier = Modifier.size(110.dp))
+                        }
+                    }
+                }
+            }
 
         }
-    }
-}
-
-@Composable
-fun TerminalModeSwitch(
-    isDhizukuMode: Boolean,
-    onToggle: () -> Unit
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.terminal_mode_shell),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (!isDhizukuMode) FontWeight.Bold else FontWeight.Normal,
-            color = if (!isDhizukuMode) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .clickable { if (isDhizukuMode) onToggle() }
-                .padding(horizontal = 6.dp, vertical = 4.dp)
-        )
-        Text(
-            text = stringResource(R.string.terminal_mode_dhizuku),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (isDhizukuMode) FontWeight.Bold else FontWeight.Normal,
-            color = if (isDhizukuMode) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .clickable { if (!isDhizukuMode) onToggle() }
-                .padding(horizontal = 6.dp, vertical = 4.dp)
-        )
     }
 }
 

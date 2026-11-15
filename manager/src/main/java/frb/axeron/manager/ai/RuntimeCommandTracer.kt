@@ -18,6 +18,209 @@ import java.util.concurrent.CopyOnWriteArrayList
  * 而不是仅仅打印到日志里。
  */
 object RuntimeCommandTracer {
+    /**
+     * 【1.4.2 自适应过滤】过滤强度。
+     *
+     * 用户反馈：**未加密（未混淆）模块**运行时只拦截到 `echo` 提示行，真正的
+     * `chmod / cp / cat / settings` 等业务指令全被聚合/黑名单吞掉；而混淆模块又确实
+     * 需要重过滤，否则解密脚手架会淹掉核心动作。
+     *
+     * 因此改为「按抓取到的真实执行行自动判定」：
+     *  - 起始一律 [LENIENT]（少过滤，尽量保留真实指令）；
+     *  - 边抓边给每一行做混淆打分（解密/解包工具、超长行、`\xNN` 密度、
+     *    脚手架占比、不可打印字符）；分数达到 [OBF_ESCALATE_AT] 即判定为混淆/加密
+     *    模块，自动切到 [STRICT]（= 原有重过滤方案），并把已抓到的原始行
+     *    **重放一遍**重新过滤，保证前后口径一致。
+     *
+     * 判定完全基于「拦截抓取到的内容」，不读取模块脚本原文。
+     */
+    enum class FilterMode { LENIENT, STRICT }
+
+    /** 当前过滤强度（可被混淆打分自动升级；[begin] 会重置为 LENIENT）。 */
+    @Volatile
+    var mode: FilterMode = FilterMode.LENIENT
+        private set
+
+    /** 混淆判定分数（由抓取到的真实执行行累积，供日志排查）。 */
+    @Volatile
+    var obfuscationScore: Int = 0
+        private set
+
+    /** 达到该分数即判定为混淆/加密模块，升级到 [FilterMode.STRICT]。 */
+    private const val OBF_ESCALATE_AT = 2
+
+    /**
+     * 【v1.5.2】调用方已知的「混淆 / 加密模块」标记。
+     *
+     * 只由 [begin] 显式传入（默认 false），不会自己变 true，也不会跨 [begin] 残留 ——
+     * 这样同一个采集器被别的模块复用时不会把普通模块误判成加密模块。
+     */
+    @Volatile
+    private var encryptedHint = false
+
+    /** 已命中的解密/解包工具类别。 */
+    private val cryptoSeen = HashSet<String>()
+    /** 脚手架行数 / 参与评分的行数。 */
+    private var scaffoldLines = 0
+    private var scoredLines = 0
+
+    /** 顺序 B（命令在前、重定向在后）时暂存的纯输出命令，等下一行重定向片段来拼。 */
+    @Volatile
+    private var pendingOutputCmd: String? = null
+
+    /**
+     * 给一条真实命令行打混淆分。
+     *
+     * 命中项（各计 1 分，解密工具类最多计 2 分）：
+     *  - `base64 -d` / `openssl` / `xxd` / `zcat` / `gzip -d` / `eval` / `tr -d`
+     *  - 超长行（> 800 字符，壳常把整个 payload 塞一行）
+     *  - 密集 `\xNN`（≥ 8 处）
+     *  - 不可打印字符占比 > 10%
+     *  - 脚手架（变量赋值 / 控制结构）占比 > 75%（样本 > 40 行时）
+     *
+     * 实测：正常性能模块流 0 分；base64+zcat+eval+超长行的混淆壳流 5 分。
+     */
+    private fun scoreObfuscation(cmd: String) {
+        val b = cmd.trim()
+        if (b.isEmpty()) return
+        scoredLines++
+        // ① 解密 / 解包 / 编码链（预编译，避免每行重复构造正则）
+        for ((regex, name) in CRYPTO_PATTERNS) {
+            if (name in cryptoSeen) continue
+            if (regex.containsMatchIn(b)) {
+                cryptoSeen.add(name)
+                if (cryptoSeen.size <= 2) {
+                    obfuscationScore++
+                }
+            }
+        }
+        // ② 超长单行
+        if (b.length > 800) obfuscationScore++
+        // ③ \xNN 转义密度
+        if (REGEX_HEX_ESC.findAll(b).count() >= 8) obfuscationScore++
+        // ④ 脚手架占比
+        val first = b.split(' ').firstOrNull()?.substringAfterLast('/') ?: ""
+        if (REGEX_ASSIGN.containsMatchIn(b) || first in SCAFFOLD_WORDS) scaffoldLines++
+        if (scoredLines > 40 && scaffoldLines.toFloat() / scoredLines > 0.75f) {
+            obfuscationScore++
+        }
+        // ⑤ 不可打印字符占比
+        if (b.length > 40) {
+            val bad = b.count { it.code < 32 && it != '\t' }
+            if (bad.toFloat() / b.length > 0.10f) obfuscationScore++
+        }
+        // 达到阈值 → 判定混淆：切到重过滤，并把**已经收进来的宽松结果单向收紧**。
+        // 注意：绝不重建结果 —— 重建只能重放 xtrace 行，会把 strace（execve）通道
+        // 抓到的业务指令一起抹掉，只剩壳的 base64 中间产物（v1.4.1 的回归）。
+        if (obfuscationScore >= OBF_ESCALATE_AT && mode == FilterMode.LENIENT) {
+            mode = FilterMode.STRICT
+            tightenCollected()
+        }
+    }
+
+    private val REGEX_HEX_ESC = Regex("\\\\x[0-9a-fA-F]{2}")
+
+    /** 【v1.5.2】`[ ... ]` / `[[ ... ]]` 纯判断语句（容忍 mksh xtrace 加的引号与粘连）。 */
+    private val REGEX_TEST_STMT = Regex("""^['"]?\[{1,2}['"]?(\s|$|\d)""")
+
+    /** 混淆壳「解密 / 解包 / 编码」工具清单（预编译）。 */
+    private val CRYPTO_PATTERNS = listOf(
+        Regex("\\bbase64\\s+(-d|--decode)") to "base64-d",
+        Regex("\\bopenssl\\b") to "openssl",
+        Regex("\\bxxd\\b") to "xxd",
+        Regex("\\bzcat\\b") to "zcat",
+        Regex("\\b(gzip\\s+-d|gunzip)\\b") to "gzip-d",
+        Regex("\\beval\\b") to "eval",
+        Regex("\\btr\\s+-d") to "tr-d",
+    )
+
+    private val REGEX_ASSIGN = Regex(
+        "^(export\\s+|local\\s+|declare\\s+|readonly\\s+|typeset\\s+)?" +
+            "[A-Za-z_][A-Za-z0-9_]*(\\[[^\\]]*\\])?(\\+)?="
+    )
+
+    private val SCAFFOLD_WORDS = setOf(
+        "if", "then", "else", "elif", "fi", "for", "while", "until",
+        "do", "done", "case", "esac", "in"
+    )
+
+    /**
+     * 升级到 [FilterMode.STRICT] 后，把**已经收进来的宽松结果**单向收紧一次：
+     * 把「严格模式下会被丢弃」的行从 captured / effectCmd / writeIntents 里剔除，
+     * 其余**原样保留**（顺序不变）。
+     *
+     * 为什么不做「清空 + 重放」：本采集有两条通道（sh -x 的 xtrace、strace 的 execve），
+     * 重放只能重放 xtrace 行，而大量业务指令是 strace 先抓到的 ——
+     * 重建会把它们一起抹掉，结果只剩壳的 base64 中间产物（v1.4.1 的真实回归原因）。
+     */
+    private fun tightenCollected() {
+        val kept = captured.filter { !isStrictRejected(it) }
+        if (kept.size != captured.size) {
+            captured.clear()
+            captured.addAll(kept)
+            // 去重集合按保留项重建，避免被剔除的行继续压制同名命令
+            seen.clear()
+            seen.addAll(kept)
+            seenTemplate.clear()
+            kept.forEach { seenTemplate.add(toTemplate(it)) }
+        }
+        // 写入后果：来源命令被判为噪声的条目一并删除（否则会显示壳的中间产物）
+        val dropEffectKeys = effectCmd.entries.filter { isStrictRejected(it.value) }.map { it.key }
+        dropEffectKeys.forEach { effectCmd.remove(it) }
+        // 【v1.5.3 · 沙箱写意图不参与收紧】
+        // writeIntents 全部来自预演沙箱实际拦下的写调用日志（`pm disable-user` / `settings put` /
+        // `axeron-dpm suspend` …），这批命令是「模块真的想对系统做什么」的权威记录 ——
+        // v1.4.0 起就没有对它们做过二次清洗。之前这里按 isStrictRejected 剔一遍，
+        // 一旦命中名单（例如把整条命令当成只读探测）就再也无法从别处恢复：
+        // strace 只跟踪 execve，拿不到写入目标，等于真指令被永久抹掉。
+        // 因此这里不再做剔除（行为与 v1.4.0 对齐）。
+    }
+
+    /** 严格模式（[FilterMode.STRICT]）下这条命令会不会被丢弃（纯判定，无副作用）。 */
+    private fun isStrictRejected(cmd: String): Boolean {
+        if (cmd.isBlank()) return false
+        return isUselessOutput(cmd) ||
+            isXtraceScaffold(cmd) ||
+            isReadOnlyProbe(cmd) ||
+            isNoise(cmd) ||
+            isStraceNoise(cmd)
+    }
+
+    /** 清空所有「派生结果」。 */
+    private fun resetDerived() {
+        captured.clear()
+        seen.clear()
+        seenTemplate.clear()
+        synchronized(straceCmds) {
+            straceCmds.clear()
+            straceCryptoSeen.clear()
+        }
+        synchronized(probeLock) {
+            probeCounts.clear()
+            probeSamples.clear()
+        }
+        clearRedirectFragments()
+        pendingOutputCmd = null
+        effectCmd.clear()
+        writeIntents.clear()
+        synchronized(xtraceRaw) {
+            xtraceRaw.clear()
+            xtraceRawSeen.clear()
+        }
+        synchronized(xtracePending) { xtracePending.clear() }
+        // 【v1.5.7】`-v` 原文行缓存也要清，避免跨轮次把上一轮的原文配给本轮的失败写入
+        pendingVerbatim = null
+        synchronized(verbatimByTarget) {
+            verbatimByTarget.clear()
+            verbatimTemplates.clear()
+        }
+    }
+
+    /** 供抓取结束时打日志：本次判定结果。 */
+    fun filterSummary(): String =
+        "mode=" + mode.name + " score=" + obfuscationScore + " lines=" + scoredLines
+
+
     /** 一次运行采集到的真实指令流（线程安全，供中断/结束后读取） */
     private val captured = CopyOnWriteArrayList<String>()
     /** 去重集合：加速 sleep 后常驻脚本（while true）会在 timeout 内重复执行核心指令，
@@ -95,6 +298,232 @@ object RuntimeCommandTracer {
     /** 「纯重定向片段」形态：可选 fd 数字 + `<`/`>`（1~2 个）+ 无空格目标。 */
     private val redirectFragmentRe = Regex("^([0-9]*)(<{1,2}|>{1,2})(\\S*)$")
 
+    /**
+     * 【v1.5.6】mksh 写重定向被系统拒绝时的报错行。
+     *
+     * 实测（Android mksh）：
+     *   `./action.sh[41]: can't create /sys/.../scaling_governor: Permission denied`
+     */
+    private val deniedWriteRe = Regex("""(?:can't|cannot) create\s+(\S+?):""")
+
+    /**
+     * 【v1.5.7】`-v`（verbose）通道：最近一条「脚本原文行」。
+     *
+     * 存在原因：mksh 在写重定向失败时**不会**打印 `+ <命令>`（重定向先建立、失败即放弃，
+     * 命令根本没有执行，也就没有东西可 `-x`）。实测唯一还能拿到命令本体的通道是
+     * `sh -v`——它在**读入行时**就打印原文，与执行成败无关：
+     *
+     *   -v : `echo 0 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 2>/dev/null`
+     *   -x : `+ >/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq`
+     *   错误: `xx.sh[4]: can't create /sys/.../scaling_min_freq: Permission denied`
+     *
+     * 这里只暂存「含引号外写重定向」的原文行，命中「写被拒」时把它还原成命令本体，
+     * 用完即清。**只服务于失败写入的回填**，不参与正常指令流，不会污染已抓到的命令。
+     */
+    @Volatile
+    private var pendingVerbatim: String? = null
+
+    /**
+     * 【v1.5.7】`-v` 原文行按「字面写目标」索引：目标路径 → 命令原文。
+     *
+     * 为什么要按目标索引：`sh -v` 会把脚本原文**按读入顺序**整份打印一遍，
+     * 执行阶段中间可能插入别的原文行（`if`、`chmod`、函数体 …）。只靠「最近一条」配对，
+     * 对**字面路径**的写法（`echo 0 > /sys/.../scaling_min_freq`）就不够精确。
+     * 这里对「目标像路径」的原文行建索引，写失败时优先按目标精确取原文；
+     * 变量目标（`> "$file"`）建不了索引，仍走「最近一条」兜底。
+     */
+    private val verbatimByTarget = HashMap<String, String>()
+
+    /**
+     * 【v1.5.7】`-v` 原文行的「变量目标模板」索引：模板正则 → 命令原文。
+     *
+     * 存在原因：循环里的写法是
+     *   `echo performance > /sys/devices/system/cpu/cpu$i/cpufreq/scaling_governor 2>/dev/null`
+     * 而报错给出的是展开后的真实路径 `…/cpu0/…`。字面索引查不到它，只能退回「最近一条原文」，
+     * 结果就是：循环只跑完首轮就再也配不上原文（cpu2/cpu3 整条消失），而且被配到的是
+     * **最后一条**原文（`echo performance` 被串成 `echo 0`）。
+     *
+     * 这里把路径里的 `$变量` 当成通配段（`[^/\s]+`）编成模板，任何 `cpu0..cpuN`
+     * 都能命中自己对应的那条原文，不再依赖「顺序」也不再消耗一次性配额。
+     * 只接受**以 `/` 开头且固定部分足够长**的目标，防止 `/$file` 这类模板匹配一切路径。
+     */
+    private val verbatimTemplates = ArrayList<Pair<Regex, String>>()
+
+    /**
+     * 暂存一行「脚本原文行」（来自 `sh -v`），供写失败时回填命令本体。
+     *
+     * 过滤：xtrace 行（`+ …`）、报错行、注释行、不含写重定向的行一律忽略 ——
+     * 只有「看起来真的在往文件写」的原文行才值得配对。
+     */
+    private fun captureVerbatim(line: String) {
+        val t = line.trim()
+        if (t.isEmpty()) return
+        if (isTraceLine(t)) return
+        if (t.startsWith("#")) return
+        // 报错行（`can't create …`）不是命令原文
+        if (deniedWriteRe.containsMatchIn(t)) return
+        // 不含引号外写重定向 → 不是写命令，与本通道无关
+        if (!hasWriteRedirect(t)) return
+        pendingVerbatim = t
+        // 建索引：字面目标走精确表；含 `$变量` 的目标走模板表
+        writeTargets(t).forEach { p ->
+            synchronized(verbatimByTarget) {
+                if (p.contains('$')) {
+                    if (verbatimTemplates.size < MAX_EXTRA_EXEC * 2) {
+                        val re = buildTemplateRegex(p)
+                        if (re != null && verbatimTemplates.none { it.first.pattern == re.pattern }) {
+                            verbatimTemplates.add(re to t)
+                        }
+                    }
+                } else if (!verbatimByTarget.containsKey(p) && verbatimByTarget.size < MAX_EXTRA_EXEC * 2) {
+                    verbatimByTarget[p] = t
+                }
+            }
+        }
+    }
+
+    /**
+     * 【v1.5.7】把一个「含 `$变量` 的写目标」编成路径模板。
+     *
+     * `…/cpu$i/cpufreq/scaling_governor` → `^…/cpu[^/\s]+/cpufreq/scaling_governor$`
+     *
+     * 拒绝建模板的两种情况（避免一条模板配到所有路径、造出假指令）：
+     * ① 不以 `/` 开头（`"$file"` / `"$dir/x"` 这类整体变量，交给「最近一条」兜底）；
+     * ② 去掉变量后固定字符太少（`/$x`），辨识度不足。
+     */
+    private fun buildTemplateRegex(raw: String): Regex? {
+        if (!raw.startsWith("/") || !raw.contains('$')) return null
+        val sb = StringBuilder("^")
+        var i = 0
+        var fixed = 0
+        val n = raw.length
+        while (i < n) {
+            val c = raw[i]
+            if (c == '$') {
+                var j = i + 1
+                if (j < n && raw[j] == '{') {
+                    j++
+                    while (j < n && raw[j] != '}') j++
+                    if (j < n) j++
+                } else {
+                    while (j < n && (raw[j].isLetterOrDigit() || raw[j] == '_')) j++
+                }
+                // 光秃秃的 `$`（后面不是变量名）：按普通字符处理
+                if (j == i + 1) {
+                    sb.append("\\$")
+                    fixed++
+                    i++
+                    continue
+                }
+                sb.append("[^/\\s]+")
+                i = j
+                continue
+            }
+            sb.append(if (c in "\\.^$|?*+()[]{}") "\\$c" else c.toString())
+            if (c != '/') fixed++
+            i++
+        }
+        if (fixed < 8) return null
+        sb.append('$')
+        return Regex(sb.toString())
+    }
+
+    /**
+     * 【v1.5.7】给一个「展开后的真实写入目标」找对应的 `-v` 原文行。
+     *
+     * 顺序：字面精确命中 → 变量模板命中 → null（由调用方决定是否走「最近一条」兜底）。
+     */
+    private fun findVerbatimFor(target: String): String? {
+        synchronized(verbatimByTarget) {
+            verbatimByTarget[target]?.let { return it }
+            for ((re, text) in verbatimTemplates) {
+                if (re.matches(target)) return text
+            }
+        }
+        return null
+    }
+
+    /**
+     * 【v1.5.6 修复 · 拦截结果漏掉大量 `echo x > /sys/...`】
+     *
+     * 真机实测：免 Root（shell 身份）下模块的写内核节点操作会被系统拒绝，此时 xtrace
+     * **只打印两行**：
+     *   `+ >/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`
+     *   `./action.sh[41]: can't create /sys/...: Permission denied`
+     * 命令本体 `+ echo performance` 根本不会出现（重定向失败 → 命令根本没执行）。
+     *
+     * 旧实现遇到这行报错只做「清空片段」，于是这些写入**整条消失** ——
+     * 用户看到的就是「拦截结果里几乎没有 echo> 写节点，而 pm / settings 之类都在」
+     * （后者是外部命令，由 strace 的 execve 通道抓到，不吃 xtrace 的亏）。
+     *
+     * 现在在清空前把挂起的写片段落成「未生效的写入」，保证结果与模块脚本一一对应。
+     */
+    private fun flushDeniedWrites(line: String) {
+        if (!deniedWriteRe.containsMatchIn(line)) return
+        val frags = ArrayList<String>()
+        synchronized(xtracePending) {
+            frags.addAll(xtracePending)
+            xtracePending.clear()
+        }
+        synchronized(pendingLock) {
+            frags.addAll(pendingFragments)
+            pendingFragments.clear()
+        }
+        // 【v1.5.7】取出与之配对的 `-v` 原文行。
+        // 注意：这里**不清空** pendingVerbatim —— `-v` 每执行一行都会重新打印，
+        // 保留它可以让同一个函数里连续的多次写失败（CGO 的 write_val 会被调用二十多次）
+        // 每次都配上原文；只有在 captureVerbatim 读到新的写原文行时才替换。
+        val verbatim = pendingVerbatim
+        var verbatimUsed = false
+        frags.forEach { fragment ->
+            val m = redirectFragmentRe.matchEntire(fragment.trim()) ?: return@forEach
+            val op = m.groupValues[2]
+            val target = m.groupValues[3].trim('\'', '"')
+            if (!op.startsWith(">") || target.isEmpty() || target.startsWith("&")) return@forEach
+            if (isIgnoredEffectTarget(target)) return@forEach
+            val key = "写入|$target"
+            if (effectCmd.containsKey(key)) return@forEach
+            if (effectCmd.size >= MAX_EFFECTS) return@forEach
+            // 【v1.5.7】用 `-v` 原文行还原命令本体（`echo 0 > /sys/...`）。
+            // 之前只写「[未生效] 写入 <路径>」，界面上看不到是哪条命令 → 用户看到的就是
+            // 「echo > 一条都没有」。
+            // 优先按「字面目标」精确匹配原文（脚本里写死的路径最准）；
+            // 匹配不到（目标来自变量）再退回「最近一条原文」，且只配给本次第一条片段，
+            // 避免一条原文被摊到多条片段上造出假指令。
+            val fallback = "[未生效] 写入 $target（被系统拒绝）"
+            val exact = findVerbatimFor(target)
+            val useNearest = exact.isNullOrBlank() && !verbatimUsed && !verbatim.isNullOrBlank()
+            if (useNearest) verbatimUsed = true
+            // 回退文本刻意**不写成可执行的重定向**（不带 `>`），避免这条记录被当成命令再次执行：
+            // 单独一条 `>/sys/...` 会把该节点截断。这里只做“这次尝试过写它”的展示。
+            effectCmd[key] = when {
+                !exact.isNullOrBlank() -> materializeVerbatim(exact, target)
+                useNearest -> materializeVerbatim(verbatim ?: fallback, target)
+                else -> fallback
+            }
+        }
+    }
+
+    /**
+     * 【v1.5.7】把 `-v` 原文行里的「未展开变量目标」替换成本次真实的写入路径。
+     *
+     * `sh -v` 打印的是**变量展开前**的原文，所以循环里的写法会是：
+     *   `echo performance > /sys/devices/system/cpu/cpu$i/cpufreq/scaling_governor 2>/dev/null`
+     * 而 `-x` 与失败报错给出的是展开后的真实路径 `…/cpu0/…`。
+     * 这里用真实 target 把原文里的 `$变量` 目标替换掉，还原成一条能直接读懂的指令。
+     *
+     * 只做「含 `$` 的目标子串替换」，不含变量时原样返回 —— 不会有任何额外改写。
+     */
+    private fun materializeVerbatim(verbatim: String, target: String): String {
+        if (verbatim.isBlank()) return verbatim
+        if (!verbatim.contains('$')) return verbatim
+        val raw = scanRedirectTargets(verbatim)
+        for (p in raw) {
+            if (p != target && p.contains('$')) return verbatim.replace(p, target)
+        }
+        return verbatim
+    }
+
     /** 若该行是纯重定向片段：缓存/丢弃它并返回 true（不作为命令记录）。 */
     private fun consumeRedirectFragment(cmd: String): Boolean {
         val m = redirectFragmentRe.matchEntire(cmd.trim()) ?: return false
@@ -112,6 +541,16 @@ object RuntimeCommandTracer {
         // 只存路径会拼出 `echo x /sys/...` 这种「不是写操作」的假指令，
         // 反而会被 isUselessOutput 当成纯输出丢掉 —— 与修复目标相反。
         val fragment = cmd.trim()
+        // 【1.4.2】顺序 B（命令在前、重定向在后）：上一条纯输出命令刚被丢弃，
+        // 这里立刻把两者拼回一条真实写入，避免真写操作凭空消失。
+        // 已经拼给上一条命令了，**不能再缓存片段** —— 否则它会被拼到后面某条无关命令上，
+        // 造出一条现实中不存在的假指令。
+        val pending = pendingOutputCmd
+        if (pending != null) {
+            pendingOutputCmd = null
+            recordSynthesizedWrite("$pending $fragment")
+            return true
+        }
         synchronized(pendingLock) {
             if (pendingFragments.size < 8 && !pendingFragments.contains(fragment)) {
                 pendingFragments.add(fragment)
@@ -145,7 +584,16 @@ object RuntimeCommandTracer {
      */
     fun onInterleavedStderrLine(line: String) {
         if (line.isBlank()) return
-        if (!isTraceLine(line)) clearRedirectFragments()
+        if (!isTraceLine(line)) {
+            // 【v1.5.7】同 noteXtrace：非 trace 行可能是 `sh -v` 打印的脚本原文行
+            captureVerbatim(line)
+            // 【v1.5.6】被系统拒绝的写入先落成「未生效」项，再清空片段（避免整条消失）
+            flushDeniedWrites(line)
+            // 【1.4.2】非 trace 行同时打断「纯输出命令 → 重定向片段」的相邻关系，
+            // 否则那个暂存命令会被拼到后面某条无关的重定向上，造出假指令。
+            pendingOutputCmd = null
+            clearRedirectFragments()
+        }
     }
 
     /** 只读探测 / 纯文本处理类工具（不含任何写操作时视为探测）。 */
@@ -271,13 +719,94 @@ object RuntimeCommandTracer {
         if (c == ":" || c == "clear" || c == "true" || c == "false") return true
         val firstToken = c.substringBefore(' ').substringBefore('\t').substringAfterLast('/')
         if (firstToken == "echo" || firstToken == "printf") {
-            // 带写重定向或 tee 的是核心写入行为，保留
-            val isWriteOp = c.contains(">") || c.contains("tee ")
-            if (isWriteOp) return false
-            // 无写操作：纯屏幕输出/提示 → 过滤（无论内容是空串、变量还是文本）
-            return true
+            // 【1.4.2 关键修复】以前用 `contains(">")` 判断「是否写操作」，
+            // 于是 `echo '>>开始CPU优化'`（`>>` 在引号里）被当成写文件保留下来，
+            // 而它其实是纯提示 —— 这正是用户看到「只抓到 echo」的直接原因。
+            // 现在只认引号外的真实重定向 / tee（写目标还必须像路径）。
+            //
+            // 【v1.5.5 修复】用户反馈「echo > 就是写入，为什么抓取过滤时被过滤掉」：
+            // 上一版用 writeTargets() 判断，而 writeTargets() 要求目标「像路径」
+            // （`/` 开头 / 含 `/` / `name.ext`），于是 `echo 1 > $OUT`、`echo x > out`
+            // 这类真实写入被判成「纯输出」直接丢掉。现在改用宽松判定：
+            // 只要引号外有真实重定向（不排除变量、裸文件名）就保留。
+            return !hasWriteRedirect(c)
         }
         return false
+    }
+
+    /**
+     * 【v1.5.5】宽松判定：命令里是否存在「引号外的真实写重定向」。
+     *
+     * 与 [writeTargets] 的区别：**不要求目标像路径**（`> $OUT` / `> out` 也算写入），
+     * 只排除 fd 复制（`>&1`）与黑洞/终端（`/dev/null`、`/dev/tty*`）。
+     * 目的：echo / printf 只要真的往某个文件写，就绝不能在抓取阶段被当成「纯输出」丢掉。
+     */
+    private fun hasWriteRedirect(cmd: String): Boolean {
+        var i = 0
+        val n = cmd.length
+        var quote: Char? = null
+        while (i < n) {
+            val ch = cmd[i]
+            if (quote != null) {
+                if (ch == quote) quote = null
+                i++
+                continue
+            }
+            if (ch == '\'' || ch == '"') {
+                quote = ch
+                i++
+                continue
+            }
+            if (ch != '>') {
+                i++
+                continue
+            }
+            var j = i + 1
+            if (j < n && cmd[j] == '>') j++
+            // `>&1` / `2>&1`：fd 复制，不是写文件
+            if (j < n && cmd[j] == '&') {
+                i = j + 1
+                continue
+            }
+            var k = j
+            while (k < n && cmd[k].isWhitespace()) k++
+            var m = k
+            while (m < n && !cmd[m].isWhitespace() && cmd[m] !in ";|&<>()") m++
+            val tgt = cmd.substring(k, m).trim('\'', '"')
+            if (tgt.isNotEmpty() && !isIgnoredEffectTarget(tgt)) return true
+            i = if (m > i) m else i + 1
+        }
+        // `| tee [-a] path`
+        if (TEE_TARGET_RE.containsMatchIn(cmd)) return true
+        return false
+    }
+
+    /**
+     * 该行是否是「可能被 mksh 拆到重定向前面的纯输出命令」（echo / printf，且无真实写入）。
+     * 只有这种行需要在 [pendingOutputCmd] 里暂存一行，等紧随的重定向片段拼回。
+     */
+    private fun isRedirectableOutput(cmd: String): Boolean {
+        val first = cmd.trim().substringBefore(' ').substringAfterLast('/')
+        if (first != "echo" && first != "printf") return false
+        // 【v1.5.5】用宽松判定：只要已经带了真实重定向，就不需要再等片段拼回
+        return !hasWriteRedirect(cmd)
+    }
+
+    /**
+     * 【1.4.2】顺序 B 回补：把「被丢弃的纯输出命令 + 紧随其后的重定向片段」合成一条真实写入。
+     *
+     * 合成输入全部来自真实抓到的 trace 行，不会凭空产生指令；
+     * 片段与命令之间若插入了任何非 trace 行，[onInterleavedStderrLine] 会清掉暂存，避免错拼。
+     */
+    private fun recordSynthesizedWrite(cmd: String) {
+        writeTargets(cmd).forEach { path ->
+            val key = "写入|" + path
+            if (!effectCmd.containsKey(key) && effectCmd.size < MAX_EFFECTS) effectCmd[key] = cmd
+        }
+        if (captured.size >= 800) return
+        if (!seen.add(cmd)) return
+        if (!seenTemplate.add(toTemplate(cmd))) return
+        captured.add(cmd)
     }
 
     /**
@@ -345,9 +874,21 @@ object RuntimeCommandTracer {
         if (consumeRedirectFragment(cmd)) return
         val redirects = drainRedirectFragments()
         if (redirects.isNotEmpty()) cmd = "$cmd ${redirects.joinToString(" ")}"
+        // 【1.4.2】混淆打分：输入是「我们抓到的真实执行行」，不是模块脚本原文。
+        // 命中阈值会自动升级到 STRICT 并把已抓到的行重放一遍。
+        scoreObfuscation(cmd)
         // 【v1.4.1】过滤无实际用途的纯输出（echo ""/echo 裸/提示文本等），
-        // 但 `echo > file` 这类写操作保留。
-        if (isUselessOutput(cmd)) return
+        // 但 `echo > file` 这类写操作保留（现在按「引号外的重定向」判定）。
+        if (isUselessOutput(cmd)) {
+            // 【1.4.2】顺序 B：mksh 有可能把命令打在重定向片段**之前**
+            // （`+ echo 1` 然后 `+ >/sys/...`）。此时先暂存这一行，
+            // 等紧随其后的重定向片段来拼回真实写入；拼不上就当纯提示丢弃。
+            pendingOutputCmd = if (isRedirectableOutput(cmd)) cmd else null
+            return
+        }
+        // 非纯输出的真实命令：打断「纯输出命令 → 重定向片段」的相邻关系，
+        // 避免那个暂存行被拼到后面某条无关的重定向上（会造出假指令）。
+        pendingOutputCmd = null
         // 【v1.4.2 关键修复 · 混淆模块「大量与模块无关的指令」】
         // xtrace 通道会把脚本执行的**每一行**都打印出来：变量赋值、`[ ]` 条件判断、
         // for/while 循环头、函数定义……未混淆的小脚本行数少，问题不明显；
@@ -356,18 +897,23 @@ object RuntimeCommandTracer {
         // 因此 xtrace 通道统一过滤脚手架；真外部命令由 strace 通道（execve）负责，
         // 这里过滤不会丢失核心指令。
         if (isXtraceScaffold(cmd)) return
-        // 【v1.4.7 新增】只读探测 / 纯文本处理类（cat/getprop/grep/awk/sed 无 -i …）
-        // 不再逐条进入核心指令流，改为同类聚合后在 toPromptBlock() 末尾单独列出：
-        // 信息不丢，核心动作不被淹没。
-        if (isReadOnlyProbe(cmd)) {
-            recordProbe(cmd)
-            return
+        // 【1.4.2 自适应】以下三项重过滤只在 STRICT（混淆 / 加密模块）启用。
+        // 未混淆模块走 LENIENT：真实业务指令（chmod / cp / cat / getprop /
+        // settings / pm list …）全部保留，只过滤非命令的脚手架与纯提示输出。
+        if (mode == FilterMode.STRICT) {
+            // 【v1.4.7 新增】只读探测 / 纯文本处理类（cat/getprop/grep/awk/sed 无 -i …）
+            // 不再逐条进入核心指令流，改为同类聚合后在 toPromptBlock() 末尾单独列出：
+            // 信息不丢，核心动作不被淹没。
+            if (isReadOnlyProbe(cmd)) {
+                recordProbe(cmd)
+                return
+            }
+            if (isNoise(cmd)) return
+            // 复用 strace 通道的强黑名单：sh -x（xtrace）同样会抓到大量 rm -rf、
+            // chmod 777、mkdir、cp、tar、base64、grep/sed/awk 等「解析/部署/文本处理」噪声，
+            // 若不与 strace 通道统一过滤，这些会淹没 am/cmd/pm/setprop/mount 等核心指令。
+            if (isStraceNoise(cmd)) return
         }
-        if (isNoise(cmd)) return
-        // 复用 strace 通道的强黑名单：sh -x（xtrace）同样会抓到大量 rm -rf、
-        // chmod 777、mkdir、cp、tar、base64、grep/sed/awk 等「解析/部署/文本处理」噪声，
-        // 若不与 strace 通道统一过滤，这些会淹没 am/cmd/pm/setprop/mount 等核心指令。
-        if (isStraceNoise(cmd)) return
         if (captured.size >= 800) return
         if (!seen.add(cmd)) return
         // 【v1.4.1】模板级去重：循环里变量展开后的同模式命令只保留第一条，
@@ -397,12 +943,20 @@ object RuntimeCommandTracer {
         if (c.isEmpty()) return true
         // ① 带写重定向 / tee 的一律保留（真实写入内核节点、配置文件）
         if (c.contains(">") || c.contains("| tee ") || c.contains("tee -")) return false
+        // ①-2 【v1.5.2】`[` / `]` 是 glob 特殊字符，mksh 的 xtrace 会给它加引号打印，
+        // 而且可能与后一个 token 粘连（真机抓到的形态：`'['2000 -ne0 ']'`）。
+        // 只看首 token 会漏，故用整串正则兜住 `'[' 2000 …`、`'['2000 …`、`[ 2000 …`、`[[ …`。
+        if (REGEX_TEST_STMT.containsMatchIn(c)) return true
         // ② 变量赋值（含 export/local/declare/readonly/typeset 前缀，含数组下标与 +=）
         if (Regex("^(export\\s+|local\\s+|declare\\s+|readonly\\s+|typeset\\s+)?[A-Za-z_][A-Za-z0-9_]*(\\[[^\\]]*\\])?(\\+)?=")
                 .containsMatchIn(c)
         ) return true
+        // 【v1.5.2 修复】首 token 先剥掉引号：mksh 的 xtrace 会把 `[` / `]` 这类特殊字符
+        // 打印成 `'['` / `']'`，不剥引号时首 token 是 `'['`、不等于 `[`，
+        // `[ ... ]` 纯判断行就逃过了第 ⑤ 条判定。
+        // 真实截图（加密模块）：`'['2000 -ne0 ']'` 直接占了「真实指令」的第 1 条。
         val first = c.split(Regex("[\\s;]+"), limit = 2).firstOrNull()
-            ?.substringAfterLast('/') ?: ""
+            ?.substringAfterLast('/')?.trim('\'', '"') ?: ""
         // ③ 控制结构关键字
         if (first in setOf(
                 "if", "then", "else", "elif", "fi",
@@ -462,6 +1016,10 @@ object RuntimeCommandTracer {
         clearRedirectFragments()
         val cmd = StraceHelper.parseExecveLine(line) ?: return
         if (cmd.isBlank()) return
+        // 【1.4.3】混淆判定必须覆盖 strace（execve）通道：加密壳通过外部进程
+        // （base64 / xxd / gzip …）解密，这些行只出现在 execve 通道。若只在 xtrace
+        // 通道评分，加密模块会永远停在 LENIENT，壳的中间产物就会被当成业务指令留下来。
+        scoreObfuscation(cmd)
         // 【v1.4.3 修复 · 撤销 v1.4.2 在此处对 isUselessOutput 的调用（过度过滤）】
         //
         // 原因：execve 行**天然丢失写重定向** —— parseExecveLine 只取 argv，
@@ -479,12 +1037,14 @@ object RuntimeCommandTracer {
         // 【v1.4.7 修复】只读探测类（cat/grep/ls/getprop/ps/awk/sed 无写入…）原先会
         // 逐条进入核心指令流：混淆壳的探测阶段能刷出上百条，把真正的核心动作淹没。
         // 现在改为「不丢弃、不逐条」——归入同类聚合区块（toPromptBlock() 末尾单独列出）。
-        if (isReadOnlyProbe(cmd)) {
-            recordProbe(cmd)
-            return
+        if (mode == FilterMode.STRICT) {
+            if (isReadOnlyProbe(cmd)) {
+                recordProbe(cmd)
+                return
+            }
+            // 非只读工具：过窄黑名单（纯解密/解包链）后保留。
+            if (isStraceNoise(cmd)) return
         }
-        // 非只读工具：过窄黑名单（纯解密/解包链）后保留。
-        if (isStraceNoise(cmd)) return
         if (captured.size >= 800) return
         if (!seen.add(cmd)) return
         // 【v1.4.1】模板级去重（同 addTrace）
@@ -596,11 +1156,21 @@ object RuntimeCommandTracer {
     /** 每条后果上限（独立预算：与噪声条数彻底解耦，不再被 800 上限挤掉） */
     private const val MAX_EFFECTS = 200
 
+    /** strace 通道展示副本上限（独立预算，不与 captured 的 800 争名额） */
+    private const val MAX_STRACE_CMDS = 600
+
     /** 写意图上限 */
     private const val MAX_INTENTS = 200
 
     /** 原始 xtrace 行缓存上限（仅用于给后果回填命令文本） */
     private const val MAX_XTRACE_RAW = 3000
+
+    /**
+     * 【v1.5.7】影响报告里「其余真实执行指令」的展示上限。
+     *
+     * 独立预算：只限制展示条数，不动采集上限（captured 的 800 条仍然照旧）。
+     */
+    private const val MAX_EXTRA_EXEC = 200
 
     /** 后果：key = 动作|目标（对象级去重，`for` 循环写三个路径就是三条） */
     private val effectCmd = LinkedHashMap<String, String>()
@@ -611,6 +1181,22 @@ object RuntimeCommandTracer {
     /** 已执行的外部命令（保序去重），用于统计「未产生变更」的条数 */
     private val execOrder = LinkedHashSet<String>()
 
+    /**
+     * 【v1.5.2 修复 · 只给混淆/加密模块用】strace（execve）通道抓到的命令副本。
+     *
+     * v1.9.1「后果优先」重构把 [addStraceEvent] 抓到的 execve 命令只塞进 [execOrder] 统计桶、
+     * 再没有进入过任何展示出口，于是**加密模块**（payload 在子 shell 里跑、`sh -x` 看不进去）
+     * 的真实动作（`axeron-dpm suspend …` / `pm disable-user …`）被整体丢弃，
+     * 界面上只剩壳最外层的几行脚手架。
+     *
+     * 这里补一份副本；**是否输出由 [narrowOutput] 决定** —— 普通模块（LENIENT 且无解密链）
+     * 完全不读它，行为与修复前逐字节一致。
+     */
+    private val straceCmds = LinkedHashSet<String>()
+
+    /** strace 通道里出现过的「解密 / 解包 / 编码」类别（仅用于识别加密模块，不参与过滤打分）。 */
+    private val straceCryptoSeen = HashSet<String>()
+
     /** xtrace 原始行（只增不删，供后果回填命令文本） */
     private val xtraceRaw = ArrayList<String>()
     private val xtraceRawSeen = HashSet<String>()
@@ -620,9 +1206,6 @@ object RuntimeCommandTracer {
 
     /** 一条核心项：动作描述 + 命中的命令原文 */
     private data class CoreItem(val action: String, val cmd: String)
-
-    /** `> path` / `>> path` / `2> path`；`>&1` 因目标以 `&` 开头被排除。 */
-    private val REDIRECT_TARGET_RE = Regex("""(?:^|[^0-9&>])>{1,2}\s*([^\s;|&<>()]+)""")
 
     /** `| tee path` / `| tee -a path` */
     private val TEE_TARGET_RE = Regex("""\|\s*tee\s+(?:-[a-zA-Z]+\s+)*([^\s;|&<>]+)""")
@@ -640,7 +1223,21 @@ object RuntimeCommandTracer {
         if (line.isBlank()) return
         val cmd = StraceHelper.parseExecveLine(line)
         if (cmd != null) {
-            if (cmd.isNotBlank() && execOrder.size < 4000) execOrder.add(cmd)
+            if (cmd.isNotBlank()) {
+                if (execOrder.size < 4000) execOrder.add(cmd)
+                // 【v1.5.2 修复 · 加密模块真指令被丢弃】
+                // v1.9.1 重构后 execve 命令只进 execOrder（统计桶），没有任何展示出口；
+                // 而加密模块的 payload 在子 shell 里跑、`sh -x` 看不进去，真动作**只**在这里。
+                // 故补一份展示副本，是否输出由 [narrowOutput] 决定（普通模块不读）。
+                synchronized(straceCmds) {
+                    if (straceCmds.size < MAX_STRACE_CMDS) straceCmds.add(cmd)
+                    // 只把「解密/解包/编码」工具当作「这是加密模块」的证据：
+                    // 不做打分、不改 mode，避免影响普通模块的过滤口径。
+                    CRYPTO_PATTERNS.forEach { (regex, name) ->
+                        if (regex.containsMatchIn(cmd)) straceCryptoSeen.add(name)
+                    }
+                }
+            }
             return
         }
         // 阶段②（打开 openat/unlinkat/renameat/mount）时才会命中这里；
@@ -672,7 +1269,13 @@ object RuntimeCommandTracer {
      */
     fun noteXtrace(line: String) {
         if (!isTraceLine(line)) {
+            // 【v1.5.7】先把它当作可能的 `sh -v` 脚本原文行暂存（写失败时用来还原命令本体，
+            // 见 captureVerbatim / flushDeniedWrites）。
+            captureVerbatim(line)
+            // 【v1.5.6】清空前先把「被系统拒绝的写入」落成未生效项（见 flushDeniedWrites）。
+            flushDeniedWrites(line)
             // 非 trace 行会打断「重定向 → 命令」的相邻关系，丢弃未匹配片段
+            pendingOutputCmd = null
             synchronized(xtracePending) { xtracePending.clear() }
             return
         }
@@ -686,6 +1289,20 @@ object RuntimeCommandTracer {
             if (op.startsWith(">") && target.isNotEmpty() &&
                 !target.startsWith("&") && !isIgnoredEffectTarget(target)
             ) {
+                // 【1.4.2】顺序 B 回补：命令在前、重定向在后时补记写入后果。
+                // 这里只 peek 不清空（随后 addTrace 会合成并消费它）；
+                // 已回补过的片段**不缓存**，否则会被拼到后面无关命令上。
+                val pending = pendingOutputCmd
+                if (pending != null) {
+                    val full = "$pending $body"
+                    writeTargets(full).forEach { path ->
+                        val key = "写入|" + path
+                        if (!effectCmd.containsKey(key) && effectCmd.size < MAX_EFFECTS) {
+                            effectCmd[key] = full
+                        }
+                    }
+                    return
+                }
                 synchronized(xtracePending) {
                     if (xtracePending.size < 8 && !xtracePending.contains(body)) xtracePending.add(body)
                 }
@@ -697,6 +1314,9 @@ object RuntimeCommandTracer {
             xtracePending.clear()
             f
         }
+        // 非片段的真实命令：打断「纯输出命令 → 重定向片段」的相邻关系，
+        // 避免暂存行被拼到后面某条无关的重定向上（会造出假指令）。
+        pendingOutputCmd = null
         val full = if (frags.isEmpty()) body else (body + " " + frags.joinToString(" ")).trim()
         // 1) 写入目标（真实写后果）
         writeTargets(full).forEach { path ->
@@ -718,22 +1338,86 @@ object RuntimeCommandTracer {
      */
     private fun writeTargets(cmd: String): List<String> {
         val out = ArrayList<String>()
-        for (m in REDIRECT_TARGET_RE.findAll(cmd)) {
-            val p = m.groupValues[1]
-            if (p.isNotBlank() && !isIgnoredEffectTarget(p)) out.add(p)
+        // ① 引号外的 `>` / `>>`（`>&1`、`/dev/null`、`/dev/tty*` 不算）
+        scanRedirectTargets(cmd).forEach { p ->
+            if (!isIgnoredEffectTarget(p)) out.add(p)
         }
-        for (m in TEE_TARGET_RE.findAll(cmd)) {
-            val p = m.groupValues[1]
-            if (p.isNotBlank() && !isIgnoredEffectTarget(p)) out.add(p)
-        }
+        // ② `sed -i` 就地写
         if (SED_INPLACE_RE.containsMatchIn(cmd)) {
             val last = cmd.split(' ').lastOrNull { it.isNotBlank() && !it.startsWith("-") }
-            // 必须像个路径：绝对路径，或含 `/` 且不带引号（排除 `sed -i 's/a/b/'` 这种无文件参数）
-            val looksLikePath = last != null &&
-                (last.startsWith("/") || (last.contains("/") && !last.contains("'") && !last.contains("\"")))
-            if (looksLikePath && last != null && !last.contains("=") && !isIgnoredEffectTarget(last)) out.add(last)
+                ?.trim('\'', '"')
+            val looksLikePath = last != null && (
+                last.startsWith("/") || last.startsWith("./") || last.startsWith("../") ||
+                    (last.contains('/') && !last.contains(' ') && !last.startsWith("s/"))
+                )
+            if (looksLikePath && last != null && !last.contains("=") && !isIgnoredEffectTarget(last)) {
+                out.add(last)
+            }
         }
         return out
+    }
+
+    /**
+     * 【1.4.2 关键修复】按「引号外」扫描真实写重定向目标。
+     *
+     * 旧实现用正则 `(?:^|[^0-9&>])>{1,2}\s*([^\s;|&<>()]+)` 直接扫文本、不认引号 ——
+     * `echo '>>开始CPU优化'` 里的 `>>` 被当成写重定向，目标被记成 `开始CPU优化`，
+     * 于是「纯提示行」被算成了「写文件」的核心动作（用户看到"只抓到 echo"的直接原因）。
+     *
+     * 现在逐字符扫描、跳过引号内容，且目标必须像路径（`/` 开头、含 `/` 或 `name.ext`），
+     * 避免把提示文本里的符号误判成写入对象。
+     */
+    private fun scanRedirectTargets(cmd: String): List<String> {
+        val out = ArrayList<String>()
+        var i = 0
+        val n = cmd.length
+        var quote: Char? = null
+        while (i < n) {
+            val ch = cmd[i]
+            if (quote != null) {
+                if (ch == quote) quote = null
+                i++
+                continue
+            }
+            if (ch == '\'' || ch == '"') {
+                quote = ch
+                i++
+                continue
+            }
+            if (ch != '>') {
+                i++
+                continue
+            }
+            var j = i + 1
+            if (j < n && cmd[j] == '>') j++
+            // `>&1` / `2>&1`：fd 复制，不是写文件
+            if (j < n && cmd[j] == '&') {
+                i = j + 1
+                continue
+            }
+            var k = j
+            while (k < n && cmd[k].isWhitespace()) k++
+            var m = k
+            while (m < n && !cmd[m].isWhitespace() && cmd[m] !in ";|&<>()") m++
+            val tgt = cmd.substring(k, m).trim('\'', '"')
+            if (tgt.isNotEmpty() && looksLikePath(tgt)) out.add(tgt)
+            i = if (m > i) m else i + 1
+        }
+        // `| tee [-a] path`
+        TEE_TARGET_RE.findAll(cmd).forEach { mt ->
+            val t = mt.groupValues[1].trim('\'', '"')
+            if (t.isNotEmpty() && looksLikePath(t)) out.add(t)
+        }
+        return out.distinct()
+    }
+
+    /** 目标是否像文件 / 内核节点路径（避免把普通词误判成写入对象）。 */
+    private fun looksLikePath(p: String): Boolean {
+        if (p.isEmpty() || p.contains(' ')) return false
+        if (p.startsWith("/") || p.startsWith("./") || p.startsWith("../")) return true
+        if (p.contains('/')) return true
+        // 相对文件名：out.log / config.bak
+        return Regex("^[A-Za-z0-9_.\\-]+\\.[A-Za-z0-9]{1,8}$").matches(p)
     }
 
     /** 这些目标的「写入」没有业务含义（黑洞、终端、自身状态、trace 日志）。 */
@@ -836,6 +1520,101 @@ object RuntimeCommandTracer {
     }
 
     /**
+     * 【v1.5.7 关键修复 · 「一个模块只能拦截到那么几条固定指令」】
+     *
+     * 旧实现：`toDisplayBlock()` / `toPromptBlock()` 只要 `effectBlock()` 非空就**整段返回**，
+     * 把 [captured]（xtrace 抓到的全部真实执行指令）直接丢弃。
+     *
+     * 后果（真机可复现）：CGO 这类模块的「预演沙箱写意图」有几十条（`cmd …` / `settings put …` /
+     * `su …`），影响清单立刻非空 → 界面上只剩这几类「固定指令」，
+     * 而 `echo x > /sys/...`、`find …`、`chmod …` 等真实执行过的命令**一条都不显示**。
+     * 用户看到的就是「漏了非常多 echo > 命令，只拦截到那么几条固定的」。
+     *
+     * 现在：影响清单在前（后果优先，保持原口径），后面**追加**清单之外的真实执行指令。
+     * 只改展示，不改采集过滤，也不会把已抓到的指令丢掉。
+     */
+    private fun executedExtraBlock(items: List<CoreItem>): String {
+        val listed = HashSet<String>()
+        items.forEach { if (it.cmd.isNotBlank()) listed.add(it.cmd) }
+        listed.addAll(writeIntents)
+        val extra = captured.toList().filter { it.isNotBlank() && !listed.contains(it) }
+        if (extra.isEmpty()) return ""
+        val shown = if (extra.size > MAX_EXTRA_EXEC) extra.subList(0, MAX_EXTRA_EXEC) else extra
+        val omitted = extra.size - shown.size
+        val sb = StringBuilder()
+        sb.appendLine()
+        sb.appendLine(
+            "【其余真实执行指令（共 ${extra.size} 条" +
+                (if (omitted > 0) "，已省略 $omitted 条" else "") + "）】"
+        )
+        shown.forEachIndexed { i, cmd -> sb.appendLine("  ${i + 1}. $cmd") }
+        return sb.toString().trimEnd()
+    }
+
+    /**
+     * 【v1.5.2 修复】是否使用「混淆 / 加密模块」的展示口径。
+     *
+     * 判定条件（任一成立）：
+     *  1. 过滤强度已自动升级到 [FilterMode.STRICT]；
+     *  2. strace（execve）通道里出现了 ≥2 类解密 / 解包 / 编码工具 ——
+     *     这是加密壳的硬证据，且**不需要改动 score/mode**，因此不会影响普通模块。
+     *
+     * 普通模块两条都不成立，[outputCommands] 会原样返回 captured，行为与修复前一致。
+     */
+    private fun narrowOutput(): Boolean {
+        if (encryptedHint) return true
+        if (mode == FilterMode.STRICT) return true
+        return synchronized(straceCmds) { straceCryptoSeen.size } >= OBF_ESCALATE_AT
+    }
+
+    /**
+     * 【v1.5.2】本次采集是否判定为「混淆 / 加密模块」。
+     *
+     * 供调用方在分析阶段结束后留存结论（加密模块的真指令只在分析阶段的 strace 通道里，
+     * 真实运行段只有 `sh -x`，拿不到 payload 内部的命令）。
+     */
+    fun isEncryptedModule(): Boolean = narrowOutput()
+
+    /**
+     * 【v1.5.2 修复】输出用的命令流（供界面展示 / 喂 AI / 落盘）。
+     *
+     * - 普通模块：**原样返回 captured**（逐字节不变）；
+     * - 混淆 / 加密模块：captured 只能看到壳最外层几行（payload 在子 shell 里跑），
+     *   真正的动作只存在于 strace 的 execve 通道，这里把它按真实顺序补在其后。
+     *
+     * 注意：本函数只改「展示什么」，**不参与采集过滤**，不会减少任何已抓到的业务指令。
+     */
+    private fun outputCommands(): List<String> {
+        val base = captured.toList()
+        if (!narrowOutput()) return base
+        // 【v1.5.3 · 混淆/加密模块恢复 v1.4.0 输出口径】
+        // v1.4.0 的两个出口只有两种结果：
+        //   ① coreItems()（= 预演沙箱拦下的真实写命令 + 后果项）非空 → 只给这些；
+        //   ② 一条都没有 → 原样给 captured。
+        // 中间没有任何展示层剔除，也不把 strace(execve) 副本追加进来。
+        // 之前的实现（v1.4.1 起）在加密模块上额外套了 isStraceDisplayRejected，
+        // 把 captured 里仅剩的壳入口一并剔掉，最终两者皆空 →
+        // 界面直接显示「本次未捕获到可解析的真实执行指令」，即用户看到的"更离谱"。
+        val items = coreItems()
+        if (items.isNotEmpty()) {
+            return items.map { if (it.cmd.isNotBlank()) it.cmd else "[" + it.action + "]" }
+        }
+        return base
+    }
+
+    /**
+     * 【v1.5.3】原「展示层剔除壳脚手架」的判定已删除（isStraceDisplayRejected / 临时目录正则）。
+     *
+     * 原因：用户要求「混淆/加密模块的拦截结果恢复成 v1.4.0 那样」，而 v1.4.0 的口径是
+     * **不做展示层剔除**：
+     *   - 有沙箱写意图 / 后果 → 直接给这些真实写命令；
+     *   - 一条都没有 → 原样给 captured（哪怕里面是壳的入口）。
+     * 继续剔除会让两个出口同时变空，界面只剩「本次未捕获到可解析的真实执行指令」这句提示，
+     * 反而比 v1.4.0 更差。采集期过滤（[isXtraceScaffold] / [isReadOnlyProbe] / [isStraceNoise]）
+     * 一字未改，因此这里不会再减少任何已抓到的业务指令。
+     */
+
+    /**
      * 读取本次采集到的「核心动作」命令文本（供喂 AI / 落盘 / 卸载回滚脚本生成）。
      *
      * 【v1.5.0】优先返回「后果 / 写意图」对应的命令原文；没有任何后果证据时回退旧的
@@ -843,8 +1622,32 @@ object RuntimeCommandTracer {
      */
     fun snapshot(): List<String> {
         val items = coreItems()
-        if (items.isEmpty()) return captured.toList()
-        return items.map { if (it.cmd.isNotBlank()) it.cmd else "[${it.action}]" }
+        // 【v1.5.2】输出统一走 [outputCommands]：普通模块与 captured 逐字节一致；
+        // 混淆/加密模块把 strace（execve）通道的真指令补回来（此前被整体丢弃）。
+        val cmds = outputCommands()
+        // ① 没有任何后果证据：直接给抓到的命令流
+        if (items.isEmpty()) return cmds
+        // ② 有后果证据：以「模块对系统的影响」为主（与上一版口径一致），
+        // 但补上**没有写入后果的业务指令**（settings / pm / am / setprop / axeron-dpm …）——
+        // 旧实现「只返回后果项」会把它们整段漏掉，而把 captured 全量倒出来又会带出壳的中间产物。
+        val out = ArrayList<String>(items.size + cmds.size)
+        val effectCmds = HashSet<String>()
+        items.forEach { item ->
+            if (item.cmd.isNotBlank()) {
+                effectCmds.add(item.cmd)
+                if (out.none { it == item.cmd }) out.add(item.cmd)
+            } else {
+                out.add("[" + item.action + "]")
+            }
+        }
+        cmds.forEach { c ->
+            if (c.isNotBlank() && !effectCmds.contains(c) &&
+                writeTargets(c).isEmpty() && out.none { it == c }
+            ) {
+                out.add(c)
+            }
+        }
+        return out
     }
 
     /**
@@ -854,14 +1657,17 @@ object RuntimeCommandTracer {
      * 一条后果证据都没有时才回退旧格式，保证不出现空结果。
      */
     fun toPromptBlock(): String {
+        val items = coreItems()
         val block = effectBlock(withSummary = true)
-        if (block.isNotBlank()) return block
+        // 【v1.5.7】影响清单之后**追加**其余真实执行指令（不再整段遮蔽 captured）
+        if (block.isNotBlank()) return block + executedExtraBlock(items)
         return legacyPromptBlock()
     }
 
     /** 旧格式（核心指令流 + 环境探测聚合）。仅在「没有任何后果证据」时兜底。 */
     private fun legacyPromptBlock(): String {
-        val snapshot = captured.toList()
+        // 【v1.5.2】加密模块在这里补回 strace 通道的真指令（普通模块与 captured 一致）
+        val snapshot = outputCommands()
         val probes = probeBlock()
         // 【v1.4.7】核心指令 + 环境探测（聚合）双区块输出：
         // 核心指令在前（AI 优先读），探测在后（同类已聚合，避免噪声淹没核心）。
@@ -904,14 +1710,17 @@ object RuntimeCommandTracer {
      */
     fun toDisplayBlock(): String {
         // 【v1.5.0 后果优先】界面与 AI 用同一份「影响报告」，避免两边说法不一致。
+        val items = coreItems()
         val block = effectBlock(withSummary = false)
-        if (block.isNotBlank()) return block
+        // 【v1.5.7】影响清单之后**追加**其余真实执行指令（不再整段遮蔽 captured）
+        if (block.isNotBlank()) return block + executedExtraBlock(items)
         return legacyDisplayBlock()
     }
 
     /** 旧格式（仅核心指令流）。没有任何后果证据时兜底。 */
     private fun legacyDisplayBlock(): String {
-        val list = captured.toList()
+        // 【v1.5.2】加密模块在这里补回 strace 通道的真指令（普通模块与 captured 一致）
+        val list = outputCommands()
         if (list.isEmpty()) {
             return "（本次运行未捕获到真实执行指令）"
         }
@@ -927,28 +1736,23 @@ object RuntimeCommandTracer {
     fun hasTrace(): Boolean =
         captured.isNotEmpty() || effectCmd.isNotEmpty() || writeIntents.isNotEmpty()
 
-    /** 开始一次新的采集（清空历史） */
-    fun begin() {
-        captured.clear()
-        seen.clear()
-        // 【v1.4.1】模板去重集合必须同步清空，否则跨次运行会误杀本次的新指令
-        seenTemplate.clear()
-        // 【v1.4.7】聚合的探测数据同样必须清空，否则上一次运行的探测会串到本次结果里
-        synchronized(probeLock) {
-            probeCounts.clear()
-            probeSamples.clear()
-        }
-        // 【v1.4.8】重定向片段缓存也必须清空，避免上一轮残留的 `>/path` 拼到本轮第一条命令上
-        clearRedirectFragments()
-        // 【v1.5.0】后果优先采集的所有状态一并清空，避免上一次运行的后果串到本次结果里
-        effectCmd.clear()
-        writeIntents.clear()
+    /**
+     * 开始一次新的采集（清空历史）。
+     *
+     * @param forceMode 传 null = 自适应：起始 [FilterMode.LENIENT]（少过滤），
+     *   抓到混淆特征自动升级 [FilterMode.STRICT] 并重放已抓到的行；
+     *   传 [FilterMode.STRICT] 可强制走重过滤方案（调试用）。
+     */
+    fun begin(forceMode: FilterMode? = null, encryptedHint: Boolean = false) {
+        mode = forceMode ?: FilterMode.LENIENT
+        // 【v1.5.2】加密模块标记只由调用方显式传入；默认 false，绝不跨轮次残留。
+        this.encryptedHint = encryptedHint
+        obfuscationScore = 0
+        cryptoSeen.clear()
+        scaffoldLines = 0
+        scoredLines = 0
         execOrder.clear()
-        synchronized(xtraceRaw) {
-            xtraceRaw.clear()
-            xtraceRawSeen.clear()
-        }
-        synchronized(xtracePending) { xtracePending.clear() }
+        resetDerived()
         enabled = true
     }
 

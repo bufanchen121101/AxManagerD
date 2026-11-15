@@ -982,21 +982,15 @@ object AIConfigStore {
      * reached (49/16)`，实测（2026-10-03）无法使用；后换为实测稳定的
      * `openai/gpt-oss-20b`（开源 20B，不传 max_tokens 的默认请求下 content 即为
      * 最终答案，finish_reason=stop）。
-     *
-     * 【源码脱敏版】所有官方服务地址一律用占位符，源码树里不携带任何真实域名；
-     * 自行部署后把下面常量里的 `Your link` 换成你自己的地址即可。
      */
-    const val AI_URL_PLACEHOLDER = "Your link"
-    /** 判断一个地址是否是可用的 http(s) 地址；占位符 / 空串一律当作「未配置」。 */
-    fun isUsableUrl(u: String?): Boolean =
-        u != null && (u.startsWith("http://") || u.startsWith("https://"))
-    const val OFFICIAL_AI_ENDPOINT = AI_URL_PLACEHOLDER
+    const val OFFICIAL_AI_ENDPOINT = "Your link"
+
     /** 设备注册：校验结果、序列号与参考值一致时，服务端才下发设备密钥。 */
-    const val OFFICIAL_AI_DEVICE_URL = AI_URL_PLACEHOLDER
+    const val OFFICIAL_AI_DEVICE_URL = "Your link"
     /** 查询当前设备的本月额度与剩余 tokens。 */
-    const val OFFICIAL_AI_DEVICE_QUOTA_URL = AI_URL_PLACEHOLDER
+    const val OFFICIAL_AI_DEVICE_QUOTA_URL = "Your link"
     /** 旧日钥端点仅保留给旧版本兼容；服务端默认已关闭。 */
-    const val OFFICIAL_AI_AXKEY_URL = AI_URL_PLACEHOLDER
+    const val OFFICIAL_AI_AXKEY_URL = "Your link"
 
     /** 官方模型默认值（未选择时使用；也是「小模型」档的模型）。 */
     const val OFFICIAL_AI_MODEL = "openai/gpt-oss-20b"
@@ -1094,7 +1088,7 @@ object AIConfigStore {
     val AXKEY_PASS: String by lazy { decodeAxkeyPass(BuildConfig.AXKEY_PASS_BLOB) }
 
     /** 官方默认 AI（中转站）是否可用；设备注册不再依赖包内访问密码。 */
-    val officialAxkeyAvailable: Boolean get() = isUsableUrl(OFFICIAL_AI_DEVICE_URL)
+    val officialAxkeyAvailable: Boolean get() = OFFICIAL_AI_DEVICE_URL.isNotBlank()
 
     /** 与 manager/build.gradle.kts:OFFICIAL_AI_KEY_SEED 严格对应（改一处必须同步改另一处）。 */
     private const val OFFICIAL_AI_KEY_SEED = "frb.axeron.manager|AxManagerD/axkey/v1"
@@ -1116,7 +1110,7 @@ object AIConfigStore {
     enum class AiPurpose { MODULE_DEV, GENERAL }
 
     /** 内置 NVIDIA 直连配置（GENERAL 的默认路由）。 */
-    const val BUILTIN_AI_ENDPOINT = AI_URL_PLACEHOLDER
+    const val BUILTIN_AI_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions"
     const val BUILTIN_AI_MODEL = "openai/gpt-oss-20b"
     const val BUILTIN_AI_PROVIDER = "英伟达 (NVIDIA)"
 
@@ -1141,12 +1135,14 @@ object AIConfigStore {
     private const val BUILTIN_AI_KEY_SEED = "frb.axeron.manager|AxManagerD/ai/builtin/v1"
 
     /**
-     * 【源码脱敏版】原实现这里留了一段「XOR+hex 混淆后的内置密钥」作为兜底。
+     * 内置密钥的密文兜底：构建期未注入（无 local.properties / 无 CI 变量）时使用。
      *
-     * 那段密文是可以被直接解出来的（seed 就在上方常量里），等于把可白嫖的密钥随源码发布，
-     * 因此在公开源码里**已整段删除**，兜底值固定为空串：
-     *   - 想用内置直连，请在构建期通过 local.properties / 环境变量自行注入；
-     *   - 未注入时 [builtinAiAvailable] 为 false，界面会提示「未配置 AI」。
+     * 明文不落源码，源码与 dex 内都只有 XOR+hex 串；解码 seed 见 [BUILTIN_AI_KEY_SEED]。
+     * 原实现留了一份密文兜底，出包不依赖任何 Secret 配置。
+     *
+     * 本发布源码已移除该密文（值为空串）：自行构建时请通过
+     * local.properties 的 builtinAiKey 或环境变量 BUILTIN_AI_KEY 注入自己的密钥，
+     * 未注入时 [builtinAiAvailable] 为 false，内置直连 AI 功能不可用。
      */
     private const val BUILTIN_AI_KEY_BLOB_FALLBACK = ""
 

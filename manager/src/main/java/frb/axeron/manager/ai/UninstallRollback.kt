@@ -144,7 +144,7 @@ object UninstallRollback {
         )
         val clean = commands.filter { cmd ->
             val c = cmd.trim()
-            reversiblePrefixes.any { c.startsWith(it) }
+            reversiblePrefixes.any { c.startsWith(it) } || isFileWriteCommand(c)
         }
         if (clean.isEmpty()) return "（拦截到的指令中无可逆的核心系统操作）"
 
@@ -154,6 +154,52 @@ object UninstallRollback {
             sb.appendLine("${i + 1}. $cmd")
         }
         return sb.toString()
+    }
+
+    /**
+     * 【v1.5.5 需求⑤】判断这条指令是不是「真正往文件写入」。
+     *
+     * 以前白名单只认 `pm ` / `settings ` 这类前缀，`echo xxx > /path/file`、
+     * `printf ... >> $MODPATH/system.prop` 这类文件写入全被当作噪声丢掉，
+     * 用户看到的就是「明明写了文件，回滚清单里却没有」。
+     */
+    private fun isFileWriteCommand(cmd: String): Boolean {
+        var i = 0
+        val n = cmd.length
+        var quote: Char? = null
+        while (i < n) {
+            val ch = cmd[i]
+            if (quote != null) {
+                if (ch == quote) quote = null
+                i++
+                continue
+            }
+            if (ch == '\'' || ch == '"') {
+                quote = ch
+                i++
+                continue
+            }
+            if (ch != '>') {
+                i++
+                continue
+            }
+            var j = i + 1
+            if (j < n && cmd[j] == '>') j++
+            if (j < n && cmd[j] == '&') {
+                i = j + 1
+                continue
+            }
+            var k = j
+            while (k < n && cmd[k].isWhitespace()) k++
+            var m = k
+            while (m < n && !cmd[m].isWhitespace() && cmd[m] !in ";|&<>()") m++
+            val target = cmd.substring(k, m).trim('\'', '"')
+            if (target.isNotEmpty() && target != "/dev/null" && !target.startsWith("/dev/tty")) {
+                return true
+            }
+            i = if (m > i) m else i + 1
+        }
+        return cmd.contains("| tee ") || cmd.contains(" tee ") || cmd.contains(" -i ")
     }
 
     /** 按 dirId 清理该模块产生的日志 + 缓存（恢复执行成功后调用，无需完整 prop）。 */

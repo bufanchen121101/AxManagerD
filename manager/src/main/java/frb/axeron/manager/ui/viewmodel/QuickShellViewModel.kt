@@ -11,28 +11,25 @@ import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rosan.dhizuku.api.Dhizuku
-import com.rosan.dhizuku.api.DhizukuRemoteProcess
 import frb.axeron.api.Axeron
 import frb.axeron.api.AxeronCommandSession
 import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.utils.AnsiFilter
 import frb.axeron.axerish.R
+import frb.axeron.manager.owner.DeviceOwnerPrivilege
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
-import java.io.BufferedReader
-import java.io.BufferedWriter
-import java.io.File
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
+import kotlinx.coroutines.withContext
 
 class QuickShellViewModel(application: Application) : AndroidViewModel(application) {
 
     var session: AxeronCommandSession = AxeronCommandSession()
     private var savedCommand: TextFieldValue? = null
 
-    // Dhizuku terminal session (Device Owner privileged process)
-    private var dhizukuSession: DhizukuProcessSession? = null
+    // 【v1.4.1】终端合并：不再区分 Shizuku / Dhizuku 两个模式，
+    // Dhizuku 侧统一走 axeron-dpm 的 Device Owner 通道（见 [runCommand]）。
 
     init {
         session.setProcessListener(object : AxeronCommandSession.ProcessListener {
@@ -131,14 +128,10 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    // Dhizuku terminal mode
-    var isDhizukuMode by mutableStateOf(false)
-        private set
-
-    // Toggle between Shell / Dhizuku terminals
-    fun toggleTerminalMode() {
-        isDhizukuMode = !isDhizukuMode
-    }
+    // 【v1.4.1】模式标记已移除：合并后的终端自动选择执行通道（见 runCommand）。
+    // 保留一个只读判断，供 UI 显示当前实际通道（不是用户可切换的模式）。
+    val isDhizukuMode: Boolean
+        get() = !Axeron.pingBinder() && isDhizukuGranted()
 
 
     private val _output = MutableSharedFlow<Output>(extraBufferCapacity = 64)
@@ -176,14 +169,11 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun stop() {
-        if (isDhizukuMode) {
-            dhizukuSession?.destroy()
-            dhizukuSession = null
-            isRunning = false
-            execMode = "Commands"
-        } else {
-            session.killSession()
-        }
+        // 【v1.4.1】合并后只剩 Axeron shell 一条常驻通道；
+        // DPM 通道是一次性同步调用（无交互式进程），没有可中断的会话。
+        runCatching { if (Axeron.pingBinder()) session.killSession() }
+        isRunning = false
+        execMode = "Commands"
     }
 
     /**
@@ -192,7 +182,7 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
      * 规则：
      * 1. 空命令（含纯空白）→ 拦截
      * 2. 危险命令（rm -rf /、reboot、format、mkfs、dd 写块设备等）→ 拦截
-     * 3. 未授权 Dhizuku 时（Dhizuku 模式）→ 拦截并提示
+     * 3. 通道是否可用 → 由 [runCommand] 统一判断并给出可操作提示
      */
     private fun blockReason(cmd: String): String? {
         val trimmed = cmd.trim()
@@ -213,10 +203,8 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
             if (isDangerous || rmRoot) return "This command is dangerous and has been blocked."
         }
 
-        // Dhizuku 模式需要授权
-        if (isDhizukuMode && !isDhizukuGranted()) {
-            return "Dhizuku is not authorized. Please activate Dhizuku / Device Owner first."
-        }
+        // 【v1.4.1】Dhizuku 授权判断移到 [runCommand]：权限不足时应提示
+        // 「两种通道都不可用」，而不是在这里按旧模式拦截。
 
         return null
     }
@@ -225,7 +213,16 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
         Dhizuku.init(getApplication()) && Dhizuku.isPermissionGranted()
     }.getOrDefault(false)
 
-    fun runShell() {
+    /**
+     * 【v1.4.1】终端统一执行入口（合并原「Shizuku 终端 / Dhizuku 终端」两个模式）。
+     *
+     * 通道选择（无需用户切换）：
+     *  1. Axeron 服务在运行（shell, uid 2000）→ 直接执行任意命令；
+     *  2. 否则若已授权 Dhizuku → 走 axeron-dpm 同一条 Device Owner 通道
+     *     （[DeviceOwnerPrivilege.execute]，支持 suspend / hide / force-stop 等 DPM 命令）；
+     *  3. 两者都不可用 → 明确提示如何激活。
+     */
+    fun runCommand() {
         val cmd = commandText.text.ifBlank { return }
             .replace(Regex("[^\\p{Print}\n]"), "") // sanitize
 
@@ -235,137 +232,56 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         lastCommandSnapshot = cmd // 供终端 AI 助手读取上下文
-        session.runCommand(cmd, isCompatModeEnabled)
-    }
 
-    fun runDhizuku() {
-        val cmd = commandText.text.ifBlank { return }
-            .replace(Regex("[^\\p{Print}\n]"), "") // sanitize
-
-        blockReason(cmd)?.let { reason ->
-            append(OutputType.TYPE_THROW, "[blocked] $reason")
+        if (Axeron.pingBinder()) {
+            session.runCommand(cmd, isCompatModeEnabled)
             return
         }
-
-        lastCommandSnapshot = cmd // 供终端 AI 助手读取上下文
-        runDhizukuInternal(cmd)
-    }
-
-    private fun runDhizukuInternal(cmd: String) {
-        val session = DhizukuProcessSession(
-            onCreated = { pid ->
-                append(OutputType.TYPE_COMMAND, "[command] $cmd")
-                append(OutputType.TYPE_START, "[start] pid=$pid")
-                commandText = TextFieldValue("")
-                execMode = "Inputs"
-                isRunning = true
-            },
-            onOutput = { append(OutputType.TYPE_STDOUT, it) },
-            onError = { append(OutputType.TYPE_STDERR, it) },
-            onFinished = { exitCode ->
-                append(OutputType.TYPE_EXIT, "[exit] code=$exitCode")
-                append(OutputType.TYPE_SPACE, "")
-                execMode = "Commands"
-                isRunning = false
-                dhizukuSession = null
-            }
+        if (isDhizukuGranted()) {
+            runViaDpm(cmd)
+            return
+        }
+        append(
+            OutputType.TYPE_THROW,
+            "[blocked] AxManagerD 未激活，且 Dhizuku 未授权，无法执行命令。"
         )
-        dhizukuSession = session
-        session.start(cmd)
     }
 
     /**
-     * 基于 Dhizuku.newProcess 的终端会话（Device Owner 特权进程）。
-     * 线程模型参考 AxeronCommandSession：读 stdout/stderr、写 stdin、等待退出。
+     * 通过 axeron-dpm 的 Device Owner 通道执行一条命令（等价于脚本 `axeron-dpm <cmd>`）。
+     *
+     * 注意：该通道只支持 [DeviceOwnerPrivilege] 白名单内的命令，不是任意 shell。
+     * 与旧实现（`Dhizuku.newProcess`）相比，这条路不依赖 Dhizuku 的远程进程，
+     * 在部分机型上更稳定。
      */
-    private inner class DhizukuProcessSession(
-        private val onCreated: (pid: Int) -> Unit,
-        private val onOutput: (String) -> Unit,
-        private val onError: (String) -> Unit,
-        private val onFinished: (exitCode: Int) -> Unit
-    ) {
-        private var process: DhizukuRemoteProcess? = null
-        private var writer: BufferedWriter? = null
+    private fun runViaDpm(cmd: String) {
+        append(OutputType.TYPE_COMMAND, "[command] $cmd")
+        append(OutputType.TYPE_START, "[start] dpm-bridge")
+        commandText = TextFieldValue("")
+        execMode = "Inputs"
+        isRunning = true
 
-        fun start(cmd: String) {
-            Thread {
-                try {
-                    val process = Dhizuku.newProcess(
-                        arrayOf("sh", "-c", cmd),
-                        null,
-                        null
-                    )
-                    this.process = process
-                    this.writer = BufferedWriter(OutputStreamWriter(process.outputStream))
-                    val out = BufferedReader(InputStreamReader(process.inputStream))
-                    val err = BufferedReader(InputStreamReader(process.errorStream))
-
-                    // 触发 onCreated（pid 不可得，用 0 表示远程进程）
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        onCreated(0)
-                    }
-
-                    val outThread = Thread {
-                        try {
-                            val buf = CharArray(8192)
-                            while (true) {
-                                val n = out.read(buf)
-                                if (n == -1) break
-                                val part = String(buf, 0, n)
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    onOutput(part)
-                                }
-                            }
-                        } catch (_: Exception) {
-                        }
-                    }
-                    val errThread = Thread {
-                        try {
-                            val buf = CharArray(8192)
-                            while (true) {
-                                val n = err.read(buf)
-                                if (n == -1) break
-                                val part = String(buf, 0, n)
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    onError(part)
-                                }
-                            }
-                        } catch (_: Exception) {
-                        }
-                    }
-                    outThread.start()
-                    errThread.start()
-
-                    val code = process.waitFor()
-                    outThread.join()
-                    errThread.join()
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        onFinished(code)
-                    }
-                } catch (e: Exception) {
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        onError("Dhizuku process failed: ${e.message}")
-                        onFinished(-1)
-                    }
-                }
-            }.start()
-        }
-
-        fun write(input: String) {
-            try {
-                writer?.let {
-                    it.write(input)
-                    it.newLine()
-                    it.flush()
-                }
-            } catch (_: Exception) {
+        viewModelScope.launch(Dispatchers.IO) {
+            // 允许用户直接输入 `axeron-dpm xxx`，与脚本用法保持一致。
+            val tokens = cmd.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val args = if (tokens.firstOrNull()?.equals("axeron-dpm", true) == true) {
+                tokens.drop(1)
+            } else {
+                tokens
             }
-        }
-
-        fun destroy() {
-            try {
-                process?.destroy()
-            } catch (_: Exception) {
+            val result = runCatching {
+                DeviceOwnerPrivilege.execute(getApplication(), args)
+            }.getOrElse { t ->
+                4 to "Error: ${t.message ?: t.javaClass.simpleName}"
+            }
+            withContext(Dispatchers.Main) {
+                if (result.second.isNotBlank()) {
+                    append(OutputType.TYPE_STDOUT, result.second)
+                }
+                append(OutputType.TYPE_EXIT, "[exit] code=${result.first}")
+                append(OutputType.TYPE_SPACE, "")
+                execMode = "Commands"
+                isRunning = false
             }
         }
     }
@@ -378,11 +294,9 @@ class QuickShellViewModel(application: Application) : AndroidViewModel(applicati
 
     override fun onCleared() {
         super.onCleared()
-        if (isDhizukuMode) {
-            dhizukuSession?.destroy()
-        } else if (Axeron.pingBinder()) {
-            session.killSession()
-        }
+        // 【v1.4.1】合并后只有 Axeron 常驻会话需要清理；
+        // DPM 通道是一次性同步调用，没有可销毁的会话。
+        runCatching { if (Axeron.pingBinder()) session.killSession() }
     }
 }
 

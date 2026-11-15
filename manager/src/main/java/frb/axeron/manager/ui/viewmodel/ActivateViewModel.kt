@@ -33,6 +33,8 @@ import frb.axeron.manager.owner.DeviceOwnerState
 import frb.axeron.manager.owner.NewPermissionPaths
 import frb.axeron.manager.owner.DpDoDirectActivation
 import frb.axeron.manager.owner.DpDoEscalation
+// 【v1.4.1】root 通道工具：绕开被覆写成 "sh axrun || su" 的 libsu 默认 builder。
+import frb.axeron.manager.util.RootLauncher
 // 【v1.3.1】原版 Shizuku 通道修复：主动拉取 binder（详见该类文档）。
 import frb.axeron.manager.shizuku.ShizukuBinderPuller
 import frb.axeron.manager.adb.AdbStarter.stopTcp
@@ -567,14 +569,19 @@ class ActivateViewModel : ViewModel() {
         runCatching {
             if (tryActivate) return@withContext ACTIVATE_PROCESS
             setTryToActivate(true)
-
-            if (!Shell.getShell().isRoot) {
-                Shell.getCachedShell()?.close()
-                return@withContext ACTIVATE_FAILED
-            }
-
-            val result = Shell.cmd(Starter.internalCommand).exec()
-            if (result.isSuccess) {
+            // 【v1.4.1 修复 · root 启动失效】
+            //
+            // 旧实现判据是 `Shell.getShell().isRoot`，再 `Shell.cmd(...)` 执行启动命令。
+            // 但本项目的默认 libsu builder 被覆写成了 `sh -c "sh <axrun 脚本> || su"`
+            // （见 ui/util/AxeronCli.kt），只要 axrun 能跑通，libsu 拿到的是 **Shizuku 身份
+            // 的普通 shell（uid 2000）**，`isRoot` 恒为 false —— 于是「既装 Shizuku 又有 root」
+            // 的设备上这个按钮必然报失败，用户看到的就是「root 启动方案失效」。
+            //
+            // 现在改由 [RootLauncher] 直接用 `su -c` 执行启动命令，不再经过 libsu 的默认
+            // builder，也不依赖 libsu 会话状态；失败自动重试一次。
+            runCatching { Shell.getCachedShell()?.close() }
+            val ok = RootLauncher.run(Starter.internalCommand)
+            if (ok) {
                 AxeronSettings.setLastLaunchMode(AxeronSettings.LaunchMethod.ROOT)
                 ACTIVATE_SUCCESS
             } else {
@@ -583,8 +590,6 @@ class ActivateViewModel : ViewModel() {
         }.getOrElse {
             it.printStackTrace()
             ACTIVATE_FAILED
-        }.also {
-            Shell.getCachedShell()?.close()
         }
     }
 
@@ -1927,33 +1932,88 @@ class ActivateViewModel : ViewModel() {
         }
 
         // 真正的激活。恢复 1 放在 finally 中，保证无论成功失败都执行。
-        var direct: DpDoDirectActivation.ActivationResult
+        //
+        // 【v1.4.3 · 自动重试】用户实测：单次直连经常要手动重来 4~5 次才成功
+        // （DP Role 权限落地、DPM 内部状态刷新都有时序抖动）。
+        // 因此把「失败后由用户手动重来」改为**流程内自动重试**：
+        //   · 总尝试次数最多 5 次（首次 1 次 + 重试 4 次）；
+        //   · 任一次成功 → 立即跳出，不再继续尝试；
+        //   · 5 次全部失败 → 按失败收尾；
+        //   · 无论成功还是最终失败，finally 都把 user_setup_complete 恢复为 1。
+        // ⚠️ 重试循环必须写在 try 内：恢复动作只在整段结束后执行**一次**，
+        //    这样多次尝试期间闸始终保持打开（每次重试前再确认一次置 0）。
+        val maxAttempts = 5
+        val retryDelayMs = 1000L
+        var direct: DpDoDirectActivation.ActivationResult =
+            DpDoDirectActivation.ActivationResult(
+                stage = DpDoDirectActivation.Stage.SET_OWNER_THREW,
+                success = false,
+                message = "尚未执行激活",
+                log = emptyList(),
+            )
         try {
-            post("")
-            post("> 开始非 ADB 直连激活（应用自身身份）...")
-            post("  注：置 0 已由卡片上的「第一步：准备」完成，本流程不重复写入。")
-            // 【v1.6.4】mapdoPrecheck=false：上游已用 isMapdoReady（双通道判据）确认落地，
-            // 避免内部单判据在「权限表刷新延迟」的 ROM 上误判 PERMISSION_MISSING。
-            //
-            // 【v1.8.0】shellSetupValue=shellGateValue：把上面经 Shizuku 回读到的权威闸值
-            // 传进去，让 activate() 内部的向导预检真正生效（否则它用应用自身读 @hide 键，
-            // 恒 false → 预检永远放行，形同虚设）。
-            direct = runCatching {
-                DpDoDirectActivation.activate(
-                    context,
-                    mapdoPrecheck = false,
-                    shellSetupValue = shellGateValue,
-                )
-            }.getOrElse { t ->
-                post("x 激活过程抛出异常：" + (t.message ?: t.toString()))
-                DpDoDirectActivation.ActivationResult(
-                    stage = DpDoDirectActivation.Stage.SET_OWNER_THREW,
-                    success = false,
-                    message = "激活过程异常：" + (t.message ?: t.toString()),
-                    log = emptyList(),
-                )
+            for (attempt in 1..maxAttempts) {
+                post("")
+                if (attempt == 1) {
+                    post("> 开始非 ADB 直连激活（应用自身身份）...")
+                    post("  注：置 0 已由卡片上的「第一步：准备」完成，本流程不重复写入。")
+                } else {
+                    post("> 第 $attempt/$maxAttempts 次尝试（上一次失败，自动重试）...")
+                    // 每次重试前重新确认闸为 0：与「用户手动重来」等价，
+                    // 避免上一次尝试期间该值被系统或其它组件写回 1。
+                    post("  重新确认「开机向导」闸：settings put secure user_setup_complete 0 ...")
+                    val rearmRes = runCatching {
+                        execViaShizuku(DpDoDirectActivation.buildSetSetupCompleteScript(0))
+                    }.getOrElse { Result.failure(it) }
+                    val rearmVal = DpDoDirectActivation.parseSetupCompleteOutput(rearmRes.getOrNull())
+                    if (rearmRes.isSuccess && rearmVal == 0) {
+                        post("  v 闸已确认打开（回读 user_setup_complete=0）")
+                        shellGateValue = 0
+                    } else {
+                        post("  x 重新置 0 失败：" + (rearmRes.exceptionOrNull()?.message
+                            ?: ("回读值=" + (rearmVal?.toString() ?: "未确认"))))
+                        post("  按失败收尾（不再继续重试）")
+                        break
+                    }
+                    post("  等待 ${retryDelayMs}ms 让系统状态稳定后再试 ...")
+                    Thread.sleep(retryDelayMs)
+                }
+                // 【v1.6.4】mapdoPrecheck=false：上游已用 isMapdoReady（双通道判据）确认落地，
+                // 避免内部单判据在「权限表刷新延迟」的 ROM 上误判 PERMISSION_MISSING。
+                //
+                // 【v1.8.0】shellSetupValue=shellGateValue：把上面经 Shizuku 回读到的权威闸值
+                // 传进去，让 activate() 内部的向导预检真正生效（否则它用应用自身读 @hide 键，
+                // 恒 false → 预检永远放行，形同虚设）。
+                direct = runCatching {
+                    DpDoDirectActivation.activate(
+                        context,
+                        mapdoPrecheck = false,
+                        shellSetupValue = shellGateValue,
+                    )
+                }.getOrElse { t ->
+                    post("x 激活过程抛出异常：" + (t.message ?: t.toString()))
+                    DpDoDirectActivation.ActivationResult(
+                        stage = DpDoDirectActivation.Stage.SET_OWNER_THREW,
+                        success = false,
+                        message = "激活过程异常：" + (t.message ?: t.toString()),
+                        log = emptyList(),
+                    )
+                }
+                postAll(direct.log.joinToString("\n"))
+                if (direct.success) {
+                    if (attempt > 1) {
+                        post("v 第 $attempt 次尝试成功（此前失败 ${attempt - 1} 次）")
+                    }
+                    break
+                }
+                if (attempt < maxAttempts) {
+                    post("! 第 $attempt 次尝试失败：" +
+                            direct.message.lineSequence().firstOrNull().orEmpty())
+                    post("  将在 ${retryDelayMs}ms 后自动重试（最多 $maxAttempts 次）")
+                } else {
+                    post("! 第 $attempt 次尝试失败（已达最大尝试次数 $maxAttempts）")
+                }
             }
-            postAll(direct.log.joinToString("\n"))
         } finally {
             // 【v1.7.0】恢复 1 保留：用户在「第一步：准备」里已把闸置 0，设备此刻处于
             // 「系统认为未完成开机向导」状态（三键导航的 Home / 最近任务键失灵），

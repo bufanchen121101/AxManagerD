@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import me.zhanghai.android.appiconloader.coil.AppIconFetcher
 import me.zhanghai.android.appiconloader.coil.AppIconKeyer
 import okhttp3.Cache
+import okhttp3.CertificatePinner
 import okhttp3.OkHttpClient
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.io.File
@@ -74,7 +75,7 @@ open class AxeronApplication : Engine() {
         //       （路径 Android/data/<pkg>/cache/），普通用户几乎无法访问，也没有 UI 入口，
         //       所以「激活成功瞬间闪退」反馈发生时，我们手里没有任何堆栈可查。
         // 做法：**包装**（而不是替换）现有处理器 —— 崩溃时先补写一份到
-        //       externalFilesDir/AxManagerD/logs/crash_<时间戳>.log（与 OverlayLog 同一可取出目录），
+        //       externalFilesDir/AxManagerD/logs/crash_<时间戳>.log（与运行日志同一可取出目录），
         //       然后把异常原样交回原处理器，CrashActivity/杀进程等既有行为完全不变。
         // 隔离性：只在 App 侧追加，不改 api 模块 Engine（公共路径）。
         runCatching {
@@ -112,9 +113,16 @@ open class AxeronApplication : Engine() {
 
 
         okhttpClient =
-            // [脱敏] 原实现这里对该域名做了证书固定(SPKI)，会暴露真实服务域名与证书指纹。
-            // 公开源码中整段移除；需要时请自行加回你自己的域名与 pin。
             OkHttpClient.Builder().cache(Cache(File(cacheDir, "okhttp"), 10 * 1024 * 1024))
+                // [harden] 证书固定(SPKI)：只作用于官方 AI 中转站域名，其它域名不受影响。
+                // 故意不 pin 叶证书（Let's Encrypt 90 天轮换会直接打死客户端），
+                // 而是 pin 当前链上的中间CA + ISRG 根，任一枚命中即通过。
+                .certificatePinner(
+                    CertificatePinner.Builder()
+                        // [source-release] service host redacted to "Your link"; SPKI pin removed.
+                        // Replace "Your link" with your own endpoint and add your own pins if needed.
+                        .build()
+                )
                 // AI 推理（尤其 reasoning 模型）响应很慢，放宽读写超时，避免 10s 默认值截断请求
                 .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
@@ -133,58 +141,6 @@ open class AxeronApplication : Engine() {
         // 链路日志，可在「设置 → 运行日志」中查看、复制与导出。
         runCatching { frb.axeron.api.AxeronRuntimeLog.init(context) }
 
-        // 首次启动自动备份一份软件文件到应用专属外部目录
-        // （Android/data/<pkg>/files/AxManagerD/backup/，v1.9.1 起替换原 /sdcard 路径）。
-        // 放后台线程，避免阻塞冷启动；失败静默（只记日志）。
-        Thread {
-            runCatching { frb.axeron.manager.features.backup.BackupManager.ensureFirstBackup(context) }
-                .onFailure { frb.axeron.manager.util.OverlayLog.w("首次备份异常: $it") }
-        }.start()
-
-        // Overlay 授权链路自检（排查「点击无反应 / 不弹窗」用）：
-        // 打印 App 侧解析出的 axeron 路径，并实测一次 shell 执行 + 目录可见性。
-        // 日志落到 /sdcard/AxManagerD/logs/overlay.log，无需 adb 即可取。
-        // 注意：installedModuleIds / execProcessSafeWithTimeout 都是 suspend 函数，
-        // 必须在协程上下文里调用。这里用 runBlocking 包一层（已在后台、非主线程）。
-        Thread {
-            runCatching {
-                kotlinx.coroutines.runBlocking {
-                    frb.axeron.manager.util.OverlayLog.i("========== App 启动自检 ==========")
-                    val om = frb.axeron.manager.features.overlay.OverlayManager
-                    om.logPaths()
-                    // 【v1.9.1 修复】global.json 自愈：
-                    // 用户在设置里开启过总开关、但 shell 域 perm/global.json 丢失时
-                    // （真机实测会丢），模块侧 `axoverlay check` 会恒返回 denied。
-                    // 这里只在「开关为开」时才补写，避免无意义的冷启动 IO。
-                    runCatching {
-                        val ops = frb.axeron.manager.features.overlay.OverlayPermissionStore
-                        if (ops.isEnabled(context)) {
-                            frb.axeron.manager.util.OverlayLog.i("启动自愈: 补写 perm/global.json")
-                            ops.syncGlobalJson(context)
-                        }
-                    }.onFailure {
-                        frb.axeron.manager.util.OverlayLog.w("启动自愈 global.json 失败: $it")
-                    }
-                    // 实测 shell 链路是否可用（能执行 /bin/sh 并拿到输出）
-                    val probe = frb.axeron.api.AxeronPluginService.execProcessSafeWithTimeout(
-                        cmd = arrayOf("/system/bin/sh", "-c", "id; echo '--- perm ---'; ls -la '${om.permDir()}' 2>&1"),
-                        env = frb.axeron.api.Axeron.getEnvironment(),
-                        timeoutMs = 5_000L,
-                    )
-                    frb.axeron.manager.util.OverlayLog.i(
-                        "shell 自检: exit=${probe.exitCode} out=${probe.stdout.trim()} err=${probe.stderr.trim()}"
-                    )
-                    // 模块枚举自检
-                    val runtime = om.installedModuleIds(frb.axeron.manager.features.overlay.OverlayManager.ModuleKind.RUNTIME)
-                    val shell = om.installedModuleIds(frb.axeron.manager.features.overlay.OverlayManager.ModuleKind.SHELL)
-                    frb.axeron.manager.util.OverlayLog.i("模块枚举: runtime=$runtime | shell=$shell")
-                    frb.axeron.manager.util.OverlayLog.i("日志文件: ${frb.axeron.manager.util.OverlayLog.logFilePath()}")
-                    frb.axeron.manager.util.OverlayLog.i("========== 自检结束 ==========")
-                }
-            }.onFailure {
-                frb.axeron.manager.util.OverlayLog.e("启动自检异常", it)
-            }
-        }.start()
 
         // 【v1.4.2 修复 · 「DO 显示已授权但没有任何功能」的启动兜底】
         //

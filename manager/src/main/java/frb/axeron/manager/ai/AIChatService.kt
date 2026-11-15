@@ -80,6 +80,25 @@ object AIChatService {
      */
     private const val STREAM_IDLE_SEC = 45L
 
+    /**
+     * 【1.4.1】思考内容硬上限（字符数）。
+     *
+     * 上游思考模型在高推理等级下可能永远不进入正文，几万字 reasoning 之后仍然继续，
+     * 界面表现为「一直在思考」。正文尚未开始且思考超过该上限时主动中止并报错，
+     * 避免用户无限等待。
+     */
+    private const val REASONING_HARD_CAP = 12_000
+
+    /**
+     * 【1.4.1】正文已开始后的思考总量上限（字符数）。
+     *
+     * 旧实现只在「正文尚未开始」时检查上限，一旦模型先吐了一句正文、随后又陷入
+     * 无休止的 reasoning，就再也不会有任何保护 —— 这正是用户反馈的
+     * 「几万字也不停」。这里给已出正文的情况一个更宽松但确定存在的上限，
+     * 超限时收尾（保留已生成的正文），而不是无限等下去。
+     */
+    private const val REASONING_TOTAL_CAP = 24_000
+
     /** 最近一次请求是否打到官方默认地址（中转站）。调用方据此把用量记到对应桶。 */
     var lastOfficial: Boolean = false
         private set
@@ -230,9 +249,7 @@ object AIChatService {
                     "key=${AiTrace.keyFingerprint(apiKey)} sys=${system.length} prompt=${prompt.length} hist=${history.size}"
             )
 
-            if (endpoint.isBlank() || !AIConfigStore.isUsableUrl(endpoint) ||
-                apiKey.isBlank() || model.isBlank()
-            ) {
+            if (endpoint.isBlank() || apiKey.isBlank() || model.isBlank()) {
                 AiTrace.log("once", "配置不完整 endpoint=${endpoint.isNotBlank()} key=${apiKey.isNotBlank()} model=${model.isNotBlank()}")
                 // 制作模块取钥失败时记录精确原因（其余情况维持既有的静默返回 null 的行为）
                 if (endpoint == AIConfigStore.OFFICIAL_AI_ENDPOINT && apiKey.isBlank()) {
@@ -334,9 +351,7 @@ object AIChatService {
             val apiKey = cfg.apiKey
             val model = modelOverride?.takeIf { it.isNotBlank() } ?: cfg.model
 
-            if (endpoint.isBlank() || !AIConfigStore.isUsableUrl(endpoint) ||
-                apiKey.isBlank() || model.isBlank()
-            ) {
+            if (endpoint.isBlank() || apiKey.isBlank() || model.isBlank()) {
                 // 官方取钥失败时给出精确原因（网络 / 拒绝）；其余情况维持通用提示
                 return@withContext fail(
                     if (AIConfigStore.useOfficialAi && apiKey.isBlank()) {
@@ -399,7 +414,10 @@ object AIChatService {
             val messages = JSONArray()
             // 【1.4.0 新增】思考引导：只在用户打开时追加，不改动原有 system 语义
             val guidePrefix = if (AIConfigStore.thinkingGuide) {
-                "请在内部逐步推理后再作答，只输出最终结论；信息不足时明确说明缺少什么。\n\n"
+                // 【v1.4.1】思考收敛：旧文案「逐步推理后再作答」会诱导模型无限思考，
+                // 改为明确要求尽快收敛到结论或工具调用。
+                "推理要简短：想清楚就直接给出结论或调用工具，不要反复长篇思考。" +
+                    "信息不足时明确说明缺什么。\n\n"
             } else {
                 ""
             }
@@ -525,6 +543,10 @@ object AIChatService {
                 val source = resp.body?.source() ?: return@withContext fail("云端响应为空")
                 val sb = StringBuilder()
                 var idleEnded = false
+                // 【1.4.1】累计思考字符数，用于思考失控保护（见 REASONING_HARD_CAP）
+                var reasoningChars = 0
+                // 【v1.4.1】是否因思考超限而主动收尾（决定后面是报错还是保留正文）
+                var reasoningAborted = false
                 // 首包之前不收紧超时（reasoning 模型可能长时间没有首 token）；
                 // 一旦收到内容，就把读超时收紧到 STREAM_IDLE_SEC，上游挂着不发 [DONE] 时及时收尾。
                 try {
@@ -534,7 +556,25 @@ object AIChatService {
                         val data = line.removePrefix("data:").trim()
                         if (data == "[DONE]") break
                         val delta = parseDelta(data) ?: continue
-                        if (delta.reasoning.isNotEmpty()) onReasoning?.invoke(delta.reasoning)
+                        if (delta.reasoning.isNotEmpty()) {
+                            reasoningChars += delta.reasoning.length
+                            onReasoning?.invoke(delta.reasoning)
+                            // 【v1.4.1】思考失控保护：上游思考模型（尤其高推理等级）会一路
+                            // 输出几万字 reasoning 却始终不给正文，用户看到的就是「一直思考」。
+                            //  · 正文尚未开始 → 超过 REASONING_HARD_CAP 直接中止并报错；
+                            //  · 正文已经开始 → 允许更长思考（REASONING_TOTAL_CAP），但超过后
+                            //    同样收尾，避免「说了一半又开始无休止思考」。
+                            val reasoningCap =
+                                if (sb.isEmpty()) REASONING_HARD_CAP else REASONING_TOTAL_CAP
+                            if (reasoningChars > reasoningCap) {
+                                reasoningAborted = true
+                                AiTrace.log(
+                                    "chat",
+                                    "思考过长 ${reasoningChars}字（正文 ${sb.length} 字），主动收尾"
+                                )
+                                break
+                            }
+                        }
                         if (delta.content.isEmpty()) {
                             // 纯思考块（正文尚未开始）：只刷新空闲计时，不当作正文，也不结束流
                             source.timeout().timeout(STREAM_IDLE_SEC, java.util.concurrent.TimeUnit.SECONDS)
@@ -559,6 +599,14 @@ object AIChatService {
                         "head=${sb.take(120).toString().replace("\n", " ")}"
                 )
                 if (sb.isEmpty()) {
+                    // 【v1.4.1】若是思考超限导致的收尾，给出可操作的原因；
+                    // 否则维持原来的「被限流 / 模型不可用」提示。
+                    if (reasoningAborted) {
+                        return@withContext fail(
+                            "思考过长（已 ${reasoningChars} 字仍无正文）已自动中止，" +
+                                "请降低推理等级或关闭思考后重试"
+                        )
+                    }
                     return@withContext fail("云端未返回任何内容（可能被限流或模型不可用）")
                 }
                 sb.toString()

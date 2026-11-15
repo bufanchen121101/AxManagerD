@@ -47,7 +47,9 @@ class AxWebInterface(
             val result = AxeronPluginService.execWithIO(
                 cmd = finalCommand.toString(),
                 useBusybox = false,
-                hideStderr = false
+                hideStderr = false,
+                // 【v1.5.6 修复】WebUI 按钮命令不进入 AI 拦截分析（避免弹出上一次运行的拦截界面）
+                skipAnalyzer = true,
             )
             Gson().toJson(result).toString()
         }

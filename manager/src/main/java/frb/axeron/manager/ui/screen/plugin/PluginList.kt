@@ -6,15 +6,24 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -31,9 +40,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.ramcosta.composedestinations.generated.destinations.EnablePluginScreenDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import frb.axeron.api.AxeronPluginService
 import frb.axeron.manager.AxeronApplication.Companion.axeronApp
@@ -321,6 +331,8 @@ fun PluginList(
                 }
 
                 else -> {
+                    // 【v1.5.5】运行历史入口已按用户要求移回「设置」界面，
+                    // 这里不再放卡片，保持模块页只有模块列表。
                     items(viewModel.pluginList) { plugin ->
                         val scope = rememberCoroutineScope()
                         val updatedModule by produceState(
@@ -346,13 +358,23 @@ fun PluginList(
                             },
                             onCheckChanged = { targetEnabled ->
                                 scope.launch {
-                                    // 启用方向：进入「启用分析」界面（strace 拦截 service.sh/post-fs-data.sh
-                                    // 真实指令 → AI 弹窗决策 → 允许才真正 togglePlugin + ignite）
-                                    // 禁用方向：保持原逻辑，直接 togglePlugin
+                                    // 【1.4.1】启用方向：不再进入「启用 xxx」整页界面，也不做任何拦截分析。
+                                    // 开关本身只做 togglePlugin + ignite（与原版一样快），
+                                    // 抓取改为启用成功后**后台静默执行一次脚本**（真实环境、无沙箱、
+                                    // sh -x 采指令），结果落盘内部目录 filesDir/rollback/{dirId}/，
+                                    // 与「点击运行」真实运行段的采集完全同源，界面全程无任何提示框。
+                                    // 禁用方向：保持原逻辑，直接 togglePlugin。
                                     if (targetEnabled) {
-                                        navigator.navigate(
-                                            EnablePluginScreenDestination(plugin)
-                                        )
+                                        val ok = loadingDialog.withLoading {
+                                            PluginSilentEnable.enable(context, plugin).isSuccess
+                                        }
+                                        if (ok) {
+                                            viewModel.fetchModuleList()
+                                        } else {
+                                            snackBarHost.showSnackbar(
+                                                failedEnable.format(plugin.prop.name)
+                                            )
+                                        }
                                         return@launch
                                     }
 
@@ -405,3 +427,4 @@ fun PluginList(
         DownloadListener(context, onInstallModule)
     }
 }
+

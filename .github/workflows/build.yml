@@ -205,6 +205,7 @@ jobs:
         env:
           OFFICIAL_AI_API_KEY: ${{ secrets.OFFICIAL_AI_API_KEY || vars.OFFICIAL_AI_API_KEY }}
         run: |
+          set -o pipefail
           # R8 需要更大 CodeCache：覆盖掉 gradle.properties 里
           # CICompilerCount=1 / -TieredCompilation 的省内存组合，
           # 否则 minifyReleaseWithR8 会抛 "Out of space in CodeCache for method handle intrinsic"
@@ -220,7 +221,7 @@ jobs:
           ./gradlew $TASKS \
             --console=plain --build-cache \
             -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -XX:+TieredCompilation -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4 -Dfile.encoding=UTF-8" \
-            -Pkotlin.daemon.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=512m -XX:+UseParallelGC -XX:+TieredCompilation -Dfile.encoding=UTF-8"
+            -Pkotlin.daemon.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=512m -XX:+UseParallelGC -XX:+TieredCompilation -Dfile.encoding=UTF-8" 2>&1 | tee /tmp/build.log
       - name: Verify signature
         run: |
           SDKROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
@@ -282,5 +283,35 @@ jobs:
           git commit -q -m "apk ${GITHUB_SHA}"
           git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:apk-harden
           echo "published to branch apk-harden"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Diagnostic channel: on failure, push the tail of the build log to the
+      # ci-log branch so it can be read with plain `git fetch` (no API token).
+      - name: Publish failure log to ci-log branch
+        if: failure()
+        run: |
+          PUB=/tmp/fail
+          rm -rf "$PUB"
+          mkdir -p "$PUB"
+          cd "$PUB"
+          {
+            echo "sha: ${GITHUB_SHA}"
+            echo "run: ${GITHUB_RUN_ID}"
+            echo "job: ${GITHUB_JOB}"
+            echo "time: $(date -u)"
+            echo
+            if [ -f /tmp/build.log ]; then
+              tail -c 400000 /tmp/build.log
+            else
+              echo "(no /tmp/build.log captured: failure happened before gradle)"
+            fi
+          } > build-failure.log 2>&1
+          git init -q
+          git config user.email "ci@axmanagerd.local"
+          git config user.name "AxManagerD CI"
+          git add -A
+          git commit -q -m "ci-fail ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:ci-log
+          echo "failure log published to branch ci-log"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

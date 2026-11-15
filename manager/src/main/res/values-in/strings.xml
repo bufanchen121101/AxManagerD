@@ -152,6 +152,8 @@
     <string name="privilege_manager">Manajer Hak Istimewa</string>
     <string name="search_label_apps">Cari Aplikasi</string>
     <string name="quick_shell">QuickShell</string>
+    <string name="quick_terminal_title">Terminal Cepat</string>
+    <string name="activate_service_not_ready">Layanan Axeron belum siap (tidak dialihkan). Coba lagi, atau periksa tag log AxManagerBinder.</string>
     <string name="quick_shell_short">QShell</string>
     <string name="quick_shell_not_supported">Silakan aktivasi AxManagerD terlebih dahulu</string>
     <string name="save">Simpan</string>
@@ -298,5 +300,6 @@
     <string name="owner_transfer_target_label">Aplikasi tujuan</string>
     <string name="owner_transfer_none_hint">Tidak ada aplikasi dengan receiver admin perangkat. Pasang satu terlebih dahulu (mis. Dhizuku) untuk mentransfer kepemilikan.</string>
     <string name="owner_transfer_refresh">Segarkan daftar</string>
+    <string name="owner_transfer_unsupported">Aplikasi ini tidak menyatakan dukungan untuk menerima kepemilikan; transfer kemungkinan gagal.</string>
     <string name="temp_do_prereq">Prasyarat: tidak ada akun di perangkat, dan hanya satu pengguna. Jika tidak terpenuhi, sistem akan melaporkan kesalahan yang jelas.</string>
 </resources>

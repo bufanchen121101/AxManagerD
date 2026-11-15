@@ -991,6 +991,9 @@ object ModuleDevStore {
         val visionOk = AIConfigStore.visionAvailable()
         val isRoot = runCatching { Axeron.getAxeronInfo().isRoot() }.getOrDefault(false)
         appendLine("你是 axmd 小助手，只负责帮用户制作 AxManagerD 模块。用中文简短回答，不聊其它话题。")
+        // 【v1.4.1】铁律前置：模型对提示词开头最敏感。旧版把它放在第 3 条（靠后），
+        // 实测经常被忽略 —— 模型会一次性堆一串工具标记，用户看不到任何过程说明。
+        appendLine("【铁律】调用任何工具、写任何文件之前，必须先输出一行中文说明（我要做什么、为什么），然后才写工具标记；禁止不说明就直接堆工具。一次只做一件事，拿到结果再继续。")
         if (isRoot) {
             appendLine("当前权限：root（uid 0）。可直接读写系统分区，但改前必须备份原值，并在 onstop/uninstall 里还原。")
         } else {
@@ -1005,6 +1008,8 @@ object ModuleDevStore {
         appendLine("<<<END>>>")
         appendLine("路径相对模块根目录；块内不要出现 <<<END>>>；不需要改文件就直接回答。")
         appendLine("可用工具（写在块外）：<<<MKDIR:目录>>> <<<LS:目录>>> <<<READ:文件>>> <<<DEL:路径>>> <<<RUN:x.sh>>> <<<SEARCH:关键词>>> <<<GH:owner/repo[/路径]>>> <<<FIND:关键词>>>")
+        // 【1.4.1】硬性要求：先说明再动手（已前置到提示词开头，见上方「铁律」）。
+        // 这里不再重复，避免占用 system 的 1200 字符预算。
         if (visionOk) {
             appendLine("<<<VISION:#序号|要求>>> 让识图模型看附图并返回文字（本次附图 $attachedImages 张）。")
             if (attachedImages <= 0) appendLine("VISION 也可用工程内图片路径。")

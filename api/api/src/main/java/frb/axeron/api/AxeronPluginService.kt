@@ -301,25 +301,12 @@ object AxeronPluginService {
             }
             // ---- 日志结束 ----
 
-            // ---- AI 拦截挂钩（方案 A，安装场景）----
-            // 运行时模块（installer.runtimeModule=true）不做拦截分析，直接安装。
-            // 需求：运行时模块安装不需要像 shell 模块那样先拦截分析。
-            val analyzer = commandAnalyzer
-            if (analyzer != null && !installer.runtimeModule) {
-                val name = installer.uri.lastPathSegment ?: "unknown"
-                val ctx = CommandAnalyzer.CommandContext(
-                    source = CommandAnalyzer.CommandContext.Source.INSTALL,
-                    pluginName = name,
-                )
-                val analysis = analyzer.analyze(cmd, ctx)
-                if (analysis != null && !analysis.allow) {
-                    Log.w(TAG, "Install blocked by AI analyzer: $name")
-                    fs.delete(file.absolutePath)
-                    return FlashResult(AxeronPluginService.ResultExec(127, "", "已拦截：${analysis.summary}"))
-                }
-            } else if (analyzer != null && installer.runtimeModule) {
-                Log.i(TAG, "Skip AI analyzer for runtime module: ${installer.uri.lastPathSegment}")
-            }
+            // ---- 【v1.5.4】安装阶段不做任何拦截 / 抓取 ----
+            // 用户要求：安装 = 只把模块装进去，脚本一行都不跑，因此没有任何东西需要分析。
+            // 旧实现在这里对整条安装命令（含 functions.sh 展开后的内容）跑了一遍
+            // CommandAnalyzer（Source.INSTALL），安装包里带 service.sh 时会被当成"要执行的操作"
+            // 抓一遍并弹分析页 —— 这正是用户看到的「安装时还做拦截抓取」。
+            // 真正的拦截点在「启用」与「运行」，安装只负责落盘，故此处整段移除。
             // ---- 挂钩结束 ----
 
             val result = execWithIO(cmd, onStdout, onStderr, standAlone = true)
@@ -1147,11 +1134,10 @@ object AxeronPluginService {
         for (filename in files) {
             val dstFile = File(binDir, filename)
 
-            // ---- 模块 overlay 优先（第一期新增）----
-            // 若某运行时模块被授权覆盖核心脚本，则用它的 overlay 文件作为来源，
-            // 直接免去从 APK assets 解压的步骤。授权判定 = 总开关 + grant 文件，
-            // 由 manager 层维护；此处仅消费结果。
-            val overlayPath = findOverlayScript(filename)
+            // 【v1.4.2】模块覆盖层（overlay）功能已整体移除：
+            // 不再读取任何模块对核心脚本的覆盖，一律使用 APK assets 内的脚本。
+            // 保留下方原分支代码仅为减少改动面（已不可达）。
+            val overlayPath: String? = null
 
             if (overlayPath != null) {
                 // 【保护】核心脚本 overlay 完整性校验。
